@@ -1,0 +1,10 @@
+# megavoice hotwords: one term per line, read at every recording.
+# They go into mega-asr's prompt (热词列表) for Chinese speech only; on English
+# speech that prompt derails the model. Keep the list short: a long list makes
+# recognition worse. Hard limits: 50 terms, 512 prompt tokens.
+# These terms are examples: replace them with your own.
+GitHub
+Kubernetes
+kubectl
+Postgres
+TypeScript

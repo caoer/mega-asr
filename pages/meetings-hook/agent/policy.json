@@ -1,0 +1,8 @@
+{
+  "model": null,
+  "launcher": "ucc-auto",
+  "effort": "medium",
+  "max_budget_usd": 1,
+  "lease_max_min": 15,
+  "unit": "drain"
+}

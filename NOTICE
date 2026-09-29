@@ -1,0 +1,79 @@
+mega-asr
+Copyright 2026 The mega-asr authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+------------------------------------------------------------------------
+FunASR
+
+These files derive from FunASR (https://github.com/modelscope/FunASR),
+release v1.3.30, commit 16cd165ac3946cc8c08bf845331f91fefec8e1a9:
+
+- runtime/funasr-cli-serve.patch: a patch to runtime/llama.cpp/fun-asr-nano/
+  funasr-cli/funasr-cli.cpp and runtime/llama.cpp/funasr-common/funasr_vad.h;
+  it carries portions of those files.
+- docs/README-upstream.md: runtime/llama.cpp/README.md.
+- bin/download-funasr-model.sh: runtime/llama.cpp/download-funasr-model.sh,
+  unchanged.
+
+FunASR is licensed under the MIT License:
+
+MIT License
+Copyright (c) 2025 FunASR
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------
+Fetched at build time, not included in this repository
+
+- llama.cpp (https://github.com/ggml-org/llama.cpp), commit
+  8086439a4cea94c71a5dfb8fe4ad1546aebd640f: MIT License,
+  Copyright (c) 2023-2026 The ggml authors. runtime/funasr-root.nix and
+  runtime/build-funasr-cli.sh build FunASR's runtime against it.
+- Fun-ASR-Nano GGUF weights (https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF)
+  and FSMN-VAD GGUF weights (https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF):
+  Apache License 2.0, per their model cards.
+
+------------------------------------------------------------------------
+Test fixtures from outside sources
+
+Each test fixture that came from outside this project is listed here with
+its source and license.
+
+- internal/audio/testdata/take-30s.wav: 30 s of read Mandarin from the
+  LibriVox recording of "孫子兵法 (The Art of War)" (archive.org item
+  art_of_war_chinese_1506_librivox, file artofwar_01_sun.mp3, 44.9-74.9 s),
+  converted to 16 kHz mono. Public domain (Public Domain Mark 1.0).
+
+------------------------------------------------------------------------
+Fonts
+
+pages/takes-mock/fonts/ and internal/takes/page/fonts/ each embed these files,
+byte-identical to the Fontsource npm packages named, with the license texts
+beside them:
+
+- archivo-wdth.woff2: Archivo, @fontsource-variable/archivo 5.3.0,
+  files/archivo-latin-wdth-normal.woff2. Copyright 2020 The Archivo Project
+  Authors (https://github.com/Omnibus-Type/Archivo). SIL Open Font License
+  1.1, OFL-archivo.txt.
+- spline-sans-mono-400.woff2 and spline-sans-mono-500.woff2: Spline Sans
+  Mono, @fontsource/spline-sans-mono 5.3.0,
+  files/spline-sans-mono-latin-{400,500}-normal.woff2. Copyright 2022 The
+  Spline Sans Mono Project Authors (https://github.com/SorkinType/SplineSansMono).
+  SIL Open Font License 1.1, OFL-spline-sans-mono.txt.

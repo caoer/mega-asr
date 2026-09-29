@@ -1,0 +1,152 @@
+# megavoice config — ~/.config/megavoice/config.toml (or $XDG_CONFIG_HOME/megavoice/).
+#
+# Every key is listed at its default, commented out: uncomment a line to
+# change it. A key megavoice does not know is an error, not ignored.
+#   megavoice config check   validates this file
+#   megavoice config show    prints the settings in effect and where each came from
+# Durations need a unit: "400ms", "30s", "30m". --set section.key=value on the
+# command line overrides this file for one run.
+
+[tap]
+# key = "right_option"       # the modifier whose lone tap starts and stops a take: right_option, right_shift
+# window = "400ms"           # longest press that is a tap
+# quiet = "500ms"            # no start this soon after another key press
+
+[capture]
+# source = "local"           # local: an input of this machine; ssh: an ALSA device on another host;
+#                            # remote: a mic server paired with this Mac (Input › Add remote mic…)
+# mic = "default"            # local: an input's UID (`megavoice mics`); "default" follows the system's input.
+#                            # Linux: an ALSA PCM read by arecord (alsa-utils); "default" is ALSA's
+# mic_name = ""              # local: the pinned input's name, shown when it is not connected; the menu writes it
+# mic_channel = 0            # local: 0 mixes every channel, n records channel n.
+#                            # Linux: 0 records the PCM in mono (ALSA mixes it; any device); n opens it as the
+#                            # six channels of a USB array (e.g. XVF3800, where 2 is the ASR beam) and records
+#                            # channel n — for any other device keep 0
+# bluetooth_warm = "2m"      # local on a Mac: a Bluetooth input stays open this long after a take, so the next
+#                            # one hears you at once — opened cold, a Bluetooth headset records silence for a
+#                            # few seconds while it switches into call mode. Meanwhile it plays in call quality
+#                            # and the mic indicator stays on. "0s" closes it at stop
+# backup = "auto"            # local on a Mac: a second input recorded beside the main one. A stretch of 2 s or
+#                            # more in which the main input is all zero samples while this one carries a voice is
+#                            # decoded from this one instead; the record's backup_off says why none was recorded.
+#                            # "auto": a wired input other than the main one, a display's or camera's microphone
+#                            # before the built-in (not with the lid closed); an input's UID (`megavoice mics`)
+#                            # pins one; "" or "off" records none. Never a Bluetooth or wireless input
+# host = ""                  # ssh: destination with the device, e.g. "micbox"
+# device = ""                # ssh: ALSA PCM on that host, e.g. "hw:1,0" or "default"
+# channel = 2                # ssh: 1-6; on a six-channel USB array (e.g. XVF3800) 2 is the ASR beam
+# remote = ""                # remote: a paired mic server's name
+
+[take]
+# max_duration = "30m"       # a take stops on its own after this
+# chunk_pause = "1900ms"     # a pause this long ends a chunk (once it holds 3 s)
+# chunk_max = "30s"          # a chunk is cut at its quietest block by this length
+# whole_max = "1m"           # a take this long or shorter is decoded at stop as one window, silence
+#                            # trimmed: more accurate, the text comes a moment after stop;
+#                            # a longer take streams in chunks; "0s" streams every take
+
+[asr]
+# engine = "funasr"          # funasr: Fun-ASR-Nano on this Mac; doubao: Doubao ASR 2.0 in the cloud (Volcengine
+#                            # Agent Plan), streamed as you speak, with funasr standing in when it fails.
+#                            # Each engine has its own [asr.<engine>] table
+
+[asr.funasr]
+# root = "~/.local/share/mega-asr/funasr-root"   # directory with bin/llama-funasr-cli and models/ (runtime/funasr-root.nix builds one); a packaged build sets its own default
+# llm = ""                   # a Qwen3 GGUF (your fine-tune's export) in place of root's models/qwen3-0.6b-q8_0.gguf; "" keeps root's
+# mode = "resident"          # resident: one --serve process, models loaded once; exec: one CLI run per chunk
+# gpu_layers = 99            # Qwen3 layers on Metal; 0 decodes on the CPU
+# encoder = "gpu"            # gpu: the SAN-M encoder on Metal; cpu
+# vad = "gpu"                # gpu: FSMN-VAD on Metal; cpu
+# threads = 8                # encoder threads when it runs on the CPU
+# llm_threads = 0            # Qwen3 threads on the CPU; 0 keeps the CLI's 4 (a Linux server: 8)
+
+[asr.doubao]
+# url = "wss://openspeech.bytedance.com/api/v3/plan/sauc/bigmodel_async"   # a plan ASR endpoint; nothing else is accepted:
+#                            # speech sent anywhere but /api/v3/plan/ is billed apart from the plan
+# resource_id = "volc.seedasr.sauc.duration"   # ASR 2.0 on the plan
+# key_file = "~/.config/megavoice/doubao.key"   # the file holding the plan key (the key never goes in this file)
+# key_var = ""               # the KEY=value line in key_file that holds it; "" when the file is the key alone
+# two_pass = true            # enable_nonstream: each closed sentence re-decoded by the nostream model (fixes English terms)
+# ddc = false                # enable_ddc: the server drops fillers and repeats
+# hotwords = true            # send hotwords.txt with each take (request.corpus.context)
+
+[post]
+# join_words = []            # words that end a clause, not a sentence: a full stop the VAD put right
+#                            # after one, before more Chinese text, becomes a comma. They add to the
+#                            # built-in list (就是 然后 因为 但是 而且 或者 所以)
+
+[deliver]
+# herdr_apps = ["com.github.wez.wezterm"]   # bundle ids of the terminals herdr runs in
+
+[store]
+# data = "~/.local/share/megavoice/utterances"   # every take's WAV and texts; default $XDG_DATA_HOME/megavoice/utterances
+# labels = "~/.local/share/megavoice/labels.jsonl"   # labels saved from the Takes page, one asrbench row each
+
+[compare]
+# on = false                 # compare mode: each take also goes to the engines below; the primary (asr.engine)
+#                            # delivers as always, and every answer is kept as <take>.compare.json. Read at every take
+# engines = ["funasr", "doubao"]   # run beside asr.engine, which is never run twice
+# addr = "127.0.0.1:7865"    # the Takes page (menu › 打开录音历史), loopback only
+
+# megameet — recording meetings and processing them. megavoice reads these
+# tables too and ignores them.
+[meeting]
+# data = "~/.local/share/megameet"   # recordings and the pending-upload ledger; default $XDG_DATA_HOME/megameet
+
+[meeting.capture]
+# apps = ["com.electron.lark.helper", "us.zoom.xos"]   # bundle ids of the processes that play the meeting's audio (`megameet apps`: out=Y during a call); `start` taps these when --app names none
+# mic = "default"            # input device; "default" is the system's
+
+[meeting.process]
+# diarizer = "none"          # none: each track is one speaker (a 1:1 call)
+# speakers = 0               # speakers the diarizer expects; 0 lets it estimate; `start --speakers` overrides
+
+[meeting.align]
+# feishu_archive = "~/.local/share/mega-asr/corpora/feishu-minutes"   # scripts/feishu-minutes' archive; "" aligns nothing
+
+[meeting.ingest]
+# auto = false               # run the ingest into the wiki when a record reaches aligned (the drain, on the server)
+# wiki = ""                  # the wiki checkout meetings are filed into; register-feishu reads which minutes it holds,
+#                            # and its directory name is the wiki's name in the ingest's `commit:` lines
+# command = []               # the ingest program; the drain appends `run <record.json> --out <dir> --commit [--replace]`
+# sources = ["mac", "room", "phone", "file"]   # the record sources auto ingests; a feishu minute is filed by the backfill, and rests at aligned here (the page's reingest still ingests it)
+# repos = ""                 # REPOS_ROOT for the ingest: where it finds its wiki checkouts; "" is the ingest's default
+# assets = ""                # a git-annex checkout an ingested meeting's registry record is backed up into, beside its audio; "" backs up nothing
+# assets_remote = "origin"   # the assets checkout's git remote: fetched, and its main pushed
+# assets_annex_remote = ""   # the annex remote the backup's content is copied to; "" keeps it in git-annex only
+# feishu_since = ""          # RFC 3339; required when sources has feishu: a minute Feishu created at or after it is ingested when eligible (5 min or more, a transcript, two speakers or more), the ones before it are the backfill's
+# min_duration = "2m"        # a mac, room, phone or file record shorter than this rests at aligned with ingest_skipped (a test clip); the page's reingest still ingests it
+# people_resolve = false     # with auto on: a speaker named by hand on the page is resolved to a wiki person by `<command> people resolve`, written back as its `person`, and an ingested meeting re-ingested
+
+[meeting.summary]
+# command = []               # the claude CLI the drain asks for a processed meeting's title (when it has none) and summary; empty writes none.
+#                            # A Feishu minute carries Feishu's own summary instead (register-feishu)
+# model = "claude-haiku-4-5" # a cheap model: a meeting costs well under $0.05
+# max_chars = 40000          # transcript characters sent at most; a longer meeting sends its head and tail
+
+[meeting.page]
+# url = ""                   # the ccc-pages service, e.g. "https://pages.example"; required when slug is set
+# slug = ""                  # the meetings page (meetings-<16 hex>); "" is no page
+# token_file = ""            # a contributor or editor secret for this device (page-token mint)
+# identity = ""              # "ucc": the owner's Bearer from $UCC_HOME/user-env.sh — the server's credential;
+#                            # a host sets token_file or identity, not both
+
+[meeting.upload]
+# part_mib = 16              # multipart part size, 5-95, for files above one request's limit
+# retention_days = 30        # the local copy stays this long after upload
+
+[meeting.drain]
+# notify = []                # a program the one-line failure report is appended to, e.g. ["ccc-telegram", "sendAsBot"]; empty only logs it
+
+# megavoice on Linux — `megavoice mic serve` records [capture] on this host
+# and serves it to the Macs paired with it (`megavoice mic pair` prints the
+# PIN a Mac types into Input › Add remote mic…). The Mac build ignores it.
+[mic_server]
+# listen = ":7866"           # host:port the paired Macs reach; ":7866" is every interface
+# name = ""                  # the name a pairing Mac sees; "" is this host's name
+# state = "~/.local/state/megavoice/mic"   # TLS key (0600) and paired clients, in a 0700 directory;
+#                            # default $XDG_STATE_HOME/megavoice/mic; a system service sets its own
+# socket = ""                # the control socket `mic pair|token|status|clients|revoke` use; "" is ctl.sock in state;
+#                            # a system service puts it in a directory its admin group can reach (/run/megavoice-mic/ctl.sock)
+# admin_group = "megavoice-mic"   # who may use the control socket, besides root and the server's own user:
+#                            # members mint tokens (`mic token`, ssh auto-pairing), PINs and revoke

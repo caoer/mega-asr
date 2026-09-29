@@ -1,0 +1,54 @@
+#!/bin/sh
+# agent/hook — the meetings page's host hook (source: mega-asr
+# pages/meetings-hook/agent/, installed into the page's site by
+# pages/meetings-hook/install.sh). The contract is the ccc-pages skill's
+# references/page-hook.md.
+#
+# The page answers a label question by writing the answer onto its question
+# in the `labels` record (status approved or declined), then rings the inbox
+# with a `human.message`. This hook applies every approved question with
+# `megameet labels apply --approved`, as the page owner, and acks every row:
+# the answer and its outcome (applied, or error) live on the question, and a
+# row's body is never read. A second pass finds nothing approved and writes
+# nothing.
+#
+#   stdin   one hook_input@1 envelope
+#   stdout  one hook_output@1 envelope, exit 0; a megameet failure that is
+#           not recorded on a question exits 1, and the tick falls open to
+#           the agent lane (agent/handlers/human.message.md)
+#   env     PAGE_SLUG, CCC_PAGES_URL, UCC_USERNAME + UCC_AUTH_TOKEN (the
+#           owner, which megameet reads from the environment), HOOK_DRY_RUN
+
+command -v jq >/dev/null 2>&1 || { echo "agent/hook: jq is required and is not on PATH" >&2; exit 1; }
+megameet=${MEGAMEET:-megameet}
+command -v "$megameet" >/dev/null 2>&1 || { echo "agent/hook: $megameet is not on PATH" >&2; exit 1; }
+[ -n "${PAGE_SLUG:-}" ] || { echo "agent/hook: PAGE_SLUG is not set" >&2; exit 1; }
+
+input=$(cat)
+printf '%s' "$input" | jq -e '.schema == "hook_input@1" and (.data.rows | type) == "array"' >/dev/null 2>&1 ||
+  { echo "agent/hook: stdin is not a hook_input@1 envelope" >&2; exit 1; }
+last=$(printf '%s' "$input" | jq -r '.data.rows | last | .seq // empty')
+
+# The page's own slug and the owner's identity, whatever config the host has:
+# a token_file there would collide with identity = ucc.
+set -- --set "meeting.page.slug=$PAGE_SLUG" --set meeting.page.identity=ucc --set meeting.page.token_file=
+[ -z "${CCC_PAGES_URL:-}" ] || set -- "$@" --set "meeting.page.url=$CCC_PAGES_URL"
+dry=
+[ "${HOOK_DRY_RUN:-0}" != 1 ] || dry=--dry-run
+
+out=$("$megameet" "$@" labels apply --approved --json --by "page hook" $dry) ||
+  { echo "agent/hook: megameet labels apply --approved failed: $out" >&2; exit 1; }
+summary=$(printf '%s' "$out" | jq -r '
+  if length == 0 then "nothing approved to apply"
+  else map(if .error then "\(.id) failed: \(.error)" else "\(.id) applied" end) | join("; ") end' 2>/dev/null) ||
+  summary="applied; megameet printed no JSON"
+[ -z "$dry" ] || summary="dry run: $summary"
+
+if [ -n "$last" ]; then ack=$last; else ack=null; fi
+# reason is at most 256 bytes: cut on a character boundary.
+jq -n -c --argjson ack "$ack" --arg reason "$summary" '
+  def cut($n): reduce (explode[]) as $c ({b: 0, out: [], stop: false};
+    if .stop then . else
+      ($c | if . < 128 then 1 elif . < 2048 then 2 elif . < 65536 then 3 else 4 end) as $w
+      | if .b + $w > $n then .stop = true else .b += $w | .out += [$c] end end) | .out | implode;
+  {schema: "hook_output@1", data: {ack: $ack, spawn: false, reason: ($reason | cut(256))}}'

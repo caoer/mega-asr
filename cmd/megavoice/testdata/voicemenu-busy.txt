@@ -1,0 +1,18 @@
+Dictation
+打开录音历史 *
+Input: System default (Built-in Microphone) > [✓System default (Built-in Microphone) * | --- | Built-in Microphone * | Stage Interface > [All channels, mixed * | --- | Channel 1 * | Channel 2 * | Channel 3 *] | --- | Add Remote Mic… > [No mic server found | --- | Other… *] | --- | Applies at the next take]
+Key: Right Option > [Right Shift * | ✓Right Option * | --- | Applies after Restart MegaVoice]
+Decode whole: up to 1 min > [None, every take streams * | Up to 30 s * | ✓Up to 1 min * | Up to 2 min * | Up to 5 min * | --- | A take this long or shorter is decoded whole at stop; | a longer one streams in chunks while you speak | --- | Applies after Restart MegaVoice]
+Model: Base > [✓Base * | --- | Checks › Transcribe and Script Check use it at once | --- | Applies after Restart MegaVoice]
+Engine: Fun-ASR (local) > [✓Fun-ASR (local) * | Doubao 2.0 (cloud) * | --- | Doubao streams each take as you speak; | Fun-ASR stands in when it fails (offline) | --- | Applies after Restart MegaVoice]
+Compare Mode *
+Compare Engines > [✓Fun-ASR (local) — primary | ✓Doubao 2.0 (cloud) * | --- | Each take also goes to the checked engines; | the primary delivers as always]
+Edit Hotwords… *
+Edit Corrections… *
+  Edits apply at the next take
+Restart MegaVoice *
+---
+Checks > [Transcribe Last Take Again | Script Check | --- | MegaVoice Status | MegaMeet Status | --- | Open megavoice.log * | Open megameet.log *]
+  Script Check…
+---
+Quit MegaVoice *

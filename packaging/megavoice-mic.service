@@ -1,0 +1,23 @@
+# megavoice mic server as a systemd user unit, for a Linux host without Nix
+# (README § Remote mic). Install:
+#   install -Dm755 megavoice ~/.local/bin/megavoice
+#   install -Dm644 packaging/megavoice-mic.service ~/.config/systemd/user/megavoice-mic.service
+#   systemctl --user daemon-reload && systemctl --user enable --now megavoice-mic
+#   loginctl enable-linger "$USER"   # keep it running while you are logged out
+# Settings: ~/.config/megavoice/config.toml ([capture], [mic_server]); state,
+# key and control socket under ~/.local/state/megavoice/mic. The control
+# socket (`megavoice mic pair|token|…`) takes this user, root, and members of
+# mic_server.admin_group. Needs arecord (alsa-utils) and a user who may open
+# the capture device (group audio).
+[Unit]
+Description=megavoice mic server: this host's microphone, served to paired Macs
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/megavoice mic serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

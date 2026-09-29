@@ -1,0 +1,15 @@
+# Corrections for megavoice. Each line: the text as recognized, a TAB, the text you want.
+# Blank lines and lines starting with # are skipped; an edit applies from the next take.
+# Matching:
+#   - no capitals: case is ignored; any capital: the case must be the same
+#   - a Latin letter or digit at either end must meet a word boundary: keen wah → quinoa
+#     fixes "Keen Wah" too, but not "keen wahoo"
+#   - zh: in front fires only next to Chinese text: zh:man tou → 馒头 fixes 早饭吃man tou
+# Longer rules run first. The transcript before any rule is kept in <ts>.raw.txt.
+# The rows below are samples; replace them with your own.
+get hub	GitHub
+cube control	kubectl
+post gress	Postgres
+type script	TypeScript
+zh:mark down	Markdown
+库伯内提斯	Kubernetes
