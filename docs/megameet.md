@@ -117,10 +117,10 @@ cd ../..
 "$BIN/page-publish" pages/meetings/dist --private --data on --title Meetings --description Meetings --no-bundle
 ```
 
-It prints a JSON reply whose `"slug"` is `meetings-<16 hex>`; its last line is `page-publish: release record written — /d/meetings-…/release is now v1` (the lines between, such as the hint to add a `--description`, need nothing from you). That slug names your page from now on. Keep it in the shell for the next steps:
+It prints a JSON reply whose `"slug"` is `dist-<16 hex>` (page-publish names a new page after the directory it publishes); its last line is `page-publish: release record written — /d/dist-…/release is now v1` (the lines between, such as the hint to add a `--description`, need nothing from you). That slug names your page from now on. Keep it in the shell for the next steps:
 
 ```sh
-SLUG=meetings-0123456789abcdef    # the "slug" printed above
+SLUG=dist-0123456789abcdef    # the "slug" printed above
 ```
  `--private` keeps everyone out without a token (an anonymous GET answers 401), `--data on` opens the record store, and `--no-bundle` stops page-publish from uploading this repository's git history as the page's source. To update the page later, rebuild, then publish the same `dist` to the same slug; the records and files stay:
 
@@ -211,7 +211,7 @@ megameet reads the `[meeting]` tables of `~/.config/megavoice/config.toml`. Anot
 
 [meeting.page]
 url = "https://alice-pages.<subdomain>.workers.dev"   # your CCC_PAGES_URL
-slug = "meetings-0123456789abcdef"              # your $SLUG
+slug = "dist-0123456789abcdef"              # your $SLUG
 token_file = "~/.config/megavoice/mac-alice.token"
 ```
 
@@ -270,7 +270,7 @@ root = "~/.local/share/mega-asr/funasr-root"
 
 [meeting.page]
 url = "https://alice-pages.<subdomain>.workers.dev"
-slug = "meetings-0123456789abcdef"
+slug = "dist-0123456789abcdef"
 identity = "ucc"
 ```
 
