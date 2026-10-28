@@ -38,11 +38,14 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
                             has been in flight and no key was pressed for 3 s;
                             without it a take in flight refuses the restart
   quit                      end the agent between takes; it stays down
+  update                    a staging build: check the release page for a new
+                            version now (the agent also checks at launch and daily)
 
   A command the agent refuses exits 1, restart or quit refused 75; with no
-  agent running, status, toggle, cancel, spike, paste, restart and quit exit 69.
+  agent running, status, toggle, send, cancel, spike, paste, restart and quit exit 69.
   start                     start the agent again (opening MegaVoice.app does too)
   toggle                    start or stop a recording, as a tap would
+  send                      end a recording to paste and press Return, as Return would
   cancel                    end a recording without delivering it; the take
                             and its text are kept as cancelled
   paste [--activate PID] TEXT
@@ -57,6 +60,12 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
   retranscribe ID --engine funasr|doubao
                             decode a take's audio again; the answer goes into its
                             record, no stored text changes
+  names [--scan] [--ungated]
+                            the dictation names gate over stdin, one JSON line
+                            {"id","text"} or one text a line: per line the
+                            candidates, whether it fired, the edits, the text it
+                            delivers and the Jev request's time; --scan asks
+                            nothing; --ungated asks on any candidate
   spike                     taps the agent has seen
   record [--seconds N] OUT.wav
                             capture from capture.source into a WAV
@@ -69,6 +78,8 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
   mic scan                  the mic servers Add Remote Mic… offers: advertised on
                             the network, or an ssh config Host that answers
   mic list | forget NAME    the paired remote mics; forget one
+  remote rotate             a new relay room and new relay keys for this Mac
+                            ([remote.relay]); every phone pairs again to use it
   transcribe [--plain] [--engine funasr|doubao] WAV
                             print a WAV's transcript with hotwords and corrections,
                             by asr.engine or the engine named
@@ -95,13 +106,23 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
 `
 
 func main() {
+	setLanguage()
 	var o app.LoadOpts
 	gfs := flag.NewFlagSet("megavoice", flag.ContinueOnError)
 	gfs.Usage = func() { fmt.Fprint(os.Stderr, usage) }
 	gfs.StringVar(&o.Path, "config", "", "settings file")
 	gfs.Func("set", "section.key=value", func(s string) error { o.Sets = append(o.Sets, s); return nil })
 	if len(os.Args) == 1 && inBundle() {
-		// MegaVoice.app opened from Finder or Spotlight
+		// MegaVoice.app opened from Finder, Spotlight or at login
+		if app.Channel != "" {
+			// a staging build has no launchd agent: it is the agent
+			logToFile()
+			if err := serve(o, nil); err != nil {
+				fmt.Fprintln(os.Stderr, "megavoice:", err)
+				os.Exit(1)
+			}
+			return
+		}
 		if err := start(); err != nil {
 			fmt.Fprintln(os.Stderr, "megavoice:", err)
 			os.Exit(1)
@@ -121,7 +142,7 @@ func main() {
 		err = serve(o, args)
 	case "start":
 		err = start()
-	case "status", "toggle", "cancel", "spike", "quit":
+	case "status", "toggle", "send", "cancel", "spike", "quit":
 		err = call(ctl.Request{Cmd: cmd}, cmd == "status")
 	case "restart":
 		err = restart(args)
@@ -135,6 +156,8 @@ func main() {
 		}
 	case "events":
 		err = eventsCmd(args)
+	case "names":
+		err = namesCmd(o, args, os.Stdin, os.Stdout)
 	case "resend":
 		err = resendCmd(args)
 	case "retranscribe":
@@ -155,8 +178,16 @@ func main() {
 		err = configCmd(o, args)
 	case "panel":
 		err = panel(o, args)
+	case "remote":
+		err = remoteCmd(args)
+	case "update":
+		err = updateCmd(args)
 	case "version":
-		fmt.Printf("build\t%s\n%s", app.BuildID(), audio.Version())
+		fmt.Printf("build\t%s\nchannel\t%s\n", app.BuildID(), app.ChannelName())
+		if app.Version != "" {
+			fmt.Printf("version\t%s\n", app.Version)
+		}
+		fmt.Print(audio.Version())
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
@@ -169,6 +200,16 @@ func main() {
 		fmt.Fprintln(os.Stderr, "megavoice:", err)
 		os.Exit(1)
 	}
+}
+
+// remoteCmd is `megavoice remote rotate`: the running agent gives this Mac a
+// new relay room and keys; every phone pairs again to use the relay.
+func remoteCmd(args []string) error {
+	if len(args) != 1 || args[0] != "rotate" {
+		fmt.Fprint(os.Stderr, usage)
+		return exitCode(2)
+	}
+	return call(ctl.Request{Cmd: "remote-rotate"}, false)
 }
 
 // exitRefused and exitNotRunning are the exits of restart or quit refused

@@ -3,7 +3,7 @@
 // (`people.index`, optional). Read on load, every 30 s while the page is
 // visible, and after each write.
 import { useSyncExternalStore } from "react";
-import type { FileRef, LabelQuestion, LabelsRecord, PageConfig, PeopleIndexRecord, Rec, Segment } from "./types";
+import type { FileRef, LabelQuestion, LabelsRecord, NamesChange, PageConfig, PeopleIndexRecord, Rec, Segment } from "./types";
 import { DEVICE_TZ } from "./time";
 import { normLabels, setClosedList, type LabelChange } from "./model";
 import { canRead, explain, fileURL, getRec, listAll, probeRole, putRec, Refused, SLUG, type Entry } from "./registry";
@@ -291,10 +291,10 @@ function parseSegmentsJSON(text: string): Segment[] {
   const doc = JSON.parse(text) as unknown;
   const list = Array.isArray(doc) ? doc : doc && typeof doc === "object" && Array.isArray((doc as { segments?: unknown }).segments) ? (doc as { segments: unknown[] }).segments : [];
   const out: Segment[] = [];
-  for (const s of list as Record<string, unknown>[]) {
-    if (!s || typeof s.start_s !== "number") continue;
-    out.push({ speaker: String(s.speaker ?? ""), start: s.start_s, end: typeof s.end_s === "number" ? s.end_s : NaN, text: String(s.text ?? ""), raw: typeof s.raw === "string" ? s.raw : null });
-  }
+  (list as Record<string, unknown>[]).forEach((s, idx) => {
+    if (!s || typeof s.start_s !== "number") return;
+    out.push({ speaker: String(s.speaker ?? ""), start: s.start_s, end: typeof s.end_s === "number" ? s.end_s : NaN, text: String(s.text ?? ""), raw: typeof s.raw === "string" ? s.raw : null, idx });
+  });
   return out.sort((a, b) => a.start - b.start);
 }
 
@@ -319,7 +319,31 @@ export async function loadSegments(f: FileRef): Promise<Segment[]> {
   return fillEnds(f.role === "transcript" ? parseTranscriptMd(text) : parseSegmentsJSON(text));
 }
 
-/** Our ASR (segments, else transcript.md) and Feishu's minute, when present. */
-export function transcriptSources(rec: Rec): { ours?: FileRef; feishu?: FileRef } {
-  return { ours: fileByRole(rec, "segments") ?? fileByRole(rec, "transcript"), feishu: fileByRole(rec, "feishu-transcript") };
+/** Our ASR (segments, else transcript.md), Feishu's minute, and the names pass's record, when present. */
+export function transcriptSources(rec: Rec): { ours?: FileRef; feishu?: FileRef; names?: FileRef } {
+  return { ours: fileByRole(rec, "segments") ?? fileByRole(rec, "transcript"), feishu: fileByRole(rec, "feishu-transcript"), names: fileByRole(rec, "names") };
+}
+
+/** names.json's changes; none when it is unreadable. */
+export async function loadNames(f: FileRef): Promise<NamesChange[]> {
+  const doc = JSON.parse(await loadText(f.file!)) as { changes?: unknown };
+  return Array.isArray(doc.changes) ? (doc.changes as NamesChange[]).filter((c) => c && (c.src === "ours" || c.src === "feishu") && typeof c.i === "number" && typeof c.text === "string") : [];
+}
+
+/**
+ * A transcript with the names pass laid over it. Ours already carries the
+ * corrected text: its segments gain the names. Feishu's file stays as Feishu
+ * wrote it: a turn still reading as it did before the pass takes the
+ * corrected text, and its original becomes `raw`.
+ */
+export function withNames(segs: Segment[], changes: NamesChange[], src: "ours" | "feishu"): Segment[] {
+  const by = new Map<number, NamesChange>();
+  for (const c of changes) if (c.src === src) by.set(c.i, c);
+  if (!by.size) return segs;
+  return segs.map((s) => {
+    const c = s.idx === undefined ? undefined : by.get(s.idx);
+    if (!c) return s;
+    if (src === "feishu") return s.text === c.before ? { ...s, text: c.text, raw: c.before, names: c.names ?? [] } : s;
+    return s.text === c.text ? { ...s, names: c.names ?? [] } : s;
+  });
 }

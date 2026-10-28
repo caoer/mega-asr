@@ -24,6 +24,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/relay/auth"
 )
 
 // Config is every setting. Default holds the defaults; the config file,
@@ -36,16 +37,78 @@ type Config struct {
 	// Postprocess is [post]; Post() builds its chain.
 	Postprocess PostConfig    `toml:"post"`
 	Deliver     DeliverConfig `toml:"deliver"`
+	Keypad      KeypadConfig  `toml:"keypad"`
 	Store       StoreConfig   `toml:"store"`
 	Compare     CompareConfig `toml:"compare"`
 	Meeting     MeetingConfig `toml:"meeting"`
+	Names       NamesConfig   `toml:"names"`
 	// MicServer is the Linux build's `mic serve`: this host's input, served
 	// to paired Macs.
 	MicServer MicServerConfig `toml:"mic_server"`
+	// Remote lets a paired iPhone (and the watch through it) start and stop
+	// this Mac's takes.
+	Remote RemoteConfig `toml:"remote"`
+}
+
+// RemoteConfig is the phones' listener (internal/remote): off unless
+// enabled, then TLS on listen, registered over Bonjour as
+// _megavoice-ctl._tcp; a phone pairs by the QR code of menu › iPhone 遥控….
+type RemoteConfig struct {
+	Enabled bool        `toml:"enabled"`
+	Listen  string      `toml:"listen"` // host:port; ":7867" is every interface
+	State   string      `toml:"state"`  // the TLS key and the paired phones, in a 0700 directory
+	Relay   RelayConfig `toml:"relay"`
+}
+
+// RelayConfig also reaches this Mac through the Mega Voice relay
+// (relay/PROTOCOL.md), from any network: off unless enabled, then the Mac
+// holds one link to its room at url. The two files hold the relay's
+// provision and room-tag keys, 64 hex characters each, readable by this
+// user alone.
+type RelayConfig struct {
+	Enabled      bool   `toml:"enabled"`
+	URL          string `toml:"url"`           // https://host; no default
+	ProvisionKey string `toml:"provision_key"` // the provision key's file
+	RoomTagKey   string `toml:"room_tag_key"`  // the room-tag key's file
+}
+
+// Keys reads the relay's provision and room-tag keys from their files,
+// refusing a file another user can read and anything but 64 hex
+// characters.
+func (r RelayConfig) Keys() (provision, roomTag []byte, err error) {
+	if provision, err = relayKey(r.ProvisionKey); err != nil {
+		return nil, nil, fmt.Errorf("provision_key: %w", err)
+	}
+	if roomTag, err = relayKey(r.RoomTagKey); err != nil {
+		return nil, nil, fmt.Errorf("room_tag_key: %w", err)
+	}
+	return provision, roomTag, nil
+}
+
+func relayKey(path string) ([]byte, error) {
+	if path == "" {
+		return nil, errors.New("empty")
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() || st.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s is not a file of mode 0600", path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	k := auth.ParseSecret(string(b))
+	if k == nil {
+		return nil, fmt.Errorf("%s does not hold 64 lowercase hex characters", path)
+	}
+	return k, nil
 }
 
 // VoiceTables are megavoice's own tables, the ones its `config show` prints.
-var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "deliver", "store", "compare"}
+var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "names", "deliver", "keypad", "store", "compare", "remote"}
 
 type TapConfig struct {
 	Key    string   `toml:"key"`    // the modifier whose lone tap starts and stops a take
@@ -176,8 +239,35 @@ type PostConfig struct {
 	JoinWords []string `toml:"join_words"`
 }
 
+// NamesConfig is the dictation names gate: after the post chain, a take
+// whose text holds a span that sounds the same as a listed person's name is
+// judged by Jev, and the delivered text carries the names it accepts.
+type NamesConfig struct {
+	On        bool     `toml:"on"`
+	People    string   `toml:"people"`    // people.json, the names pull's index snapshot; read at each take
+	KeyFile   string   `toml:"key_file"`  // the file holding the TypeSafe key
+	KeyVar    string   `toml:"key_var"`   // the KEY=value line in key_file that holds it; "" when the file is the key alone
+	Threshold float64  `toml:"threshold"` // an option Jev gives this probability or more is applied
+	Timeout   Duration `toml:"timeout"`   // past this the take is delivered as decoded
+}
+
 type DeliverConfig struct {
 	HerdrApps []string `toml:"herdr_apps"` // bundle ids of herdr's host terminals
+}
+
+// KeypadConfig is the desk keypad's Telegram targets: a take started while
+// the keypad is locked is sent to the locked group and topic by ccc-telegram
+// on Via, as the account it is logged in to (sender user) or the bot; with
+// neither Via nor Send set a locked take fails, its text on the clipboard.
+// Send, when set,
+// replaces that command with an argv of its own ({chat} {topic} {text}, the
+// text also on stdin; {text} only as a whole element of a program taking it
+// as data, never inside a shell's line: ssh and sh -c read stdin). State holds the targets, the pick and the lock.
+type KeypadConfig struct {
+	Sender string   `toml:"sender"` // user or bot
+	Via    string   `toml:"via"`    // the host whose ccc-telegram holds the live session
+	State  string   `toml:"state"`  // keypad.json
+	Send   []string `toml:"send"`
 }
 
 type StoreConfig struct {
@@ -194,6 +284,7 @@ type MeetingConfig struct {
 	Align   MeetingAlignConfig   `toml:"align"`
 	Ingest  MeetingIngestConfig  `toml:"ingest"`
 	Summary MeetingSummaryConfig `toml:"summary"`
+	Names   MeetingNamesConfig   `toml:"names"`
 	Page    MeetingPageConfig    `toml:"page"`
 	Upload  MeetingUploadConfig  `toml:"upload"`
 	Drain   MeetingDrainConfig   `toml:"drain"`
@@ -256,6 +347,17 @@ type MeetingSummaryConfig struct {
 	MaxChars int      `toml:"max_chars"` // transcript characters sent at most; a longer meeting sends its head and tail
 }
 
+// MeetingNamesConfig is the drain's names pass: after Process, and for the
+// people a speaker is resolved to, a model repairs person names in the
+// transcripts, one headless call per window, against the people.index
+// record.
+type MeetingNamesConfig struct {
+	Command     []string `toml:"command"`      // the headless model CLI (a Claude Code launcher: -p and its flags are appended); empty runs no pass
+	Effort      string   `toml:"effort"`       // --effort of each call; "" passes none
+	Concurrency int      `toml:"concurrency"`  // calls at once
+	WindowChars int      `toml:"window_chars"` // characters of consecutive segments one call reads
+}
+
 // MeetingDrainConfig is the server's: how it reports a failed record.
 type MeetingDrainConfig struct {
 	Notify []string `toml:"notify"` // a program the one-line failure report is appended to as its last argument (["ccc-telegram", "sendAsBot"]); empty logs only
@@ -301,9 +403,12 @@ func Default() Config {
 			KeyFile: filepath.Join(ConfigDir(), "doubao.key"), TwoPass: true, Hotwords: true,
 		}},
 		Postprocess: PostConfig{JoinWords: []string{}},
-		Deliver:     DeliverConfig{HerdrApps: []string{"com.github.wez.wezterm"}},
-		Store:       StoreConfig{Data: DataDir(), Labels: filepath.Join(dataHome(), "megavoice", "labels.jsonl")},
-		Compare:     CompareConfig{Engines: []string{"funasr", "doubao"}, Addr: "127.0.0.1:7865"},
+		Names: NamesConfig{On: true, People: filepath.Join(ConfigDir(), "people.json"),
+			KeyFile: filepath.Join(ConfigDir(), "typesafe.key"), Threshold: 0.5, Timeout: MS(1500)},
+		Deliver: DeliverConfig{HerdrApps: []string{"com.github.wez.wezterm"}},
+		Keypad:  KeypadConfig{Sender: "user", State: filepath.Join(stateHome(), "megavoice", "keypad.json"), Send: []string{}},
+		Store:   StoreConfig{Data: DataDir(), Labels: filepath.Join(dataHome(), "megavoice", "labels.jsonl")},
+		Compare: CompareConfig{Engines: []string{"funasr", "doubao"}, Addr: "127.0.0.1:7865"},
 		Meeting: MeetingConfig{
 			Data:    meetingDir(),
 			Capture: MeetingCaptureConfig{Apps: []string{"com.electron.lark.helper", "us.zoom.xos"}, Mic: "default"},
@@ -313,9 +418,11 @@ func Default() Config {
 			Upload:  MeetingUploadConfig{PartMiB: 16, RetentionDays: 30},
 			Ingest:  MeetingIngestConfig{Command: []string{}, Sources: []string{"mac", "room", "phone", "file"}, MinDuration: Duration(2 * time.Minute), AssetsRemote: "origin"},
 			Summary: MeetingSummaryConfig{Command: []string{}, Model: "claude-haiku-4-5", MaxChars: 40000},
+			Names:   MeetingNamesConfig{Command: []string{}, Effort: "medium", Concurrency: 4, WindowChars: 200},
 			Drain:   MeetingDrainConfig{Notify: []string{}},
 		},
 		MicServer: MicServerConfig{Listen: ":7866", State: filepath.Join(stateHome(), "megavoice", "mic"), AdminGroup: "megavoice-mic"},
+		Remote:    RemoteConfig{Listen: ":7867", State: filepath.Join(stateHome(), "megavoice", "remote")},
 	}
 }
 
@@ -415,7 +522,7 @@ func Load(o LoadOpts) (Loaded, error) {
 			return l, err
 		}
 	}
-	for _, p := range []*string{&l.Store.Data, &l.Store.Labels, &l.ASR.Doubao.KeyFile, &l.ASR.FunASR.Root, &l.ASR.FunASR.LLM, &l.Meeting.Data, &l.Meeting.Align.FeishuArchive, &l.Meeting.Ingest.Wiki, &l.Meeting.Page.TokenFile, &l.Meeting.Ingest.Repos, &l.Meeting.Ingest.Assets, &l.MicServer.State, &l.MicServer.Socket} {
+	for _, p := range []*string{&l.Store.Data, &l.Store.Labels, &l.ASR.Doubao.KeyFile, &l.Names.People, &l.Names.KeyFile, &l.ASR.FunASR.Root, &l.ASR.FunASR.LLM, &l.Meeting.Data, &l.Meeting.Align.FeishuArchive, &l.Meeting.Ingest.Wiki, &l.Meeting.Page.TokenFile, &l.Meeting.Ingest.Repos, &l.Meeting.Ingest.Assets, &l.MicServer.State, &l.MicServer.Socket, &l.Remote.State, &l.Remote.Relay.ProvisionKey, &l.Remote.Relay.RoomTagKey, &l.Keypad.State} {
 		*p = expandHome(*p)
 	}
 	errs := l.validate()
@@ -477,6 +584,10 @@ func (c Config) validate() []string {
 	if c.Tap.Window <= 0 {
 		bad("tap.window", "must be above 0")
 	}
+	oneOf("keypad.sender", c.Keypad.Sender, "user", "bot")
+	if c.Keypad.State == "" {
+		bad("keypad.state", "empty")
+	}
 	if c.Tap.Quiet < 0 {
 		bad("tap.quiet", "must not be negative")
 	}
@@ -535,6 +646,12 @@ func (c Config) validate() []string {
 			bad("asr.doubao.key_file", "%v", err)
 		}
 	}
+	if t := c.Names.Threshold; t <= 0 || t > 1 {
+		bad("names.threshold", "%v is outside (0, 1]", t)
+	}
+	if c.Names.Timeout <= 0 {
+		bad("names.timeout", "must be above 0")
+	}
 	for i, e := range c.Compare.Engines {
 		oneOf("compare.engines", e, Engines...)
 		if slices.Contains(c.Compare.Engines[:i], e) {
@@ -545,6 +662,23 @@ func (c Config) validate() []string {
 	// such as localhost resolves to more addresses than the one bound
 	if h, _, err := net.SplitHostPort(c.Compare.Addr); err != nil || net.ParseIP(h) == nil || !net.ParseIP(h).IsLoopback() {
 		bad("compare.addr", "%q is not a loopback IP:port, such as 127.0.0.1:7865: the Takes page serves your recordings", c.Compare.Addr)
+	}
+	if _, p, err := net.SplitHostPort(c.Remote.Listen); err != nil || p == "" {
+		bad("remote.listen", "%q is not host:port, such as :7867", c.Remote.Listen)
+	}
+	if r := c.Remote.Relay; r.Enabled {
+		if !c.Remote.Enabled {
+			bad("remote.relay.enabled", "true while remote.enabled is false: the relay carries the iPhone remote")
+		}
+		if u, err := url.Parse(r.URL); err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
+			bad("remote.relay.url", "%q is not https://host, such as https://voice.0xtau.com", r.URL)
+		}
+		if _, err := relayKey(r.ProvisionKey); err != nil {
+			bad("remote.relay.provision_key", "%v", err)
+		}
+		if _, err := relayKey(r.RoomTagKey); err != nil {
+			bad("remote.relay.room_tag_key", "%v", err)
+		}
 	}
 	if c.ASR.FunASR.Root == "" {
 		bad("asr.funasr.root", "empty")
@@ -633,6 +767,12 @@ func (c Config) validate() []string {
 	if len(m.Summary.Command) > 0 && m.Summary.Model == "" {
 		bad("meeting.summary.model", "empty while command is set")
 	}
+	if n := m.Names.Concurrency; n < 1 || n > 8 {
+		bad("meeting.names.concurrency", "%d is not 1 to 8", n)
+	}
+	if m.Names.WindowChars < 50 {
+		bad("meeting.names.window_chars", "%d is below 50", m.Names.WindowChars)
+	}
 	if m.Summary.MaxChars < 1000 {
 		bad("meeting.summary.max_chars", "%d is below 1000", m.Summary.MaxChars)
 	}
@@ -670,20 +810,25 @@ func (c Config) Uses(engine string) bool {
 // Key reads the plan key from key_file: the value of its key_var line
 // (KEY=value, export and quotes allowed), or the whole file without
 // key_var. An error never quotes the file.
-func (d DoubaoConfig) Key() (string, error) {
-	b, err := os.ReadFile(d.KeyFile)
+func (d DoubaoConfig) Key() (string, error) { return readKey(d.KeyFile, d.KeyVar) }
+
+// Key reads the TypeSafe key from key_file, as DoubaoConfig.Key reads its.
+func (n NamesConfig) Key() (string, error) { return readKey(n.KeyFile, n.KeyVar) }
+
+func readKey(file, keyVar string) (string, error) {
+	b, err := os.ReadFile(file)
 	if err != nil {
 		return "", err
 	}
-	if d.KeyVar == "" {
+	if keyVar == "" {
 		if k := strings.TrimSpace(string(b)); k != "" {
 			return k, nil
 		}
-		return "", fmt.Errorf("%s is empty", d.KeyFile)
+		return "", fmt.Errorf("%s is empty", file)
 	}
 	for _, line := range strings.Split(string(b), "\n") {
 		name, val, ok := strings.Cut(strings.TrimPrefix(strings.TrimSpace(line), "export "), "=")
-		if !ok || strings.TrimSpace(name) != d.KeyVar {
+		if !ok || strings.TrimSpace(name) != keyVar {
 			continue
 		}
 		val = strings.TrimSpace(val)
@@ -694,7 +839,7 @@ func (d DoubaoConfig) Key() (string, error) {
 			return val, nil
 		}
 	}
-	return "", fmt.Errorf("%s has no %s line with a value", d.KeyFile, d.KeyVar)
+	return "", fmt.Errorf("%s has no %s line with a value", file, keyVar)
 }
 
 // legacyKeys maps the environment variables megavoice once read to the
@@ -768,6 +913,8 @@ func tomlValue(v any) string {
 		return strconv.Quote(x)
 	case int:
 		return strconv.Itoa(x)
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
 	case bool:
 		return strconv.FormatBool(x)
 	case []string:
@@ -810,8 +957,9 @@ func feishuArchive() string {
 	return filepath.Join(dataHome(), "mega-asr", "corpora", "feishu-minutes")
 }
 
-// ConfigDir holds config.toml and the user-editable hotwords.txt and
-// corrections.tsv.
+// ConfigDir holds config.toml, the user-editable hotwords.txt and
+// corrections.tsv, and hotwords.d/*.txt and corrections.d/*.tsv beside them:
+// files another tool writes, read with the user's file as one list.
 func ConfigDir() string {
 	if d := os.Getenv("XDG_CONFIG_HOME"); d != "" {
 		return filepath.Join(d, "megavoice")
@@ -822,6 +970,22 @@ func ConfigDir() string {
 
 func HotwordsPath() string    { return filepath.Join(ConfigDir(), "hotwords.txt") }
 func CorrectionsPath() string { return filepath.Join(ConfigDir(), "corrections.tsv") }
+
+// HotwordsFiles is hotwords.txt, then hotwords.d/*.txt in name order.
+func HotwordsFiles() []string { return withDir(HotwordsPath(), "hotwords.d", "*.txt") }
+
+// CorrectionsFiles is corrections.tsv, then corrections.d/*.tsv in name order.
+func CorrectionsFiles() []string { return withDir(CorrectionsPath(), "corrections.d", "*.tsv") }
+
+// RechecksFiles is rechecks.tsv, then rechecks.d/*.tsv in name order.
+func RechecksFiles() []string {
+	return withDir(filepath.Join(ConfigDir(), "rechecks.tsv"), "rechecks.d", "*.tsv")
+}
+
+func withDir(file, dir, pattern string) []string {
+	more, _ := filepath.Glob(filepath.Join(ConfigDir(), dir, pattern)) // sorted; the only error is a bad pattern
+	return append([]string{file}, more...)
+}
 
 //go:embed defaults
 var defaults embed.FS

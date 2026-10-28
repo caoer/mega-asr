@@ -1,0 +1,40 @@
+{
+  "messages": [
+    {
+      "name": "hello",
+      "text": "{\"type\":\"hello\",\"mac\":\"studio\",\"state\":{\"phase\":\"idle\",\"take\":\"\",\"elapsed_ms\":0,\"epoch\":\"AAECAwQFBgc\",\"seq\":1},\"recent\":[{\"take\":\"20261020-101500\",\"final\":\"\",\"at_ms\":1770000000000},{\"take\":\"20261020-101200\",\"final\":\"undelivered\",\"why\":\"deliver_failed\",\"at_ms\":1769999820000}],\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "reply ok",
+      "text": "{\"type\":\"reply\",\"id\":\"c1\",\"ok\":true,\"take\":\"20261020-101500\",\"state\":{\"phase\":\"recording\",\"take\":\"20261020-101500\",\"elapsed_ms\":0,\"epoch\":\"AAECAwQFBgc\",\"seq\":2,\"owner\":\"stream\"},\"recent\":[{\"take\":\"20261020-101500\",\"final\":\"\",\"at_ms\":1770000000000},{\"take\":\"20261020-101200\",\"final\":\"undelivered\",\"why\":\"deliver_failed\",\"at_ms\":1769999820000}],\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "reply other_take",
+      "text": "{\"type\":\"reply\",\"id\":\"c2\",\"ok\":false,\"code\":\"other_take\",\"reason\":\"这段是 iPhone 键盘录音，请从键盘结束\",\"state\":{\"phase\":\"recording\",\"take\":\"20261020-101500\",\"elapsed_ms\":2500,\"epoch\":\"AAECAwQFBgc\",\"seq\":2,\"owner\":\"stream\"},\"recent\":[{\"take\":\"20261020-101500\",\"final\":\"\",\"at_ms\":1770000000000},{\"take\":\"20261020-101200\",\"final\":\"undelivered\",\"why\":\"deliver_failed\",\"at_ms\":1769999820000}],\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "state idle",
+      "text": "{\"type\":\"state\",\"state\":{\"phase\":\"idle\",\"take\":\"\",\"elapsed_ms\":0,\"epoch\":\"AAECAwQFBgc\",\"seq\":3},\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "state recording mac",
+      "text": "{\"type\":\"state\",\"state\":{\"phase\":\"recording\",\"take\":\"20261020-101800\",\"elapsed_ms\":1500,\"epoch\":\"AAECAwQFBgc\",\"seq\":4,\"owner\":\"mac\"},\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "state recording stream",
+      "text": "{\"type\":\"state\",\"state\":{\"phase\":\"recording\",\"take\":\"20261020-101500\",\"elapsed_ms\":1500,\"epoch\":\"AAECAwQFBgc\",\"seq\":5,\"owner\":\"stream\"},\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "state transcribing",
+      "text": "{\"type\":\"state\",\"state\":{\"phase\":\"transcribing\",\"take\":\"\",\"elapsed_ms\":0,\"epoch\":\"AAECAwQFBgc\",\"seq\":6,\"owner\":\"stream\"},\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "take",
+      "text": "{\"type\":\"take\",\"take\":\"20261020-101500\",\"final\":\"undelivered\",\"why\":\"deliver_failed\",\"now_ms\":1770000000123}"
+    },
+    {
+      "name": "text",
+      "text": "{\"type\":\"text\",\"take\":\"20261020-101500\",\"text\":\"你好，\\\"Mega\\\" \\\\ \\u003cVoice\\u003e\",\"now_ms\":1770000000123}"
+    }
+  ]
+}

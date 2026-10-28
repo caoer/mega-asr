@@ -2,7 +2,7 @@
 """Mirror your Feishu Minutes (飞书妙记) into a private archive, and cut a
 calibration manifest from them.
 
-    python3 scripts/feishu-minutes/fetch.py [fetch] [--out DIR] [--since DATE] [--only TOKEN,...]
+    python3 scripts/feishu-minutes/fetch.py [fetch] [--out DIR] [--since DATE] [--only TOKEN,... [--ready]]
     python3 scripts/feishu-minutes/fetch.py summaries [--out DIR]
     python3 scripts/feishu-minutes/fetch.py manifest [--out DIR]
     python3 scripts/feishu-minutes/fetch.py stats [--out DIR]
@@ -28,7 +28,18 @@ EPOCH_START = "2020-01-01"
 SEARCH_CAP = 40        # the search API stops at 50 results a query; split a window that nears it
 MIN_WINDOW = datetime.timedelta(hours=1)
 API_PAUSE_S = 0.4      # between lark-cli calls
-SETTLE = datetime.timedelta(hours=3)  # a younger minute may still be transcribing: fetch it next run
+# A minute younger than SETTLE is fetched only once it is ready: the recording
+# ended more than END_GRACE ago and Feishu's transcript reaches within
+# TRANSCRIPT_TAIL of its end. `minutes get` status is no readiness flag (1 on
+# some ready minutes, 0 on others). Past SETTLE a minute is fetched as it is.
+SETTLE = datetime.timedelta(hours=3)
+END_GRACE = datetime.timedelta(minutes=5)
+TRANSCRIPT_TAIL_S = 120
+# --ready: Feishu announced the minute generated (minutes.minute.generated_v1),
+# so END_GRACE is skipped; a minute still unready (pending, 2091003, a failed
+# call) is tried again every READY_RETRY_S for up to READY_WAIT.
+READY_WAIT = datetime.timedelta(minutes=3)
+READY_RETRY_S = 20
 
 # Calibration segments.
 SEG_MIN_S, SEG_MAX_S = 1.0, 30.0
@@ -193,12 +204,15 @@ def parse_transcript(path):
     return header, keywords, segs
 
 
-def fetch_one(token, roles, me, root):
+def fetch_one(token, roles, me, root, ready=False):
     d = os.path.join(root, "minutes", token)
     os.makedirs(d, exist_ok=True)
     meta = lark("minutes", "minutes", "get", "--params", json.dumps({"minute_token": token}))["minute"]
     created = datetime.datetime.fromtimestamp(int(meta["create_time"]) / 1000).astimezone()
-    if datetime.datetime.now().astimezone() - created < SETTLE:
+    duration_s = int(meta.get("duration", 0)) / 1000
+    age = datetime.datetime.now().astimezone() - created
+    settled = age >= SETTLE
+    if not settled and not ready and age < datetime.timedelta(seconds=duration_s) + END_GRACE:
         return {"state": "pending"}
     rec = {
         "token": token,
@@ -218,9 +232,17 @@ def fetch_one(token, roles, me, root):
     data = lark("minutes", "+detail", "--minute-tokens", token, "--transcript", "--summary",
                 "--output-dir", ".detail", "--overwrite", cwd=d)
     artifacts = (data.get("minutes") or [{}])[0].get("artifacts") or {}
-    rec["summary"] = artifacts.get("summary") or ""
+    # Feishu writes its summary after the transcript: an empty one before SETTLE
+    # stays absent, so fill_summaries asks again next run.
+    if artifacts.get("summary") or settled:
+        rec["summary"] = artifacts.get("summary") or ""
     src = artifacts.get("transcript_file")
     src = src and os.path.join(d, src)
+    if not settled:
+        segs = parse_transcript(src)[2] if src and os.path.exists(src) else []
+        if not segs or segs[-1]["start_s"] < duration_s - TRANSCRIPT_TAIL_S:
+            subprocess.run(["rm", "-rf", tmp])
+            return {"state": "pending"}
     if src and os.path.exists(src):
         os.replace(src, os.path.join(d, "transcript.txt"))
         subprocess.run(["rm", "-rf", tmp])
@@ -268,14 +290,22 @@ def cmd_fetch(args, root):
         since = datetime.datetime.fromisoformat(args.since).astimezone()
         listed = list_minutes(since, args.cdp)
         log(f"listed {len(listed)} minutes since {args.since}")
+        state["listed"] = sorted(listed)  # a minute no longer listed is never retried, so its error is no current one
     todo = [t for t in sorted(listed) if state["minutes"].get(t, {}).get("state") != "done"]
     log(f"{len(todo)} to fetch, {len(listed) - len(todo)} already archived")
     failed = 0
     for i, token in enumerate(todo, 1):
-        try:
-            rec = fetch_one(token, listed[token], state["me"], root)
-        except Exception as e:  # keep going; the state file records it and the next run retries
-            rec, failed = {"state": "error", "error": str(e)[:500]}, failed + 1
+        deadline = time.monotonic() + READY_WAIT.total_seconds()
+        while True:
+            try:
+                rec = fetch_one(token, listed[token], state["me"], root, ready=args.ready)
+            except Exception as e:  # keep going; the state file records it and the next run retries
+                rec = {"state": "error", "error": str(e)[:500]}
+            if rec["state"] == "done" or not args.ready or time.monotonic() >= deadline:
+                break
+            log(f"{token} {rec['state']} {rec.get('error', '')}: again in {READY_RETRY_S} s")
+            time.sleep(READY_RETRY_S)
+        failed += rec["state"] == "error"
         rec["roles"] = sorted(set(rec.get("roles", [])) | listed[token])
         state["minutes"][token] = {**state["minutes"].get(token, {}), **rec}
         if rec["state"] == "done":
@@ -291,9 +321,14 @@ def cmd_fetch(args, root):
 SUMMARY_BATCH = 20
 
 
+def is_settled(rec):
+    created = rec.get("created")
+    return not created or datetime.datetime.now().astimezone() - datetime.datetime.fromisoformat(created) >= SETTLE
+
+
 def fill_summaries(state, root):
     """Fetch Feishu's summary for every archived minute that has none recorded
-    yet ("" is recorded when the minute has no summary). Returns the failures."""
+    yet ("" is recorded when a minute past SETTLE has no summary). Returns the failures."""
     todo = [t for t, r in sorted(state["minutes"].items()) if r.get("state") == "done" and "summary" not in r]
     failed = 0
     for i in range(0, len(todo), SUMMARY_BATCH):
@@ -310,6 +345,8 @@ def fill_summaries(state, root):
                 log(f"summary {t}: not in the answer")
                 failed += 1
                 continue
+            if got[t] == "" and not is_settled(state["minutes"][t]):
+                continue  # Feishu may not have written it yet: ask again next run
             state["minutes"][t]["summary"] = got[t]
         save_state(root, state)
     if todo:
@@ -481,7 +518,12 @@ def main():
     ap.add_argument("--cdp", help="also read the Minutes home list through a logged-in browser on this CDP port "
                     "(agent-browser); it holds shared minutes the search API never returns")
     ap.add_argument("--only", help="fetch these comma-separated minute tokens, skipping the listing")
+    ap.add_argument("--ready", action="store_true",
+                    help="with --only: Feishu announced these minutes generated, so skip the wait for the recording's "
+                    f"end and try an unready one again every {READY_RETRY_S} s for up to {READY_WAIT.seconds // 60} min")
     args = ap.parse_args()
+    if args.ready and not args.only:
+        ap.error("--ready needs --only")
     root = os.path.expanduser(args.out)
     os.makedirs(root, mode=0o700, exist_ok=True)
     return {"fetch": cmd_fetch, "summaries": cmd_summaries, "manifest": cmd_manifest,

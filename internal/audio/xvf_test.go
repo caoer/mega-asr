@@ -3,9 +3,12 @@ package audio
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func frames(n int) []byte {
@@ -117,5 +120,64 @@ func TestMonoPassesSamplesThrough(t *testing.T) {
 	}
 	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("got %v", got)
+	}
+}
+
+func TestXVFInputWaitsForPreviousRelease(t *testing.T) {
+	release, err := xvfLease(t.Context(), "owned-test-input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquired := make(chan func(), 1)
+	go func() {
+		next, err := xvfLease(t.Context(), "owned-test-input")
+		if err == nil {
+			acquired <- next
+		}
+	}()
+	select {
+	case next := <-acquired:
+		next()
+		t.Fatal("opened before old tail released")
+	case <-time.After(20 * time.Millisecond):
+	}
+	release()
+	select {
+	case next := <-acquired:
+		next()
+	case <-time.After(time.Second):
+		t.Fatal("input not released")
+	}
+}
+
+func TestXVFStallSurvivesStop(t *testing.T) {
+	r, w := io.Pipe()
+	defer w.Close()
+	in, writer := io.Pipe()
+	defer in.Close()
+	x := &XVF{Device: "fake", stdin: writer, done: make(chan struct{}), stall: 20 * time.Millisecond}
+	defer close(x.done)
+	var last atomic.Int64
+	go x.watch(r, time.Now(), &last)
+	if _, err := r.Read(make([]byte, 1)); err == nil {
+		t.Fatal("stall did not close pipe")
+	}
+	x.stopping.Store(true)
+	if err := x.Err(); err == nil || !strings.Contains(err.Error(), "no audio") {
+		t.Fatalf("stall lost after stop: %v", err)
+	}
+}
+
+func TestSSHFailureDuringStopIsNotSuccess(t *testing.T) {
+	x := &XVF{Host: "fake", done: make(chan struct{})}
+	x.stopping.Store(true)
+	x.cmd = exec.Command("sh", "-c", "exit 255")
+	if err := x.cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan []int16, 1)
+	x.pump(bytes.NewReader(frames(1)), ch)
+	if err := x.Err(); err == nil || !strings.Contains(err.Error(), "stream cut") {
+		t.Fatalf("SSH failure during stop: %v", err)
 	}
 }

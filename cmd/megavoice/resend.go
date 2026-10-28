@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/ctl"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 	"golang.org/x/sys/unix"
@@ -233,7 +234,7 @@ func (s *server) handleResend(req ctl.Request) ctl.Response {
 		}
 		q := session.Resend{ID: a.ID, To: to, Send: a.Send, Text: a.Text, Via: "cli", Caller: a.Caller}
 		if a.To == "" || a.To == "front" {
-			q.Where = "当前光标"
+			q.Where = l10n.T("当前光标", "the cursor")
 		}
 		return lineReply(s.ctrl.Resend(q))
 	case "retranscribe":

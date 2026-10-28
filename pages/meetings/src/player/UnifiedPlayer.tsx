@@ -2,14 +2,15 @@
 // component. Every timestamp anywhere moves the one playhead; the transcript
 // follows it; speakers are shown by name and named in place.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as RKeyboardEvent, type PointerEvent as RPointerEvent } from "react";
-import { audioURL, canRead, loadSegments, transcriptSources } from "../store";
+import { audioURL, canRead, loadNames, loadSegments, transcriptSources, withNames } from "../store";
 import { AUDIO_ROLES, ROLE_LABEL, type FileRef, type Rec, type Segment } from "../types";
 import { fmtPos } from "../time";
 import { fmtBytes } from "../ui";
 import { speakerPalette } from "../model";
 import { busState, chooseTrack, nudge, RATES, registerTrack, resetBus, seek, setMuted, setRate, stepRate, toggle, useBus, type Rate } from "./bus";
-import { lanesOf, splitMatches, tickStep, turnsOf } from "./turns";
+import { lanesOf, nameParts, splitMatches, tickStep, turnsOf, type NamePart } from "./turns";
 import { SpeakerName, type PersonHref } from "./SpeakerName";
+import { personBySlug, shortName, usePeople, type WikiPerson } from "../people/store";
 import "./player.css";
 
 export interface UnifiedPlayerProps {
@@ -40,16 +41,17 @@ export function UnifiedPlayer({ rec, personHref, transcriptHeight }: UnifiedPlay
     let live = true;
     setTexts({ ours: null, feishu: null, loading: true, error: null });
     const load = (f?: FileRef) => (f ? loadSegments(f) : Promise.resolve(null));
-    // Feishu's minute is a second opinion: a link that cannot read it still reads ours.
-    Promise.all([load(src.ours), load(src.feishu).catch(() => null)]).then(
-      ([ours, feishu]) => live && setTexts({ ours, feishu, loading: false, error: null }),
+    // Feishu's minute is a second opinion, and the names pass's record a layer
+    // over both: a link that cannot read either still reads ours.
+    Promise.all([load(src.ours), load(src.feishu).catch(() => null), src.names ? loadNames(src.names).catch(() => []) : Promise.resolve([])]).then(
+      ([ours, feishu, names]) => live && setTexts({ ours: ours && withNames(ours, names, "ours"), feishu: feishu && withNames(feishu, names, "feishu"), loading: false, error: null }),
       (e: Error) => live && setTexts({ ours: null, feishu: null, loading: false, error: e.message }),
     );
     return () => {
       live = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [src.ours?.file, src.feishu?.file]);
+  }, [src.ours?.file, src.feishu?.file, src.names?.file]);
 
   const [sourceChoice, setSourceChoice] = useState<SourceKey | null>(null);
   const source: SourceKey = sourceChoice ?? (texts.ours?.length ? "ours" : texts.feishu?.length ? "feishu" : "ours");
@@ -64,7 +66,10 @@ export function UnifiedPlayer({ rec, personHref, transcriptHeight }: UnifiedPlay
   const [find, setFind] = useState("");
   const [raw, setRaw] = useState(false);
   const [follow, setFollow] = useState(true);
-  const hasRaw = source === "ours" && !!segs?.some((s) => s.raw && s.raw !== s.text);
+  const hasRaw = !!segs?.some((s) => s.raw && s.raw !== s.text);
+  const people = usePeople();
+  // Every known person's full name links to their page, beside the names the pass wrote.
+  const fullNames = useMemo(() => new Map(people.flatMap((p) => [[p.name, p.slug] as const, [shortName(p), p.slug] as const])), [people]);
   const shown = useMemo(() => {
     const n = find.trim().toLowerCase();
     if (!n) return turns;
@@ -233,7 +238,7 @@ export function UnifiedPlayer({ rec, personHref, transcriptHeight }: UnifiedPlay
             </label>
             {hasRaw ? (
               <label className="up-check">
-                <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> Raw ASR
+                <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} /> {source === "feishu" ? "As Feishu wrote it" : "Raw ASR"}
               </label>
             ) : null}
             <span className="up-grow" />
@@ -256,7 +261,7 @@ export function UnifiedPlayer({ rec, personHref, transcriptHeight }: UnifiedPlay
                       <SpeakerName recId={rec.id} label={t.speaker || "Unknown"} personHref={personHref} compact />
                     </div>
                     <p className="up-say" lang="zh-Hans">
-                      {splitMatches(raw && t.raw ? t.raw : t.text, find).map((p, i) => (p.hit ? <mark key={i}>{p.t}</mark> : <span key={i}>{p.t}</span>))}
+                      {raw && t.raw ? <Found text={t.raw} find={find} /> : <Said parts={nameParts(t.text, t.names, fullNames)} people={people} find={find} personHref={personHref} />}
                     </p>
                   </div>
                 </li>
@@ -270,6 +275,33 @@ export function UnifiedPlayer({ rec, personHref, transcriptHeight }: UnifiedPlay
 }
 
 // ---------------------------------------------------------------------------
+
+function Found({ text, find }: { text: string; find: string }) {
+  return (
+    <>
+      {splitMatches(text, find).map((p, i) => (p.hit ? <mark key={i}>{p.t}</mark> : <span key={i}>{p.t}</span>))}
+    </>
+  );
+}
+
+/** Turn text with its names linked to their people's pages; a name the names pass wrote says what was heard. */
+function Said({ parts, people, find, personHref }: { parts: NamePart[]; people: WikiPerson[]; find: string; personHref?: PersonHref }) {
+  return (
+    <>
+      {parts.map((p, i) => {
+        const person = p.person ? personBySlug(p.person, people) : undefined;
+        if (!p.person || !personHref || (!person && !p.heard)) return <Found key={i} text={p.t} find={find} />;
+        const who = person ?? { slug: p.person, name: p.t, aliases: [], wiki_url: "", pages: [] };
+        const title = `${shortName(who)} — open their page${p.heard ? ` · heard as “${p.heard}”` : ""}`;
+        return (
+          <a key={i} className={`up-person${p.heard ? " repaired" : ""}`} href={personHref(who)} title={title} data-heard={p.heard || undefined}>
+            <Found text={p.t} find={find} />
+          </a>
+        );
+      })}
+    </>
+  );
+}
 
 function isTyping(t: EventTarget | null): boolean {
   const el = t as HTMLElement | null;

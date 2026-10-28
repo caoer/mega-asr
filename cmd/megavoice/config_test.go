@@ -163,3 +163,14 @@ func TestSourceReadsTheFileAtEachTake(t *testing.T) {
 		t.Fatal("broken file: not serve's local source")
 	}
 }
+
+func TestLoadToleratesMissingRemote(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("MEGAVOICE_CONFIG", "")
+	os.MkdirAll(filepath.Join(dir, "megavoice"), 0755)
+	os.WriteFile(filepath.Join(dir, "megavoice", "config.toml"), []byte("[capture]\nsource = \"remote\"\nremote = \"absent\"\n"), 0644)
+	if _, err := load(app.LoadOpts{}); err != nil {
+		t.Fatalf("startup should allow selecting another input: %v", err)
+	}
+}

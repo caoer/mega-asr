@@ -5,6 +5,19 @@
 	<key>CFBundleIdentifier</key>
 	<string>app.0xdao.megavoice</string>
 	<key>CFBundleName</key>
+	<string>Mega Voice</string>
+	<key>CFBundleDisplayName</key>
+	<string>MegaVoice</string>
+	<key>LSHasLocalizedDisplayName</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
+	<key>CFBundleIconFile</key>
 	<string>MegaVoice</string>
 	<key>CFBundleExecutable</key>
 	<string>megavoice</string>
@@ -19,12 +32,13 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>MegaVoice records your voice to transcribe it where you are typing.</string>
+	<string>Records your voice to transcribe it where you are typing.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>MegaVoice finds and connects to remote mics on your network, such as a mic array plugged into another computer.</string>
+	<string>Finds and connects to remote mics on your network, such as a mic array plugged into another computer, and lets your paired iPhone find it to start and stop recording.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_megavoice-mic._tcp</string>
+		<string>_megavoice-ctl._tcp</string>
 	</array>
 </dict>
 </plist>

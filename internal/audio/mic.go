@@ -242,6 +242,7 @@ type micPump struct {
 	rs           *resampler
 	first, stall time.Duration
 	halt         func(error)
+	deviceWatch  bool
 }
 
 func (p *micPump) run() {
@@ -249,6 +250,9 @@ func (p *micPump) run() {
 	timer := time.NewTimer(p.first)
 	defer timer.Stop()
 	stalled := timer.C
+	if p.deviceWatch {
+		stalled = nil
+	}
 	for {
 		select {
 		case b, ok := <-p.raw:
@@ -264,6 +268,32 @@ func (p *micPump) run() {
 		case <-stalled:
 			stalled = nil // halt once; what raw still holds drains
 			p.halt(fmt.Errorf("%s stopped delivering audio", p.name))
+		}
+	}
+}
+
+// watchInput checks the device clock independently of a blocked output pump.
+func watchInput(done <-chan struct{}, every, first, stall time.Duration, age func() (time.Duration, bool), check func() error, halt func(error)) {
+	tick := time.NewTicker(every)
+	defer tick.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-tick.C:
+			elapsed, heard := age()
+			limit := first
+			if heard {
+				limit = stall
+			}
+			if elapsed >= limit {
+				halt(errors.New("device stopped delivering audio"))
+				return
+			}
+			if err := check(); err != nil {
+				halt(err)
+				return
+			}
 		}
 	}
 }

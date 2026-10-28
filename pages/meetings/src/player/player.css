@@ -653,6 +653,23 @@
 .up-say mark {
   background: var(--hl);
 }
+.up-person {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--cobalt);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.up-person.repaired {
+  text-decoration-style: dotted;
+  text-decoration-thickness: 2px;
+}
+.up-person:hover,
+.up-person:focus-visible {
+  color: var(--cobalt-deep);
+  background: var(--cobalt-wash);
+  border-radius: 2px;
+}
 
 /* ---- narrow --------------------------------------------------------------------- */
 @media (max-width: 760px) {

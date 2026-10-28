@@ -1,0 +1,23 @@
+{
+  "about": "Hibernation keeps routes, roles and a pending challenge: a socket challenged before an eviction authenticates after it, and frames pass both ways after another.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"evict": {}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": true}}},
+    {"evict": {}},
+    {"send": {"as": "p1", "binary": {"hex": "0a0b"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s1", "hex": "0a0b"}}},
+    {"evict": {}},
+    {"send": {"as": "mac", "binary": {"sid": "$s1", "hex": "0c0d"}}},
+    {"expect": {"as": "p1", "binary": {"hex": "0c0d"}}},
+    {"evict": {}},
+    {"send": {"as": "p1", "text": {"t": "x"}}},
+    {"expect": {"as": "p1", "close": 1003}}
+  ]
+}

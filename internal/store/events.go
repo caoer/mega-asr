@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,10 +29,14 @@ const atLayout = "2006-01-02T15:04:05.000Z07:00"
 //	backup_off    after_s, why: the take has no backup track, or lost it
 //	stop          kind tap/enter/cancel/auto/stream_end/write_error/shutdown, why,
 //	              via menu/ctl (absent: a key or the take's own end), dur_s
+//	capture_error why: final capture failure discovered while Stop drained
 //	send_on       Enter during transcription
 //	text          engine, raw_chars, chars, failed_chunks, latency_ms, stream_err,
 //	              sha256, audio main/backup
 //	hold          why cancelled/deliver_failed/asr_failed/interrupted/delivery_cut/empty
+//	names         n (spans judged), names (from, to, person, p: each span
+//	              written as a listed name), latency_ms, err: the dictation
+//	              names gate fired; .txt keeps the text before it
 //	deliver       n, via auto/hotkey/page/cli, caller, target, ok, err, chars,
 //	              submit none/ok/err, source delivered/raw/<engine>/retranscription <n>;
 //	              text only when it differs from .txt; at is when the text
@@ -86,6 +91,17 @@ type Event struct {
 	Source   string  `json:"source,omitempty"`
 	Text     string  `json:"text,omitempty"`
 	Raw      string  `json:"raw,omitempty"`
+
+	Names []NameEdit `json:"names,omitempty"`
+}
+
+// NameEdit is a span the names gate wrote as a listed person's name, with
+// the probability Jev gave it.
+type NameEdit struct {
+	From   string  `json:"from"`
+	To     string  `json:"to"`
+	Person string  `json:"person"`
+	P      float64 `json:"p"`
 }
 
 // Target is where a take was spoken for or delivered to: kind herdr or app,
@@ -404,6 +420,51 @@ func (s Store) Recent(n int, since time.Time) ([]Record, error) {
 		recs = recs[:n]
 	}
 	return recs, nil
+}
+
+// Latest returns the records of the last n takes by name, newest first: a
+// name is its take's start, so this reads n records, not the store. A record
+// without a parseable line is skipped.
+func (s Store) Latest(n int) ([]Record, error) {
+	paths, err := filepath.Glob(filepath.Join(s.Dir, "*"+eventsExt))
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		si, ni := nameOrder(paths[i])
+		sj, nj := nameOrder(paths[j])
+		if si != sj {
+			return si > sj
+		}
+		return ni > nj
+	})
+	var recs []Record
+	for _, p := range paths {
+		if len(recs) == n {
+			break
+		}
+		base := strings.TrimSuffix(p, eventsExt)
+		if evs, err := Read(base); err == nil && len(evs) > 0 {
+			recs = append(recs, Record{Base: base, Events: evs})
+		}
+	}
+	return recs, nil
+}
+
+// nameOrder splits a record's path into its name's stamp and its place among
+// the takes of that second (Next's -2, -3…; none is 1), so names sort by
+// when they were given.
+func nameOrder(path string) (string, int) {
+	name := strings.TrimSuffix(filepath.Base(path), eventsExt)
+	if len(name) < 15 {
+		return name, 1
+	}
+	if rest := name[15:]; strings.HasPrefix(rest, "-") {
+		if n, err := strconv.Atoi(rest[1:]); err == nil {
+			return name[:15], n
+		}
+	}
+	return name, 1
 }
 
 // NameTime reads the local time a take's name gives: YYYYmmdd-HHMMSS, with

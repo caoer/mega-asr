@@ -35,3 +35,22 @@ func TestCallNotRunningAtOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestCallCarriesDeadline(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ctl.sock")
+	deadlines := make(chan time.Time, 1)
+	l, err := Listen(path, func(r Request) Response { deadlines <- r.Deadline; return Reply("ok") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	deadline := time.Now().Add(time.Second)
+	if _, err := Call(path, Request{Cmd: "paste", Deadline: deadline}, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	got := <-deadlines
+	if !got.Equal(deadline) {
+		t.Fatalf("deadline %v, want %v", got, deadline)
+	}
+}

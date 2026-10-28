@@ -3,7 +3,6 @@
 package deliver
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
@@ -19,12 +19,9 @@ import (
 
 // The mac calls a delivery makes; a test replaces them.
 var (
-	activate    = mac.Activate
-	paste       = mac.Paste
-	copyText    = mac.CopyText
-	pressReturn = mac.PressReturn
-	focusedText = mac.FocusedText
-	appOf       = mac.AppOf
+	pasteInto = mac.PasteInto
+	copyText  = mac.CopyText
+	appOf     = mac.AppOf
 )
 
 // Target is a locked delivery target: a herdr pane, an app and the window
@@ -35,15 +32,9 @@ type Target struct {
 	App       mac.App
 	Clipboard bool // the text is copied and no key is pressed
 
-	sent    time.Time     // when the pane got its last key: the paste, or the Enter
-	entered bool          // Submit pressed Enter in the pane
-	value   chan appValue // an app's focused value, read once after the paste
-}
-
-// appValue is an app's focused element's text; ok is false when it has none.
-type appValue struct {
-	text string
-	ok   bool
+	sent    time.Time         // when the pane got its last key: the paste, or the Enter
+	entered bool              // Submit pressed Enter in the pane
+	receipt *mac.PasteReceipt // confirmation from the captured composer
 }
 
 // CopyOnly reports whether the target is the clipboard: a delivery copies
@@ -66,11 +57,16 @@ func (t *Target) Record() store.Target {
 }
 
 // Release frees the captured window reference; safe to call twice.
-func (t *Target) Release() { t.App.Release() }
+func (t *Target) Release() {
+	if t.receipt != nil {
+		t.receipt.Release()
+	}
+	t.App.Release()
+}
 
 func (t *Target) String() string {
 	if t.Clipboard {
-		return "剪贴板"
+		return l10n.T("剪贴板", "Clipboard")
 	}
 	if t.Pane != "" {
 		return "herdr pane " + t.Pane
@@ -161,6 +157,11 @@ func (d Deliverer) Resolve(to string) (session.Target, error) {
 func (d Deliverer) Deliver(st session.Target, text string) error {
 	t := st.(*Target)
 	var err error
+	if t.Clipboard || t.Pane != "" || t.App.PID == 0 {
+		if err = copyText(text); err != nil {
+			return clipboardError(err)
+		}
+	}
 	switch {
 	case t.Clipboard:
 	case t.Pane != "":
@@ -170,19 +171,9 @@ func (d Deliverer) Deliver(st session.Target, text string) error {
 	case t.App.PID == 0:
 		err = errors.New("no app was frontmost")
 	default:
-		if err = activate(t.App, d.FocusWait); err == nil {
-			paste(text)
-			ch, read, pid := make(chan appValue, 1), focusedText, t.App.PID
-			t.value = ch
-			go func() {
-				time.Sleep(fieldAfter)
-				v, ok := read(pid)
-				ch <- appValue{v, ok}
-			}()
-			return nil
-		}
+		t.receipt, err = pasteInto(t.App, text, d.FocusWait, fieldDeadline)
+		return clipboardError(err)
 	}
-	copyText(text)
 	return err
 }
 
@@ -203,11 +194,10 @@ func (d Deliverer) Submit(st session.Target) error {
 		t.sent, t.entered = time.Now(), true
 		return nil
 	}
-	if !t.App.Focused() {
-		return fmt.Errorf("%s lost focus before Enter", t.App.Name)
+	if t.receipt == nil {
+		return session.ErrUnconfirmedPaste
 	}
-	pressReturn()
-	return nil
+	return clipboardError(t.receipt.Submit())
 }
 
 // The controller reads a delivery's target back through Received.
@@ -215,8 +205,8 @@ var _ session.ReadBacker = Deliverer{}
 
 // Received reads back what the target holds after Deliver, and after Submit
 // when it ran: whole, short or unknown, and why; "" for the clipboard, which
-// has nothing to read. A pane is read through herdr; an app's focused
-// element was read while the settle before the Enter ran. It changes
+// has nothing to read. A pane is read through herdr; an app's captured
+// composer was verified before the Enter. It changes
 // nothing in the target and returns within a few seconds.
 func (d Deliverer) Received(st session.Target, text string) (verdict, why string) {
 	t := st.(*Target)
@@ -228,19 +218,25 @@ func (d Deliverer) Received(st session.Target, text string) (verdict, why string
 			return Unknown, "no key reached the pane"
 		}
 		return d.Herdr.received(t.Pane, text, t.sent, t.entered)
-	case t.value != nil:
-		return before(time.Now().Add(fieldDeadline), func(ctx context.Context) (string, string) {
-			var v appValue
-			select {
-			case v = <-t.value:
-			case <-ctx.Done():
-				return Unknown, "no answer by the deadline"
-			}
-			if !v.ok {
-				return Unknown, "the focused element has no text"
-			}
-			return field(text, v.text)
-		})
+	case t.receipt != nil:
+		value, ok := t.receipt.Value()
+		if !ok {
+			return Unknown, "original composer did not confirm the paste"
+		}
+		return field(text, value)
 	}
 	return Unknown, "not read"
 }
+
+func clipboardError(err error) error {
+	switch {
+	case errors.Is(err, mac.ErrClipboardPending):
+		return fmt.Errorf("%w: %v", session.ErrClipboardBusy, err)
+	case errors.Is(err, mac.ErrPasteUnconfirmed):
+		return fmt.Errorf("%w: %v", session.ErrUnconfirmedPaste, err)
+	}
+	return err
+}
+
+// CopyText refuses to replace a paste whose consumer has not confirmed it.
+func CopyText(text string) error { return clipboardError(mac.CopyText(text)) }

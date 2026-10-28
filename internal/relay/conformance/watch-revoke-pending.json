@@ -1,0 +1,98 @@
+{
+  "about": "An early watch reply cannot complete an unacknowledged request; revoking its key ends the HTTP request and the Mac peer.",
+  "layer": "room",
+  "setup": {
+    "mac": "mac",
+    "room": "main",
+    "key": "mac",
+    "devices": [
+      {
+        "role": "watch",
+        "key": "watch1"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "post": {
+        "as": "w1",
+        "room": "main",
+        "request": {
+          "key": "watch1",
+          "nonce": "n1",
+          "ct_len": 200
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "peer",
+          "sid": {
+            "$capture": "s1"
+          },
+          "role": "watch",
+          "key": "@watch1",
+          "up": true,
+          "oneshot": true
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "mac",
+        "binary": {
+          "sid": "$s1",
+          "hex": "00c0ffee"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "w1",
+        "nothing": true
+      }
+    },
+    {
+      "send": {
+        "as": "mac",
+        "text": {
+          "t": "devices",
+          "add": [],
+          "remove": [
+            "@watch1"
+          ]
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "w1",
+        "status": 503
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "peer",
+          "sid": "$s1",
+          "role": "watch",
+          "key": "@watch1",
+          "up": false,
+          "oneshot": true
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "devices",
+          "keys": []
+        }
+      }
+    }
+  ]
+}

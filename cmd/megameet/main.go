@@ -92,6 +92,11 @@ const usage = `usage: megameet [--config FILE] [--set KEY=VALUE]... <command> [a
                             lacks either (only those keys; a rerun changes
                             nothing); prints each record and the cost;
                             --redo rewrites the named records' two keys
+  names --dir DIR [--index FILE] [--focus SLUG,...]
+                            the drain's names pass ([meeting.names]) over a
+                            pulled directory, against the page's people.index
+                            (or FILE); rewrites DIR's segments.json and
+                            names.json and publishes nothing: run it on a copy
   labels <command>          the closed and open label lists: list, records,
                             log; rename, merge, split, set; ask, question,
                             apply for changes that wait for an approval
@@ -144,6 +149,8 @@ func main() {
 		err = checkCmd(o, args)
 	case "delete":
 		err = deleteCmd(o, args)
+	case "names":
+		err = namesCmd(o, args)
 	case "titles":
 		err = titlesCmd(o, args)
 	case "labels":

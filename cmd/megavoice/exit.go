@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/ctl"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/session"
 )
@@ -42,19 +43,38 @@ func endAndExit(c ender, end, take string, max time.Duration, exit func(left []s
 	deadline := time.Now().Add(max)
 	time.AfterFunc(max+exitGrace, func() { fire(nil, false) })
 	go func() {
-		if end != "cancel" || !c.CancelFrom("menu", take) {
-			c.StopFrom("menu", "")
+		if end != "cancel" || !c.CancelFrom(session.ViaExit, take) {
+			c.StopFrom(session.ViaExit, "") // a take a phone streams is stopped, never cancelled
 		}
 		fire(c.Drain(time.Until(deadline)), true)
 	}()
 }
 
-// takeRequest is the control socket's stop or cancel. stop is the menu's
-// 停止并粘贴: it stops the recording take to paste and never starts one.
+// stopper is what the control socket's stop, send and cancel need.
+type stopper interface {
+	StopFrom(via, id string) bool
+	SendFrom(via, id string) bool
+	CancelFrom(via, id string) bool
+	Published() (phase session.State, id string, elapsed time.Duration, owner string)
+}
+
+// errStreamTake refuses a Mac-side end or toggle of a take an iPhone
+// keyboard streams.
+var errStreamTake = l10n.Err("这段是 iPhone 键盘录音，请从键盘结束", "This take is an iPhone keyboard recording; end it from the keyboard")
+
+// streamRecording reports whether the recording take is one a phone streams.
+func streamRecording(c stopper) bool {
+	_, id, _, owner := c.Published()
+	return id != "" && owner == session.OwnerStream
+}
+
+// takeRequest is the control socket's stop, send or cancel. stop is the
+// menu's 停止并粘贴: it stops the recording take to paste and never starts
+// one; send stops it to paste and press Enter.
 // Args {"via": "menu"} name the menu on the stop line (without them it is
 // ctl), and {"take": id} the take the menu showed: another take is left
 // recording. It fails when it ended nothing.
-func takeRequest(c ender, cmd string, raw json.RawMessage) error {
+func takeRequest(c stopper, cmd string, raw json.RawMessage) error {
 	var a struct {
 		Via  string `json:"via"`
 		Take string `json:"take"`
@@ -72,18 +92,27 @@ func takeRequest(c ender, cmd string, raw json.RawMessage) error {
 		return fmt.Errorf("via %q: menu or ctl", a.Via)
 	}
 	var ok bool
-	if cmd == "stop" {
+	switch cmd {
+	case "stop":
 		ok = c.StopFrom(a.Via, a.Take)
-	} else {
+	case "send":
+		ok = c.SendFrom(a.Via, a.Take)
+	default:
 		ok = c.CancelFrom(a.Via, a.Take)
 	}
-	switch {
-	case !ok && a.Take != "":
-		return fmt.Errorf("take %s is not recording", a.Take)
-	case !ok:
-		return errors.New("no take is recording")
+	if ok {
+		return nil
 	}
-	return nil
+	_, id, _, owner := c.Published()
+	switch {
+	case a.Take != "" && a.Take != id: // a row drawn for a take that has ended
+		return fmt.Errorf("take %s is not recording", a.Take)
+	case id != "" && owner == session.OwnerStream:
+		return errStreamTake
+	case a.Take != "":
+		return fmt.Errorf("take %s is not recording", a.Take)
+	}
+	return errors.New("no take is recording")
 }
 
 // exitEnd is restart's or quit's {"end": "paste"|"cancel", "take": id},
@@ -120,14 +149,21 @@ func menuExit(c ender, cmd, end, take string, exit func(code int)) {
 		case len(left) > 0:
 			log.Printf("serve: %s: %v passed with %s in flight; the audio on disk is what the next start finds", cmd, drainMax, strings.Join(left, ", "))
 		}
-		log.Printf("serve: %s requested; exiting %d", cmd, code)
-		exit(code)
+		finish := func() { exit(code) }
+		if !answered || len(left) > 0 {
+			if c, ok := c.(interrupter); ok {
+				interruptThenExit(c, exitGrace, finish)
+				return
+			}
+		}
+		finish()
 	})
 }
 
 // controller is what the control socket's take commands need.
 type controller interface {
 	ender
+	stopper
 	ToggleFrom(trigger string)
 	Busy() bool
 	State() session.State
@@ -136,14 +172,16 @@ type controller interface {
 	Reopen()
 }
 
-// takeCommands are the control socket's toggle, stop, cancel, restart and
-// quit, and the refusal of a start while an exit waits.
+// takeCommands are the control socket's toggle, stop, send, cancel, restart
+// and quit, and the refusal of a start while an exit waits.
 type takeCommands struct {
 	ctrl    controller
 	flash   func(msg string)
 	exit    func(code int)
 	lastKey func() time.Time       // the last key event the tap saw; nil: no tap
 	quiet   time.Duration          // restart --when-idle's quiet; 0 is quietFor
+	now     func() time.Time       // restart --when-idle's clock; nil is time.Now
+	sleep   func(time.Duration)    // restart --when-idle's wait between polls; nil is time.Sleep
 	exiting atomic.Pointer[string] // restart or quit, once one is under way
 	pending atomic.Bool            // restart --when-idle waits for quiet
 }
@@ -155,9 +193,9 @@ const quietFor = 3 * time.Second
 // exitMsg is the flash of a start refused while cmd exits.
 func exitMsg(cmd string) string {
 	if cmd == "quit" {
-		return "正在退出"
+		return l10n.T("正在退出", "Quitting")
 	}
-	return "正在重启"
+	return l10n.T("正在重启", "Restarting")
 }
 
 // handle answers req when it is one of the take commands; ok false leaves it
@@ -166,12 +204,15 @@ func (k *takeCommands) handle(req ctl.Request) (resp ctl.Response, ok bool) {
 	state := func() ctl.Response { return ctl.Reply(map[string]string{"state": k.ctrl.State().String()}) }
 	switch req.Cmd {
 	case "toggle":
-		if k.refuseStart() {
-			return ctl.Fail(fmt.Errorf("megavoice is exiting (%s)", *k.exiting.Load())), true
+		if cmd := k.refusedStart(); cmd != "" {
+			return ctl.Fail(fmt.Errorf("megavoice is exiting (%s)", cmd)), true
+		}
+		if streamRecording(k.ctrl) {
+			return ctl.Fail(errStreamTake), true
 		}
 		k.ctrl.ToggleFrom("ctl")
 		return state(), true
-	case "stop", "cancel":
+	case "stop", "send", "cancel":
 		if err := takeRequest(k.ctrl, req.Cmd, req.Args); err != nil {
 			return ctl.Fail(err), true
 		}
@@ -239,10 +280,17 @@ func whenIdle(raw json.RawMessage) bool {
 // every start and exits 75. It never gives up; while another exit is under
 // way it waits on.
 func (k *takeCommands) restartWhenIdle(quiet, poll time.Duration) {
-	since := time.Now()
+	clock, sleep := k.now, k.sleep
+	if clock == nil {
+		clock = time.Now
+	}
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	since := clock()
 	for {
-		time.Sleep(poll)
-		now := time.Now()
+		sleep(poll)
+		now := clock()
 		if k.exiting.Load() != nil || k.ctrl.Busy() {
 			since = now
 			continue
@@ -273,16 +321,18 @@ func (k *takeCommands) restartWhenIdle(quiet, poll time.Duration) {
 // refuseStart reports whether a tap or toggle that would start a take is
 // refused because an exit is under way, and flashes why; one that stops a
 // recording take is never refused.
-func (k *takeCommands) refuseStart() bool {
+func (k *takeCommands) refuseStart() bool { return k.refusedStart() != "" }
+
+func (k *takeCommands) refusedStart() string {
 	cmd := k.exiting.Load()
 	if cmd == nil {
-		return false
+		return ""
 	}
 	if _, _, rec := k.ctrl.Recording(); rec {
-		return false
+		return ""
 	}
 	k.flash(exitMsg(*cmd))
-	return true
+	return *cmd
 }
 
 // signalWait is how long a termination signal gives Interrupt before the
@@ -316,13 +366,14 @@ type tapTaker interface {
 	Hotkey()
 	EnterWhy() (used bool, why string)
 	ToggleAt(trigger string, at time.Time)
+	ToggleKeypadAt(at time.Time, capture func() session.Target, recording string)
 }
 
 // takeTap acts on one Result of the key tap: Esc cancels; the chord (the
 // tap key held, Esc pressed) is the resend hotkey; a tap is refused while a
 // menu exit waits, else it starts or stops a take; a Return no take uses
 // goes back to the app through pressReturn.
-func takeTap(r mac.Result, at time.Time, c tapTaker, k *takeCommands, pressReturn func()) {
+func takeTap(r mac.Result, at time.Time, trigger string, capture func() session.Target, recording string, c tapTaker, k *takeCommands, pressReturn func()) {
 	switch {
 	case r.Cancel:
 		c.Cancel()
@@ -335,6 +386,19 @@ func takeTap(r mac.Result, at time.Time, c tapTaker, k *takeCommands, pressRetur
 			pressReturn()
 		}
 	default:
-		c.ToggleAt("tap", at)
+		if capture != nil {
+			c.ToggleKeypadAt(at, capture, recording)
+		} else {
+			c.ToggleAt(trigger, at)
+		}
 	}
+}
+
+// interruptThenExit marks what it can while an independent timer guarantees
+// exit even when a WAV close or journal sync blocks.
+func interruptThenExit(c interrupter, wait time.Duration, exit func()) {
+	var once sync.Once
+	fire := func() { once.Do(exit) }
+	timer := time.AfterFunc(wait, fire)
+	go func() { c.Interrupt(); timer.Stop(); fire() }()
 }

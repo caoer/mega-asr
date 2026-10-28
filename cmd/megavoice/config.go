@@ -25,6 +25,11 @@ func macCheck(c app.Config) []string {
 	if _, err := mac.LookupTapKey(c.Tap.Key); err != nil {
 		errs = append(errs, "tap.key: "+err.Error())
 	}
+	return errs
+}
+
+func macSetCheck(c app.Config) []string {
+	errs := macCheck(c)
 	if c.Capture.Source == "remote" && c.Capture.Remote != "" {
 		if _, err := pairedRemote(c.Capture.Remote); err != nil {
 			errs = append(errs, "capture.remote: "+err.Error())
@@ -46,9 +51,8 @@ func pairedRemote(name string) (app.Remote, error) {
 	return r, nil
 }
 
-// set writes one key of the config file, refused when serve could not start
-// on the result.
-func set(path, key, val string) error { return app.Set(path, key, val, macCheck) }
+// set validates the tap key and selected remote before writing a config change.
+func set(path, key, val string) error { return app.Set(path, key, val, macSetCheck) }
 
 func stateDir() string {
 	if d := os.Getenv("XDG_STATE_HOME"); d != "" {

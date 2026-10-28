@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -339,7 +340,8 @@ func TestPartsFromConfig(t *testing.T) {
 	c.ASR.FunASR.Mode, c.ASR.FunASR.GPULayers = "exec", 99
 	// the CLI runs with the resident process's engine flags: an LLM left on
 	// the CPU gives other text than dictation's Metal
-	if e, ok := c.Transcriber().(asr.FunASR); !ok || e.Root != "/r" || e.LLM != "/ft.gguf" || e.EncGPU || !e.VADGPU ||
+	rc, _ := c.Transcriber().(asr.Rechecking)
+	if e, ok := rc.Transcriber.(asr.FunASR); !ok || rc.Rechecks == nil || e.Root != "/r" || e.LLM != "/ft.gguf" || e.EncGPU || !e.VADGPU ||
 		e.GPU != 99 || e.Threads != 3 || e.LLMThreads != 6 {
 		t.Errorf("exec mode gave %#v", c.Transcriber())
 	}
@@ -546,5 +548,86 @@ func TestSeedKeepsUserFiles(t *testing.T) {
 	}
 	if got := c.Apply("Get hub 上有个mark down"); got != "GitHub 上有个Markdown" {
 		t.Errorf("seeded corrections: %q", got)
+	}
+}
+
+// [remote.relay]: off by default; on, it needs [remote] on, an https://host
+// url and two key files of 64 hex characters readable by this user alone.
+func TestRelayConfig(t *testing.T) {
+	keys := t.TempDir()
+	key := func(name, body string, mode os.FileMode) string {
+		p := filepath.Join(keys, name)
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	hex64 := strings.Repeat("ab", 32) + "\n"
+	prov := key("prov.key", hex64, 0o600)
+	tag := key("tag.key", strings.Repeat("cd", 32), 0o600)
+	open := key("open.key", hex64, 0o644)
+	short := key("short.key", "abcd\n", 0o600)
+	upper := key("upper.key", strings.Repeat("AB", 32), 0o600)
+	body := func(enabled bool, url, p, g string) string {
+		return fmt.Sprintf("[remote]\nenabled = %v\n[remote.relay]\nenabled = true\nurl = %q\nprovision_key = %q\nroom_tag_key = %q\n", enabled, url, p, g)
+	}
+	for _, tc := range []struct{ body, want string }{
+		{body(false, "https://voice.0xtau.com", prov, tag), "remote.relay.enabled: true while remote.enabled is false"},
+		{body(true, "", prov, tag), "remote.relay.url"},
+		{body(true, "http://voice.0xtau.com", prov, tag), "remote.relay.url"},
+		{body(true, "wss://voice.0xtau.com", prov, tag), "remote.relay.url"},
+		{body(true, "https://voice.0xtau.com/v1/ws", prov, tag), "remote.relay.url"},
+		{body(true, "https://voice.0xtau.com", "", tag), "remote.relay.provision_key: empty"},
+		{body(true, "https://voice.0xtau.com", filepath.Join(keys, "none"), tag), "remote.relay.provision_key: stat"},
+		{body(true, "https://voice.0xtau.com", open, tag), "remote.relay.provision_key: " + open + " is not a file of mode 0600"},
+		{body(true, "https://voice.0xtau.com", prov, short), "remote.relay.room_tag_key: " + short + " does not hold 64 lowercase hex"},
+		{body(true, "https://voice.0xtau.com", prov, upper), "remote.relay.room_tag_key"},
+		{body(true, "https://voice.0xtau.com", prov, keys), "remote.relay.room_tag_key"},
+	} {
+		dir := isolate(t)
+		writeConfig(t, dir, tc.body)
+		if _, err := Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: got %v, want an error with %q", tc.body, err, tc.want)
+		}
+	}
+	dir := isolate(t)
+	writeConfig(t, dir, body(true, "https://voice.0xtau.com", prov, tag))
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, g, err := l.Remote.Relay.Keys()
+	if err != nil || len(p) != 32 || len(g) != 32 || p[0] != 0xab || g[0] != 0xcd {
+		t.Fatalf("keys %x %x %v", p, g, err)
+	}
+}
+
+// [keypad] defaults to sender user with no via host and a state file under
+// the state home; a sender other than user or bot is refused.
+func TestKeypadConfig(t *testing.T) {
+	dir := isolate(t)
+	t.Setenv("HOME", t.TempDir())
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := l.Keypad
+	if k.Sender != "user" || k.Via != "" || len(k.Send) != 0 ||
+		k.State != filepath.Join(os.Getenv("HOME"), ".local", "state", "megavoice", "keypad.json") {
+		t.Errorf("defaults %+v", k)
+	}
+	writeConfig(t, dir, "[keypad]\nsender = \"bot\"\nstate = \"~/k.json\"\nsend = [\"sh\", \"-c\", \"x\"]\n")
+	if l, err = Load(LoadOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if l.Keypad.Sender != "bot" || l.Keypad.State != filepath.Join(os.Getenv("HOME"), "k.json") || len(l.Keypad.Send) != 3 {
+		t.Errorf("from the file %+v", l.Keypad)
+	}
+	writeConfig(t, dir, "[keypad]\nsender = \"robot\"\n")
+	if _, err = Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), "keypad.sender") {
+		t.Errorf("bad keypad table: %v", err)
 	}
 }

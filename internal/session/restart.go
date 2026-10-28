@@ -2,7 +2,6 @@ package session
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -109,9 +109,9 @@ const RecoverWithin = 7 * 24 * time.Hour
 func interruptedMsg(n int, d time.Duration) string {
 	what := Clock(d)
 	if n > 1 {
-		what = fmt.Sprintf("%d 条", n)
+		what = l10n.F("%d 条", "%d takes", n)
 	}
-	return "上次被重启打断 " + what + " · 未送达 · 见录音历史"
+	return l10n.F("上次被重启打断 %s · 未送达 · 见录音历史", "%s cut off by the last restart · not delivered · see Recordings", what)
 }
 
 // found is a take Recover acts on.

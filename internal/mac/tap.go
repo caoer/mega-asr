@@ -91,6 +91,17 @@ func appActive() bool {
 	return sendInt(send(class("NSApplication"), "sharedApplication"), "isActive") != 0
 }
 
+// WindowHasKeys reports the same modal guard used by the event tap, from
+// any goroutine. AppKit's active-app query stays on the main thread.
+func WindowHasKeys() bool {
+	if windowUp.Load() == 0 {
+		return false
+	}
+	var has bool
+	DoSync(func() { has = windowUp.Load() > 0 && appActive() })
+	return has
+}
+
 // ErrTapRefused means CGEventTapCreate returned NULL: Accessibility is off or
 // Input Monitoring is explicitly denied.
 var ErrTapRefused = errors.New("event tap refused (Accessibility off or Input Monitoring denied)")

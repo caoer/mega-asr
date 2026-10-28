@@ -201,6 +201,33 @@ func TestDoubaoWords(t *testing.T) {
 	<-p.done
 }
 
+// Live text is the newest reply's sentences joined, without the space the
+// server's text puts between two of them; "" before the first reply.
+func TestDoubaoLive(t *testing.T) {
+	body := `{"result":{"text":"所以 这个你记一下","utterances":[{"definite":true,"text":"所以"},{"definite":false,"text":"这个你记一下"}]}}`
+	f := loadFrames(t)
+	f.Server = []string{f.Server[0], hex.EncodeToString(frame(msgFullResponse, flagSeq|flagLast, serialJSON, -2, []byte(body)))}
+	p, d := newPlanWith(t, f, false)
+	st := d.Open()
+	if got := st.(Live).Live(); got != "" {
+		t.Errorf("before any reply: %q", got)
+	}
+	st.Write(make([]int16, 1600))
+	text, err := st.Finish(context.Background())
+	<-p.done
+	if err != nil || text != "所以 这个你记一下" {
+		t.Fatalf("Finish: %q, %v", text, err)
+	}
+	if got := st.(Live).Live(); got != "所以这个你记一下" {
+		t.Errorf("live %q", got)
+	}
+	var none result
+	none.Result.Text = "no sentences"
+	if got := none.live(); got != "no sentences" {
+		t.Errorf("a reply without sentences: %q", got)
+	}
+}
+
 // planServer stands in for the plan endpoint. It keeps the upgrade
 // headers, checks that the first frame is a full request with sequence 1,
 // logs sequence and unpacked size of every audio packet up to the flagged
@@ -350,8 +377,87 @@ func TestDoubaoStreamFailures(t *testing.T) {
 		d := &Doubao{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Key: func() (string, error) { return "k", nil }, Timeout: 300 * time.Millisecond}
 		st := d.Open()
 		st.Write(make([]int16, 8000))
-		if _, err := st.Finish(context.Background()); err == nil || !strings.Contains(err.Error(), "no final text") {
+		if _, err := st.Finish(context.Background()); err == nil || (!strings.Contains(err.Error(), "no final text") && !strings.Contains(err.Error(), "deadline exceeded")) {
 			t.Errorf("Finish: %v", err)
 		}
 	})
+}
+
+func TestDoubaoSilentStreamFailsBeforeFinish(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			if _, _, err := c.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	d := &Doubao{URL: "ws" + strings.TrimPrefix(srv.URL, "http"), Key: func() (string, error) { return "test", nil }, Timeout: 30 * time.Millisecond}
+	st := d.Open().(*doubaoStream)
+	st.Write(make([]int16, 3200))
+	select {
+	case <-st.final:
+	case <-time.After(time.Second):
+		t.Fatal("silent stream did not fail while recording")
+	}
+	start := time.Now()
+	if _, err := st.Finish(context.Background()); err == nil || time.Since(start) > 100*time.Millisecond {
+		t.Fatalf("Finish: %v in %v", err, time.Since(start))
+	}
+}
+
+// DoubaoHotwords keeps the terms whose text, one character between each
+// pair, is at most 100 characters when the streaming pass alone decodes, and
+// all of them with two-pass. The edges are the plan endpoint's, measured:
+// 33 two-character names (98) all steer it, a 34th (101) does not; a space
+// counts.
+func TestDoubaoHotwords(t *testing.T) {
+	names := func(n, size int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, strings.Repeat(string(rune('一'+i)), size))
+		}
+		return out
+	}
+	en := []string{"toolbox", "Kubernetes", "TypeScript", "Postgres", "kubectl", "GitHub", "Claude Code", "worktree", "effort", "Opus", "PR", "CI", "Mac app"}
+	for _, c := range []struct {
+		name    string
+		terms   []string
+		twoPass bool
+		want    int
+	}{
+		{"cjk fits", names(33, 2), false, 33},
+		{"cjk one over", names(34, 2), false, 33},
+		{"four-char", names(21, 4), false, 20},
+		{"latin with spaces, exactly 100", en, false, 13},
+		{"one more character", append(en[:12:12], "Mac apps"), false, 12},
+		{"two-pass keeps the tail", names(34, 2), true, 34},
+		{"two-pass cap", names(DoubaoMaxHotwords+3, 1), true, DoubaoMaxHotwords},
+		{"none", nil, false, 0},
+	} {
+		got := DoubaoHotwords(c.terms, c.twoPass)
+		if len(got) != c.want || (c.want > 0 && got[0] != c.terms[0]) {
+			t.Errorf("%s: %d terms, want the first %d", c.name, len(got), c.want)
+		}
+	}
+	if n := len(strings.Join(en, ",")); n != 100 {
+		t.Fatalf("the latin list is %d characters, want 100", n)
+	}
+	d := &Doubao{Hotwords: func() []string { return names(40, 2) }}
+	var req struct {
+		Request struct {
+			Corpus struct {
+				Context string `json:"context"`
+			} `json:"corpus"`
+		} `json:"request"`
+	}
+	json.Unmarshal(d.request(), &req)
+	if got := strings.Count(req.Request.Corpus.Context, `"word"`); got != 33 {
+		t.Errorf("one-pass request sends %d hotwords, want 33", got)
+	}
 }

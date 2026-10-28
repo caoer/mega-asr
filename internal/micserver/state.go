@@ -46,9 +46,10 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // ErrNameTaken is the refusal of a client name that is already paired.
 var ErrNameTaken = errors.New("a client by that name is already paired")
 
-// loadCert reads the key and certificate from dir, creating a P-256 key
-// (0600) and a self-signed certificate for name when there is no key.
-func loadCert(dir, name string) (tls.Certificate, error) {
+// LoadCert reads key.pem and cert.pem from dir, creating a P-256 key (0600)
+// and a self-signed certificate with common name cn when there is no key.
+// Its peers pin the certificate; nothing checks it against a CA or a clock.
+func LoadCert(dir, cn string) (tls.Certificate, error) {
 	keyPath, certPath := filepath.Join(dir, "key.pem"), filepath.Join(dir, "cert.pem")
 	keyPEM, err := os.ReadFile(keyPath)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -70,7 +71,7 @@ func loadCert(dir, name string) (tls.Certificate, error) {
 	}
 	certPEM, err := os.ReadFile(certPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		if certPEM, err = selfSign(keyPEM, name); err != nil {
+		if certPEM, err = selfSign(keyPEM, cn); err != nil {
 			return tls.Certificate{}, err
 		}
 		if err := writeFile(certPath, certPEM, 0o644); err != nil {
@@ -86,7 +87,7 @@ func loadCert(dir, name string) (tls.Certificate, error) {
 	return c, nil
 }
 
-func selfSign(keyPEM []byte, name string) ([]byte, error) {
+func selfSign(keyPEM []byte, cn string) ([]byte, error) {
 	b, _ := pem.Decode(keyPEM)
 	if b == nil {
 		return nil, errors.New("key.pem: no PEM block")
@@ -106,7 +107,7 @@ func selfSign(keyPEM []byte, name string) ([]byte, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "megavoice mic " + name},
+		Subject:      pkix.Name{CommonName: cn},
 		NotBefore:    now.Add(-time.Hour),
 		NotAfter:     now.AddDate(100, 0, 0), // pinned, never checked against a CA or a clock
 		KeyUsage:     x509.KeyUsageDigitalSignature,

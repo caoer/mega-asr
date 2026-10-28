@@ -17,9 +17,10 @@ import (
 
 // Request names a command and its arguments.
 type Request struct {
-	Cmd  string `json:"cmd"`
-	Text string `json:"text,omitempty"`
-	PID  int32  `json:"pid,omitempty"`
+	Deadline time.Time `json:"deadline,omitempty"`
+	Cmd      string    `json:"cmd"`
+	Text     string    `json:"text,omitempty"`
+	PID      int32     `json:"pid,omitempty"`
 	// Args carries a command's structured arguments, as the command defines them.
 	Args json.RawMessage `json:"args,omitempty"`
 }
@@ -100,7 +101,12 @@ func Call(path string, req Request, timeout time.Duration) (Response, error) {
 		return Response{}, fmt.Errorf("%w (%s)", ErrNotRunning, path)
 	}
 	defer c.Close()
-	_ = c.SetDeadline(time.Now().Add(timeout))
+	deadline := time.Now().Add(timeout)
+	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
+		deadline = req.Deadline
+	}
+	req.Deadline = deadline
+	_ = c.SetDeadline(deadline)
 	b, _ := json.Marshal(req)
 	if _, err := c.Write(append(b, '\n')); err != nil {
 		return Response{}, err

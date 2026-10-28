@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +124,62 @@ Last: 20200611-160500-host-k2 — Jun 11 16:05, 6:20
 				t.Errorf("rows:\n%s\nwant:\n%s", got, c.want)
 			}
 		})
+	}
+}
+
+// TestStagingMenu: the build friends install shows dictation alone — no
+// meeting rows (it ships no MegaMeet), no compare, hotwords, corrections or
+// checks — while a dev build keeps every row.
+func TestStagingMenu(t *testing.T) {
+	settled := voiceSettings{TapKey: "right_option", WholeMax: time.Minute, Engine: "funasr"}
+	v := voiceState{Running: settled, File: settled, Hotwords: "/c/hotwords.txt", Corrections: "/c/corrections.tsv",
+		Takes: "http://127.0.0.1:7865/takes/", Logs: []string{"/L/megavoice.log"}}
+	devOnly := []string{"MegaMeet is not running", "No meeting recorded on this Mac yet", "Compare Mode", "Compare Engines",
+		"Edit Hotwords…", "Edit Corrections…", "Edits apply at the next take", "Checks", "MegaMeet Status"}
+	dev := titles(meetState{Down: "no answer on /s/ctl.sock", Voice: v}.rows())
+	for _, s := range devOnly {
+		if !strings.Contains(dev, s) {
+			t.Errorf("dev menu lacks %q:\n%s", s, dev)
+		}
+	}
+	if strings.Contains(dev, "检查更新") {
+		t.Errorf("dev menu offers 检查更新:\n%s", dev)
+	}
+	v.Staging = true
+	staging := titles(meetState{Down: "no answer on /s/ctl.sock", Voice: v}.rows())
+	for _, s := range append(devOnly, "Meeting", "megameet") {
+		if strings.Contains(staging, s) {
+			t.Errorf("staging menu shows %q:\n%s", s, staging)
+		}
+	}
+	for _, s := range []string{"Dictation", "打开录音历史", "Key: Right Option", "Engine: Fun-ASR (local)", "Restart " + app.Name() + " *", "检查更新… *", "Quit " + app.Name() + " *"} {
+		if !strings.Contains(staging, s) {
+			t.Errorf("staging menu lacks %q:\n%s", s, staging)
+		}
+	}
+}
+
+// TestMenuConfig: the menu warns about the config file only when one is
+// there and does not load, or a named one is missing; an absent default file
+// means the defaults, with no warning.
+func TestMenuConfig(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "megavoice")
+	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(dir))
+	t.Setenv("MEGAVOICE_CONFIG", "")
+	l, why := menuConfig("")
+	if why != "" || l.Path != "" || l.Tap.Key != app.Default().Tap.Key {
+		t.Fatalf("absent default file: warning %q, path %q, tap.key %q; want none, none, the default", why, l.Path, l.Tap.Key)
+	}
+	if _, why := menuConfig(filepath.Join(dir, "named.toml")); !strings.Contains(why, "no such file") {
+		t.Errorf("a named file that is missing: warning %q, want no such file", why)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[tap]\nkey = \"caps\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, why := menuConfig(""); !strings.Contains(why, "tap.key") {
+		t.Errorf("a file that does not load: warning %q, want tap.key", why)
 	}
 }

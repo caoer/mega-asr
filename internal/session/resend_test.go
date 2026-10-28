@@ -248,7 +248,7 @@ func TestResendReportsARecordNotWritten(t *testing.T) {
 	if !errors.Is(err, ErrNotRecorded) || re.Text != "the take again" {
 		t.Fatalf("retranscribe: %+v, %v; want the line with ErrNotRecorded", re, err)
 	}
-	if !strings.Contains(r.ui.String(), "alert:"+MsgRecordFailed) {
+	if !strings.Contains(r.ui.String(), "alert:"+MsgRecordFailed()) {
 		t.Fatalf("ui %s", r.ui)
 	}
 }
@@ -268,7 +268,7 @@ func TestFailedResendKeepsADeliveredTake(t *testing.T) {
 	if got := state(base); got != "pasted/" {
 		t.Fatalf("state %s", got)
 	}
-	if !strings.HasSuffix(r.ui.String(), "alert:"+MsgResendFailed) {
+	if !strings.HasSuffix(r.ui.String(), "alert:"+MsgResendFailed()) {
 		t.Fatalf("ui %s", r.ui)
 	}
 }
@@ -519,7 +519,7 @@ func TestResendSend(t *testing.T) {
 	if err != nil || !de.OK || de.Submit != "err" || de.Err != "lost focus" {
 		t.Fatalf("%+v, %v", de, err)
 	}
-	if !strings.HasSuffix(r.ui.String(), "alert:"+MsgNotSent+"lost focus") {
+	if !strings.HasSuffix(r.ui.String(), "alert:"+MsgNotSent()+"lost focus") {
 		t.Fatalf("ui %s", r.ui)
 	}
 }

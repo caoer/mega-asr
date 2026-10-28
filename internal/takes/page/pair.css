@@ -1,0 +1,36 @@
+/* The iPhone pairing page: styles.css gives the tokens and fonts. */
+.pair {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: 2rem 1.25rem 4rem;
+  color: var(--ink);
+}
+.pair h1 { font-size: 1.6rem; margin: 0 0 0.5rem; }
+.pair h2 { font-size: 1.1rem; margin: 2rem 0 0.5rem; }
+.pair-lead, .pair-note { color: var(--ink-2); }
+.pair-warn { color: #9a4a00; }
+.pair-mono { font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: 0.9rem; color: var(--ash); }
+.pair-steps { padding-left: 1.25rem; color: var(--ink-2); }
+.pair button {
+  font: inherit;
+  padding: 0.55rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--rule-strong);
+  background: var(--slip);
+  color: var(--ink);
+  cursor: pointer;
+}
+.pair button:hover { background: var(--sunk); }
+#pair-code { margin-top: 1rem; }
+#pair-qr { display: block; background: #fff; image-rendering: pixelated; width: 18rem; height: 18rem; }
+#pair-url { width: 100%; font-family: "Spline Sans Mono", ui-monospace, monospace; font-size: 0.8rem; }
+.pair-phones { list-style: none; padding: 0; }
+.pair-phones li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+.pair-phones .meta { color: var(--ash); font-size: 0.85rem; }

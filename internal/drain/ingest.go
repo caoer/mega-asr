@@ -145,6 +145,13 @@ func BuildRecord(dir string, rec map[string]any) (Record, error) {
 			Segments []Turn `json:"segments"`
 		}
 		err = readJSON(ft, &t)
+		texts := make([]string, len(t.Segments))
+		for i, s := range t.Segments {
+			texts[i] = s.Text
+		}
+		for i, s := range ApplyNames(texts, feishuNames(dir)) {
+			t.Segments[i].Text = s // the names pass's corrections; Feishu's file stays as it came
+		}
 		r.Turns = t.Segments
 		r.Engine = "Feishu Minutes"
 	} else {
@@ -249,6 +256,20 @@ func primaryCommit(stdout string, m runMeeting, fallback string) (wiki, sha stri
 	return wiki, "", false
 }
 
+// failedReason is the reason a failed run gives on its last stdout line,
+// `{"state": "failed", "reason": "<kind>", ...}`; "" when it gives none.
+func failedReason(stdout string) string {
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	var last struct {
+		State  string `json:"state"`
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal([]byte(lines[len(lines)-1]), &last) != nil || last.State != "failed" {
+		return ""
+	}
+	return last.Reason
+}
+
 // Ingest files the pulled meeting in the wiki. A run folder without a
 // wiki.json is resumed (the ingest picks up after its last finished pass);
 // otherwise a new one starts.
@@ -303,7 +324,11 @@ func (in *Ingester) Ingest(ctx context.Context, id, dir string, rec map[string]a
 	cmd.Stderr = io.MultiWriter(logf, &tail)
 	in.logf("ingest %s: %s (run folder %s)", id, strings.Join(cmd.Args, " "), out)
 	if err := cmd.Run(); err != nil {
-		return Wiki{}, fmt.Errorf("ingest: %v: %s", err, tail.String())
+		err = fmt.Errorf("ingest: %v: %s", err, tail.String())
+		if reason := failedReason(stdout.String()); reason != "" {
+			return Wiki{}, &IngestError{Reason: reason, Err: err}
+		}
+		return Wiki{}, err
 	}
 	var meeting runMeeting
 	if err := readJSON(filepath.Join(out, "meeting.json"), &meeting); err != nil {

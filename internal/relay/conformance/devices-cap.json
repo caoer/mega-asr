@@ -1,0 +1,1204 @@
+{
+  "about": "Sixty-five device adds in one frame change nothing and close the Mac 1003. Sixty-four stay registered, and one more add closes 1003 without dropping them.",
+  "layer": "room",
+  "setup": {
+    "mac": "mac",
+    "room": "main",
+    "key": "mac",
+    "devices": []
+  },
+  "steps": [
+    {
+      "send": {
+        "as": "mac",
+        "text": {
+          "t": "devices",
+          "add": [
+            {
+              "role": "phone",
+              "key": "ABEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ChEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ExEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "QBEREREREREREREREREREREREREREREREREREREREVo"
+            }
+          ],
+          "remove": []
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "close": 1003
+      }
+    },
+    {
+      "connect": {
+        "as": "m2",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "m2",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m2",
+        "auth": {
+          "role": "mac",
+          "key": "mac"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m2",
+        "frame": {
+          "t": "ok",
+          "peers": []
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m2",
+        "text": {
+          "t": "devices",
+          "add": [],
+          "remove": []
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m2",
+        "frame": {
+          "t": "devices",
+          "keys": []
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m2",
+        "text": {
+          "t": "devices",
+          "add": [
+            {
+              "role": "phone",
+              "key": "ABEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ChEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ExEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PxEREREREREREREREREREREREREREREREREREREREVo"
+            }
+          ],
+          "remove": []
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m2",
+        "frame": {
+          "t": "devices",
+          "keys": [
+            {
+              "role": "phone",
+              "key": "ABEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ChEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ExEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PxEREREREREREREREREREREREREREREREREREREREVo"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m2",
+        "text": {
+          "t": "devices",
+          "add": [
+            {
+              "role": "phone",
+              "key": "QBEREREREREREREREREREREREREREREREREREREREVo"
+            }
+          ],
+          "remove": []
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m2",
+        "close": 1003
+      }
+    },
+    {
+      "connect": {
+        "as": "m3",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "m3",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m3",
+        "auth": {
+          "role": "mac",
+          "key": "mac"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m3",
+        "frame": {
+          "t": "ok",
+          "peers": []
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "m3",
+        "text": {
+          "t": "devices",
+          "add": [],
+          "remove": []
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "m3",
+        "frame": {
+          "t": "devices",
+          "keys": [
+            {
+              "role": "phone",
+              "key": "ABEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "AxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "BxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ChEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "CxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "DxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "EhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "ExEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "FxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "GxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "HxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "IxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "JxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "KxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "LxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "MxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "NxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "OxEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PBEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PREREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PhEREREREREREREREREREREREREREREREREREREREVo"
+            },
+            {
+              "role": "phone",
+              "key": "PxEREREREREREREREREREREREREREREREREREREREVo"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

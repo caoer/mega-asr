@@ -360,7 +360,7 @@ func TestHotkey(t *testing.T) {
 		if got := r.del.got(); got != "" {
 			t.Fatalf("delivered %q for a cancelled take without text", got)
 		}
-		if !strings.HasSuffix(r.ui.String(), "flash:"+MsgASRFailed) {
+		if !strings.HasSuffix(r.ui.String(), "flash:"+MsgASRFailed()) {
 			t.Fatalf("ui %s", r.ui)
 		}
 		if got := state(older); got != "cancelled/" {
@@ -410,7 +410,7 @@ func TestHotkey(t *testing.T) {
 		if got := r.del.got(); got != "" {
 			t.Fatalf("delivered %q", got)
 		}
-		if !strings.Contains(r.ui.String(), "flash:"+MsgNothingToResend) {
+		if !strings.Contains(r.ui.String(), "flash:"+MsgNothingToResend()) {
 			t.Fatalf("ui %s", r.ui)
 		}
 	})
@@ -495,5 +495,25 @@ func TestSoundOncePerUndeliveredTake(t *testing.T) {
 				t.Fatalf("sound asked for %d times, want %d; ui %s", n, c.want, r.ui)
 			}
 		})
+	}
+}
+
+// lockedDeliverer captures a locked target that is not where the user types,
+// as the desk keypad's router does while locked.
+type lockedDeliverer struct{ *fakeDeliverer }
+
+func (d lockedDeliverer) Capture() Target       { return &target{name: "LOCKED"} }
+func (d lockedDeliverer) CaptureCursor() Target { return d.fakeDeliverer.Capture() }
+
+// The hotkey pastes at the cursor even while the keypad is locked: a resend
+// never posts into the locked group.
+func TestHotkeyResendIgnoresTheLock(t *testing.T) {
+	r, _ := keptTake(t, errors.New("pane gone"), "a take written for the test")
+	r.c.Deliver = lockedDeliverer{r.del}
+	r.del.setFront("B")
+	r.c.Hotkey()
+	r.wait(t)
+	if got := r.del.got(); got != "B|a take written for the test" {
+		t.Fatalf("delivered %q, want the cursor's B", got)
 	}
 }

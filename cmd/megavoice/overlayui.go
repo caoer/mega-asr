@@ -4,9 +4,11 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/session"
 )
@@ -32,11 +34,12 @@ type overlayUI struct {
 	after func(time.Duration, func()) *time.Timer // time.AfterFunc
 	mu    sync.Mutex
 	v     session.View
-	msg   string      // the message on the label; "": the view's own
-	alert bool        // msg is an alert
-	timer *time.Timer // ends msg
-	queue []string    // alerts waiting for msg
-	flash string      // the flash waiting for the alerts
+	msg   string             // the message on the label; "": the view's own
+	alert bool               // msg is an alert
+	timer *time.Timer        // ends msg
+	queue []string           // alerts waiting for msg
+	flash string             // the flash waiting for the alerts
+	view  func(session.View) // hears every view too; nil hears nothing
 }
 
 const (
@@ -46,9 +49,12 @@ const (
 
 func (u *overlayUI) Show(v session.View) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
 	u.v = v
 	u.renderLocked()
+	u.mu.Unlock()
+	if u.view != nil {
+		u.view(v)
+	}
 }
 
 func (u *overlayUI) Flash(msg string) {
@@ -115,19 +121,25 @@ func (u *overlayUI) renderLocked() {
 	case u.msg != "":
 		label = u.msg
 	case v.Quality != nil && v.NoSignal:
-		label = session.NoSignal
+		label = session.MsgNoSignal()
 	case v.Quality != nil && v.Warming:
-		label = "◌ 麦克风预热中 — 波形出现再说 · Esc 取消"
+		label = l10n.T("◌ 麦克风预热中 — 波形出现再说 · Esc 取消", "◌ Mic warming up — speak once the wave shows · Esc cancels")
 	case v.Quality != nil:
-		label = "● 录音中 — Shift 粘贴 · Enter 发送 · Esc 取消"
+		label = l10n.T("● 录音中 — Shift 粘贴 · Enter 发送 · Esc 取消", "● Recording — Shift pastes · Enter sends · Esc cancels")
 	case v.Started.IsZero():
 		u.ov.Hide()
 		return
+	case v.Delivering && v.Send && v.Target != "":
+		label = l10n.T("发送中…", "Sending…")
 	case v.Send:
-		label = "识别中… → 粘贴 + Enter"
+		label = l10n.T("识别中… → 粘贴 + Enter", "Transcribing… → paste + Enter")
 	default:
-		label = "识别中…（Enter 发送）"
+		label = l10n.T("识别中…（Enter 发送）", "Transcribing… (Enter sends)")
 	}
-	u.ov.Show(label, mac.Wave{Quality: v.Quality, Device: v.Device, Warming: v.Warming})
+	if u.msg == "" && v.Target != "" {
+		label = strings.ReplaceAll(label, l10n.T("Shift 粘贴", "Shift pastes"), l10n.T("录音键 粘贴", "the record key pastes"))
+		label += " · → " + v.Target
+	}
+	u.ov.Show(label, mac.Wave{Quality: v.Quality, Device: v.Device, Warming: v.Warming, Live: v.Live})
 	u.ov.Stopwatch(v.Started, v.Estimate)
 }

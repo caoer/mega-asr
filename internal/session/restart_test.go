@@ -464,7 +464,16 @@ func TestRecoverBackupEndedEarly(t *testing.T) {
 // A signal while the backup records closes both WAVs and marks the take;
 // the backup's next block, which finds its WAV closed, adds no line.
 func TestSignalWithALiveBackup(t *testing.T) {
-	main, bk := newLive(), newLive()
+	main := newLive()
+	stopGate := make(chan struct{})
+	bk := &heldStop{live: newLive(), gate: stopGate}
+	defer func() {
+		select {
+		case <-stopGate:
+		default:
+			close(stopGate)
+		}
+	}()
 	r, base := backupRig(t, &fakeSource{}, func() audio.Source { return bk })
 	r.c.NewSource = func() audio.Source { return main }
 	r.c.Toggle()
@@ -480,7 +489,8 @@ func TestSignalWithALiveBackup(t *testing.T) {
 	r.c.mu.Unlock()
 	r.c.Interrupt()
 	bk.ch <- speech(audio.Rate, 2000)
-	bk.Stop()
+	bk.live.Stop()
+	close(stopGate)
 	<-b.done
 	main.Stop()
 	r.wait(t)
@@ -601,3 +611,10 @@ func TestSignalBeforeTheRecordingEnds(t *testing.T) {
 		t.Fatalf("record %s", got)
 	}
 }
+
+type heldStop struct {
+	*live
+	gate <-chan struct{}
+}
+
+func (s *heldStop) Stop() { <-s.gate; s.live.Stop() }

@@ -22,9 +22,11 @@ const residentRetry = time.Minute
 // and, when that fails for a chunk, with one CLI run for it; a chunk whose
 // context is cancelled gets none. A resident
 // process that does not start is replaced by a fresh one residentRetry later.
+// Each chunk goes through the rechecks (asr.Rechecking) on top.
 type Fallback struct {
-	new  func() *asr.Resident
-	exec asr.Transcriber
+	new      func() *asr.Resident
+	exec     asr.Transcriber
+	rechecks func() []asr.Recheck
 
 	mu      sync.Mutex
 	res     *asr.Resident
@@ -59,6 +61,10 @@ func (f *Fallback) transcribeResident(ctx context.Context, wav string, whole boo
 }
 
 func (f *Fallback) Transcribe(ctx context.Context, wav string, whole bool) (string, error) {
+	return asr.Rechecking{Transcriber: asr.TranscribeFunc(f.transcribe), Rechecks: f.rechecks}.Transcribe(ctx, wav, whole)
+}
+
+func (f *Fallback) transcribe(ctx context.Context, wav string, whole bool) (string, error) {
 	text, err := f.transcribeResident(ctx, wav, whole)
 	if err == nil || ctx.Err() != nil { // cancelled: no CLI either
 		return text, err

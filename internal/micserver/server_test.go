@@ -517,3 +517,49 @@ func waitFor(t *testing.T, ok func() bool) {
 	}
 	t.Fatal("timed out")
 }
+
+type heldTail struct {
+	*fakeSource
+	release <-chan struct{}
+}
+
+func (s *heldTail) Stop() { <-s.release; s.fakeSource.Stop() }
+
+func TestNextStreamWaitsForPreviousDeviceRelease(t *testing.T) {
+	release := make(chan struct{})
+	first := &heldTail{fakeSource: newFake(), release: release}
+	second := newFake()
+	var n atomic.Int32
+	b := newBox(t, func() audio.Source {
+		if n.Add(1) == 1 {
+			return first
+		}
+		return second
+	})
+	p, err := pair(b.addr, b.pin(t), "studio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _, err := dial(t, b.addr, p.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-first.started
+	c.CloseNow()
+	next, _, err := dial(t, b.addr, p.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.CloseNow()
+	select {
+	case <-second.started:
+		t.Fatal("second capture opened before old tail released")
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-second.started:
+	case <-time.After(time.Second):
+		t.Fatal("next capture never opened")
+	}
+}

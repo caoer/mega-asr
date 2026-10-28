@@ -1,0 +1,58 @@
+{
+  "about": "The Worker counts every request per client address: the 61st within 60 s is 429 before any room is touched.",
+  "layer": "worker",
+  "steps": [
+    {
+      "repeat": {
+        "times": 60,
+        "steps": [
+          {
+            "http": {
+              "as": "h{i}",
+              "method": "GET",
+              "path": "/"
+            }
+          },
+          {
+            "expect": {
+              "as": "h{i}",
+              "status": 404
+            }
+          }
+        ]
+      }
+    },
+    {
+      "post": {
+        "as": "over",
+        "room": "main",
+        "request": {
+          "key": "watch1",
+          "nonce": "n1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "over",
+        "status": 429
+      }
+    },
+    {
+      "advance_ms": 61000
+    },
+    {
+      "http": {
+        "as": "again",
+        "method": "GET",
+        "path": "/"
+      }
+    },
+    {
+      "expect": {
+        "as": "again",
+        "status": 404
+      }
+    }
+  ]
+}

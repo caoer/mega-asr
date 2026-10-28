@@ -125,7 +125,11 @@ func newestUndelivered(dir string, now time.Time) (string, error) {
 		if r.At.Before(since) {
 			break
 		}
-		if r.State == "undelivered" && !r.Dism {
+		in, _ := store.LoadInput(filepath.Join(dir, name))
+		if in.Source == "phone" {
+			continue
+		}
+		if r.State == "undelivered" && r.Why != "delivery_cut" && !r.Dism {
 			return name, nil
 		}
 	}

@@ -9,9 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/l10n"
 )
 
 // The meeting menu: MegaVoice's menu bar item drives megameet serve over
@@ -176,8 +179,12 @@ func meter(db float64) string {
 	return strings.Repeat("▰", n) + strings.Repeat("▱", meterCells-n) + "  " + txt
 }
 
-// rows are the whole menu: the meeting's, then dictation's.
+// rows are the whole menu: the meeting's, then dictation's. A staging build
+// ships no MegaMeet, so its menu is dictation's alone.
 func (st meetState) rows() []row {
+	if st.Voice.Staging {
+		return st.Voice.rows()
+	}
 	return append(append(st.meetRows(), row{sep: true}), st.Voice.rows()...)
 }
 
@@ -326,6 +333,18 @@ func (st meetState) lastRows() []row {
 	return rs
 }
 
+// menuConfig is the config the menu shows and its pickers start from, and
+// why the file does not load ("" when it does). flag is --config as given:
+// with none, an absent default file is no problem — the defaults run, as
+// they do for serve — while a named file must exist.
+func menuConfig(flag string) (app.Loaded, string) {
+	l, err := load(app.LoadOpts{Path: flag})
+	if err != nil {
+		return l, err.Error()
+	}
+	return l, ""
+}
+
 func trim(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
 	if r := []rune(s); len(r) > n {
@@ -350,6 +369,7 @@ type voiceState struct {
 	Compare       compareSettings   // the file's: read at every take
 	Takes         string            // the Takes page's URL; "" while this process holds no listener
 	TakesNote     string            // why its row is greyed
+	Phone         string            // the iPhone pairing page's URL; "" while this process holds no listener
 	Undelivered   int               // takes undelivered and not seen: the bar's count
 	Capture       app.CaptureConfig // the file's: read at every take
 	Inputs        []inputView       // this Mac's inputs
@@ -358,6 +378,8 @@ type voiceState struct {
 	Scanning      bool              // a search for them is running
 	FoundNote     string            // why the network was not searched
 	Take          voiceTake         // the dictation take recording now
+	Release       string            // a staging build's update or model-download line
+	Staging       bool              // the build friends install: the menu offers 检查更新 and leaves out compare, hotwords, corrections and checks
 }
 
 // voiceTake is the dictation take recording now, if one does.
@@ -365,6 +387,7 @@ type voiceTake struct {
 	ID        string // its id, which the menu's stop and cancel name
 	Recording bool
 	Elapsed   time.Duration
+	Stream    bool // an iPhone keyboard streams it: only the keyboard ends it
 }
 
 type voiceSettings struct {
@@ -380,12 +403,15 @@ type compareSettings struct {
 }
 
 // engines are asr.engine's values as the menu names them.
-var engines = []struct{ key, label string }{{"funasr", "Fun-ASR (local)"}, {"doubao", "Doubao 2.0 (cloud)"}}
+var engines = []struct {
+	key   string
+	label l10n.Pair
+}{{"funasr", l10n.Pair{"Fun-ASR (local)", "Fun-ASR（本地）"}}, {"doubao", l10n.Pair{"Doubao 2.0 (cloud)", "豆包 2.0（云端）"}}}
 
 func engineLabel(k string) string {
 	for _, e := range engines {
 		if e.key == k {
-			return e.label
+			return e.label.String()
 		}
 	}
 	return k
@@ -404,16 +430,24 @@ type model struct{ Name, Path string }
 
 // tapKeys are mac.LookupTapKey's names, with their menu label and their
 // name in the resend hotkey's hint on a flash.
-var tapKeys = []struct{ key, label, chord string }{{"right_shift", "Right Shift", "右Shift"}, {"right_option", "Right Option", "右Option"}}
+var tapKeys = []struct {
+	key          string
+	label, chord l10n.Pair
+}{
+	{"right_shift", l10n.Pair{"Right Shift", "右 Shift"}, l10n.Pair{"右Shift", "Right Shift"}},
+	{"right_option", l10n.Pair{"Right Option", "右 Option"}, l10n.Pair{"右Option", "Right Option"}},
+}
 
 var wholeMaxes = []time.Duration{0, 30 * time.Second, time.Minute, 2 * time.Minute, 5 * time.Minute}
 
-const afterRestart = "Applies after Restart MegaVoice"
+func afterRestart() string {
+	return l10n.F("Applies after Restart %s", "重启 %s 后生效", app.Name())
+}
 
 func keyLabel(k string) string {
 	for _, t := range tapKeys {
 		if t.key == k {
-			return t.label
+			return t.label.String()
 		}
 	}
 	return k
@@ -424,7 +458,7 @@ func keyLabel(k string) string {
 func chordKey(k string) string {
 	for _, t := range tapKeys {
 		if t.key == k {
-			return t.chord
+			return t.chord.String()
 		}
 	}
 	return ""
@@ -432,14 +466,15 @@ func chordKey(k string) string {
 
 func wholeLabel(d time.Duration) string {
 	if d == 0 {
-		return "none, every take streams"
+		return l10n.T("none, every take streams", "不整段，每条都边说边识别")
 	}
-	return "up to " + strings.Replace(span(d), " 0 s", "", 1)
+	s := strings.Replace(span(d), " 0 s", "", 1)
+	return l10n.T("up to "+s, "最长 "+strings.NewReplacer(" min", " 分钟", " s", " 秒").Replace(s))
 }
 
 func (v voiceState) modelLabel(llm string) string {
 	if llm == "" {
-		return "Base"
+		return l10n.T("Base", "基础")
 	}
 	for _, m := range v.Models {
 		if m.Path == llm {
@@ -452,27 +487,34 @@ func (v voiceState) modelLabel(llm string) string {
 // setting is one restart-scoped setting's submenu: its title names the
 // file's value, and "(after restart)" while serve still runs another.
 func setting(name, file, running string, sub []row) row {
-	title := name + ": " + file
+	title := name + l10n.T(": ", "：") + file
 	if file != running {
-		title += " (after restart)"
+		title += l10n.T(" (after restart)", "（重启后）")
 	}
-	sub = append(sub, row{sep: true}, row{title: afterRestart})
+	sub = append(sub, row{sep: true}, row{title: afterRestart()})
 	return row{title: title, enabled: true, sub: sub}
 }
 
 func (v voiceState) rows() []row {
-	rs := []row{{title: "Dictation"}}
-	if v.Take.Recording {
+	rs := []row{{title: l10n.T("Dictation", "听写")}}
+	switch {
+	case v.Take.Recording && v.Take.Stream:
+		rs = append(rs, row{title: l10n.T("● iPhone 键盘录音中 ", "● iPhone keyboard recording ") + clock(v.Take.Elapsed), color: "red"})
+	case v.Take.Recording:
 		rs = append(rs,
-			row{title: "● 录音中 " + clock(v.Take.Elapsed), color: "red"},
-			row{title: "停止并粘贴", enabled: true, act: &act{kind: actTake, arg: "stop", key: v.Take.ID}},
-			row{title: "取消录音", enabled: true, act: &act{kind: actTake, arg: "cancel", key: v.Take.ID}},
+			row{title: l10n.T("● 录音中 ", "● Recording ") + clock(v.Take.Elapsed), color: "red"},
+			row{title: l10n.T("停止并粘贴", "Stop and Paste"), enabled: true, act: &act{kind: actTake, arg: "stop", key: v.Take.ID}},
+			row{title: l10n.T("取消录音", "Cancel Recording"), enabled: true, act: &act{kind: actTake, arg: "cancel", key: v.Take.ID}},
 		)
+	}
+	if v.Release != "" {
+		rs = append(rs, row{title: v.Release, color: "label"})
 	}
 	rs = append(rs, v.takesRow())
 	if v.TakesNote != "" {
 		rs = append(rs, row{title: "⚠︎ " + trim(v.TakesNote, 90), indent: 1, color: "orange"})
 	}
+	rs = append(rs, row{title: l10n.T("iPhone 遥控…", "iPhone Remote…"), enabled: v.Phone != "", act: &act{kind: actOpen, arg: v.Phone}})
 	f, r := v.File, v.Running
 	if v.FileErr != "" {
 		rs = append(rs, row{title: "⚠︎ " + trim(v.FileErr, 90), indent: 1, color: "orange"})
@@ -485,9 +527,9 @@ func (v voiceState) rows() []row {
 
 	var keys []row
 	for _, t := range tapKeys {
-		keys = append(keys, pick(t.label, t.key == f.TapKey, "tap.key", strconv.Quote(t.key)))
+		keys = append(keys, pick(keyLabel(t.key), t.key == f.TapKey, "tap.key", strconv.Quote(t.key)))
 	}
-	rs = append(rs, setting("Key", keyLabel(f.TapKey), keyLabel(r.TapKey), keys))
+	rs = append(rs, setting(l10n.T("Key", "按键"), keyLabel(f.TapKey), keyLabel(r.TapKey), keys))
 
 	var whole []row
 	found := false
@@ -498,8 +540,8 @@ func (v voiceState) rows() []row {
 	if !found {
 		whole = append(whole, row{title: capital(wholeLabel(f.WholeMax)), checked: true})
 	}
-	whole = append(whole, row{sep: true}, row{title: "A take this long or shorter is decoded whole at stop;"}, row{title: "a longer one streams in chunks while you speak"})
-	rs = append(rs, setting("Decode whole", wholeLabel(f.WholeMax), wholeLabel(r.WholeMax), whole))
+	whole = append(whole, row{sep: true}, row{title: l10n.T("A take this long or shorter is decoded whole at stop;", "不超过这个长度的录音，结束时整段识别；")}, row{title: l10n.T("a longer one streams in chunks while you speak", "更长的边说边分段识别")})
+	rs = append(rs, setting(l10n.T("Decode whole", "整段识别"), wholeLabel(f.WholeMax), wholeLabel(r.WholeMax), whole))
 
 	var models []row
 	found = f.LLM == ""
@@ -513,45 +555,53 @@ func (v voiceState) rows() []row {
 	if len(models) > 0 {
 		models = append([]row{{sep: true}}, models...)
 	}
-	models = append([]row{pick("Base", f.LLM == "", "asr.funasr.llm", `""`)}, models...)
-	models = append(models, row{sep: true}, row{title: "Checks › Transcribe and Script Check use it at once"})
-	rs = append(rs, setting("Model", v.modelLabel(f.LLM), v.modelLabel(r.LLM), models))
+	models = append([]row{pick(l10n.T("Base", "基础"), f.LLM == "", "asr.funasr.llm", `""`)}, models...)
+	if !v.Staging {
+		models = append(models, row{sep: true}, row{title: "Checks › Transcribe and Script Check use it at once"})
+	}
+	rs = append(rs, setting(l10n.T("Model", "模型"), v.modelLabel(f.LLM), v.modelLabel(r.LLM), models))
 
 	var engs []row
 	for _, e := range engines {
-		engs = append(engs, pick(e.label, e.key == f.Engine, "asr.engine", strconv.Quote(e.key)))
+		engs = append(engs, pick(engineLabel(e.key), e.key == f.Engine, "asr.engine", strconv.Quote(e.key)))
 	}
-	engs = append(engs, row{sep: true}, row{title: "Doubao streams each take as you speak;"}, row{title: "Fun-ASR stands in when it fails (offline)"})
-	rs = append(rs, setting("Engine", engineLabel(f.Engine), engineLabel(r.Engine), engs))
-	rs = append(rs, v.compareRows(r.Engine)...)
-
-	rs = append(rs,
-		row{title: "Edit Hotwords…", enabled: true, act: &act{kind: actExec, argv: []string{"open", "-t", v.Hotwords}}},
-		row{title: "Edit Corrections…", enabled: true, act: &act{kind: actExec, argv: []string{"open", "-t", v.Corrections}}},
-		row{title: "Edits apply at the next take", indent: 1},
-	)
-	restart := "Restart MegaVoice"
+	engs = append(engs, row{sep: true}, row{title: l10n.T("Doubao streams each take as you speak;", "豆包边说边识别；")}, row{title: l10n.T("Fun-ASR stands in when it fails (offline)", "它出错时（离线）由 Fun-ASR 接替")})
+	rs = append(rs, setting(l10n.T("Engine", "引擎"), engineLabel(f.Engine), engineLabel(r.Engine), engs))
+	if !v.Staging {
+		rs = append(rs, v.compareRows(r.Engine)...)
+		rs = append(rs,
+			row{title: "Edit Hotwords…", enabled: true, act: &act{kind: actExec, argv: []string{"open", "-t", v.Hotwords}}},
+			row{title: "Edit Corrections…", enabled: true, act: &act{kind: actExec, argv: []string{"open", "-t", v.Corrections}}},
+			row{title: "Edits apply at the next take", indent: 1},
+		)
+	}
+	restart := l10n.F("Restart %s", "重启 %s", app.Name())
 	if f != r {
-		restart += " to Apply the Changes"
+		restart = l10n.F("Restart %s to Apply the Changes", "重启 %s 以应用更改", app.Name())
 	}
 	rs = append(rs, row{title: restart, enabled: true, act: &act{kind: actExit, arg: "restart"}})
-	rs = append(rs, row{sep: true}, v.checks())
+	if !v.Staging {
+		rs = append(rs, row{sep: true}, v.checks())
+	}
 	if v.Check != "" {
 		rs = append(rs, row{title: v.Check + "…", indent: 1})
 	}
 	if v.Note != "" {
 		rs = append(rs, row{title: "⚠︎ " + v.Note, indent: 1, color: "orange"})
 	}
-	rs = append(rs, row{sep: true}, row{title: "Quit MegaVoice", key: "q", enabled: true, act: &act{kind: actExit, arg: "quit"}})
+	if v.Staging {
+		rs = append(rs, row{sep: true}, row{title: l10n.T("检查更新…", "Check for Updates…"), enabled: true, act: &act{kind: actExec, argv: []string{"megavoice", "update"}}})
+	}
+	rs = append(rs, row{sep: true}, row{title: l10n.F("Quit %s", "退出 %s", app.Name()), key: "q", enabled: true, act: &act{kind: actExit, arg: "quit"}})
 	return rs
 }
 
 // takesRow opens the Takes page and names the takes undelivered and not
 // seen: 打开录音历史 · 2 条未送达.
 func (v voiceState) takesRow() row {
-	title := "打开录音历史"
+	title := l10n.T("打开录音历史", "Open Recordings")
 	if v.Undelivered > 0 {
-		title += fmt.Sprintf(" · %d 条未送达", v.Undelivered)
+		title += l10n.F(" · %d 条未送达", " · %d not delivered", v.Undelivered)
 	}
 	return row{title: title, enabled: v.Takes != "", act: &act{kind: actOpen, arg: v.Takes}}
 }
@@ -575,20 +625,33 @@ type offer struct {
 
 type offerChoice struct{ label, end string }
 
-func exitOffer(cmd string, elapsed time.Duration) offer {
-	verb := "重启"
+// exitOffer is the offer for cmd while a take has recorded for elapsed;
+// stream: an iPhone keyboard streams it, so the exit can only end it and
+// send its text back to the phone (session.ViaExit stops, never cancels).
+func exitOffer(cmd string, elapsed time.Duration, stream bool) offer {
+	verb, ens := l10n.Pair{"重启", "Restart"}, "restarts"
 	if cmd == "quit" {
-		verb = "退出"
+		verb, ens = l10n.Pair{"退出", "Quit"}, "quits"
 	}
-	return offer{
-		title: "正在录音 " + clock(elapsed),
-		info:  verb + "前先结束这条录音。结束后最多再等 " + strconv.Itoa(int(drainMax.Seconds())) + " 秒识别和送达，然后" + verb + "；没送达的录音留在录音历史里。",
+	secs := int(drainMax.Seconds())
+	o := offer{
+		title: l10n.F("正在录音 %s", "Recording %s", clock(elapsed)),
+		info: l10n.T(fmt.Sprintf("%[1]s前先结束这条录音。结束后最多再等 %[2]d 秒识别和送达，然后%[1]s；没送达的录音留在录音历史里。", verb[0], secs),
+			fmt.Sprintf("End this recording first. %[3]s then waits up to %[2]d s for it to be transcribed and delivered, and %[1]s; a recording that isn't delivered stays in Recordings.", ens, secs, app.Name())),
 		choices: []offerChoice{
-			{"停止并粘贴，然后" + verb, "paste"},
-			{"取消录音，然后" + verb, "cancel"},
-			{"继续录音", ""},
+			{l10n.T("停止并粘贴，然后"+verb[0], "Stop and Paste, then "+verb[1]), "paste"},
+			{l10n.T("取消录音，然后"+verb[0], "Cancel Recording, then "+verb[1]), "cancel"},
+			{l10n.T("继续录音", "Keep Recording"), ""},
 		},
 	}
+	if stream {
+		o.title = l10n.F("iPhone 键盘正在录音 %s", "iPhone keyboard recording %s", clock(elapsed))
+		o.choices = []offerChoice{
+			{l10n.T("结束 iPhone 键盘录音（文字送回手机），然后"+verb[0], "End the iPhone Keyboard Recording (Text Goes to the Phone), then "+verb[1]), "paste"},
+			{l10n.T("继续录音", "Keep Recording"), ""},
+		}
+	}
+	return o
 }
 
 // takeArgs are the control socket's args for a take row's stop or cancel:
@@ -618,7 +681,7 @@ func (v voiceState) compareRows(primary string) []row {
 	var sub []row
 	for _, e := range engines {
 		if e.key == primary {
-			sub = append(sub, row{title: e.label + " — primary", checked: true})
+			sub = append(sub, row{title: e.label.String() + " — primary", checked: true})
 			continue
 		}
 		on := slices.Contains(c.Engines, e.key)
@@ -628,7 +691,7 @@ func (v voiceState) compareRows(primary string) []row {
 				next = append(next, x.key)
 			}
 		}
-		sub = append(sub, row{title: e.label, enabled: ok, checked: on, act: &act{kind: actSet, key: "compare.engines", arg: tomlList(next)}})
+		sub = append(sub, row{title: e.label.String(), enabled: ok, checked: on, act: &act{kind: actSet, key: "compare.engines", arg: tomlList(next)}})
 	}
 	sub = append(sub, row{sep: true}, row{title: "Each take also goes to the checked engines;"}, row{title: "the primary delivers as always"})
 	return append(rs, row{title: "Compare Engines", enabled: true, sub: sub})
@@ -644,7 +707,7 @@ func (v voiceState) checks() row {
 		{title: "Transcribe Last Take Again", enabled: idle, act: &act{kind: actLast, arg: "Transcribe Last Take Again"}},
 		run("Script Check", "megavoice", "script"),
 		{sep: true},
-		run("MegaVoice Status", "megavoice", "status"),
+		run(app.Name()+" Status", "megavoice", "status"),
 		run("MegaMeet Status", "megameet", "status"),
 	}
 	if len(v.Logs) > 0 {
@@ -656,7 +719,10 @@ func (v voiceState) checks() row {
 	return row{title: "Checks", enabled: true, sub: sub}
 }
 
-func capital(s string) string { return strings.ToUpper(s[:1]) + s[1:] }
+func capital(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
+}
 
 // lastTake is the newest finished take in dir: a WAV with its text beside
 // it (a take still recording has none yet).

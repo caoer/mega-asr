@@ -3,7 +3,10 @@
 package mac
 
 import (
+	"context"
+	"errors"
 	"github.com/ebitengine/purego"
+	"time"
 )
 
 const (
@@ -73,35 +76,103 @@ func keycodeFor(ch rune) uint16 {
 
 // Paste leaves text on the general pasteboard, where clipboard managers keep
 // it in their history, and posts ⌘V to whatever has focus.
-func Paste(text string) {
+func Paste(text string) error { return PasteContext(context.Background(), text) }
+
+// PasteContext refuses expired requests and missing event grants before posting.
+func PasteContext(ctx context.Context, text string) error {
 	var key uint16
 	DoSync(func() { key = keycodeFor('v') })
-	CopyText(text)
-	postKey(key, flagCommand)
+	if err := CopyText(text); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return postKey(key, flagCommand)
 }
 
 // CopyText leaves text on the general pasteboard.
-func CopyText(text string) {
+func CopyText(text string) error {
+	return appPasteboard.copy(nil, func() error { return writeClipboard(text) })
+}
+
+func writeClipboard(text string) error {
 	DoSync(func() {
 		pb := send(class("NSPasteboard"), "generalPasteboard")
 		send(pb, "clearContents")
 		send(pb, "setString:forType:", nsString(text), nsString("public.utf8-plain-text"))
 	})
+	return nil
 }
 
 // PressReturn posts a bare Return to whatever has focus.
-func PressReturn() { postKey(keyReturn, 0) }
+func PressReturn() error { return postKey(keyReturn, 0) }
 
-func postKey(code uint16, flags uint64) {
+func postKey(code uint16, flags uint64) error {
+	return postKeyFocused(code, flags, nil)
+}
+
+// postKeyFocused prepares both events before checking the captured composer.
+func postKeyFocused(code uint16, flags uint64, focused func() bool) error {
+	if !axIsProcessTrusted() || !cgPreflightPostEventAccess() {
+		return errors.New("Accessibility or post-event access is off; text is on the clipboard")
+	}
 	src := cgEventSourceCreate(cgCombinedSessionState)
-	for _, down := range []bool{true, false} {
+	if src != 0 {
+		defer cfRelease(src)
+	}
+	var events [2]uintptr
+	defer func() {
+		for _, ev := range events {
+			if ev != 0 {
+				cfRelease(ev)
+			}
+		}
+	}()
+	for i, down := range []bool{true, false} {
 		ev := cgEventCreateKeyboardEvent(src, code, down)
+		if ev == 0 {
+			return errors.New("could not create keyboard event")
+		}
+		events[i] = ev
 		cgEventSetFlags(ev, flags)
 		cgEventSetIntegerField(ev, cgSourceUserData, ownEvent)
+	}
+	if focused != nil && !focused() {
+		return ErrPasteUnconfirmed
+	}
+	for _, ev := range events {
 		cgEventPost(cgHIDEventTap, ev)
-		cfRelease(ev)
 	}
-	if src != 0 {
-		cfRelease(src)
+	return nil
+}
+
+var appPasteboard = clipboardBoard{onMain: onMain}
+
+// PasteInto prepares the clipboard first, then restores the captured composer
+// and posts immediately after the final focus check. Readback confirms the
+// original composer before the delivery turn or Enter can proceed.
+func PasteInto(a App, text string, focusWait, wait time.Duration) (*PasteReceipt, error) {
+	owned := a.retain()
+	var key uint16
+	ops := composerOps{
+		prepare: func(text string) error {
+			DoSync(func() {
+				key = keycodeFor('v')
+				pb := send(class("NSPasteboard"), "generalPasteboard")
+				send(pb, "clearContents")
+				send(pb, "setString:forType:", nsString(text), nsString("public.utf8-plain-text"))
+			})
+			return nil
+		},
+		activate:  func() error { return Activate(owned, focusWait) },
+		focused:   owned.Focused,
+		read:      owned.Text,
+		selection: owned.Selection,
+		post:      func() error { return postKeyFocused(key, flagCommand, owned.Focused) },
+		enter:     func() error { return postKeyFocused(keyReturn, 0, owned.Focused) },
+
+		release: func() { owned.Release() },
 	}
+	return pasteComposer(&appPasteboard, ops, text, wait)
 }

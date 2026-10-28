@@ -27,11 +27,13 @@ type micState struct {
 	raw     chan []float32 // mono blocks at the device's rate
 	done    chan struct{}  // closed once the output channel is
 
-	held     bool        // Start holds the device warm (see holdWarm); halt releases it
-	stopReq  atomic.Bool // Stop was called: a later failure is not the take's
-	stopping atomic.Bool // the device is going down: micProc returns at once
-	haltOnce sync.Once
-	overruns atomic.Int64
+	held      bool        // Start holds the device warm (see holdWarm); halt releases it
+	stopReq   atomic.Bool // Stop was called: a later failure is not the take's
+	stopping  atomic.Bool // the device is going down: micProc returns at once
+	haltOnce  sync.Once
+	overruns  atomic.Int64
+	began     time.Time
+	lastBlock atomic.Int64
 }
 
 var (
@@ -145,6 +147,7 @@ func (m *Mic) Start(ctx context.Context) (<-chan []int16, error) {
 		mics.Delete(m.id)
 		return nil, fmt.Errorf("%s: AudioDeviceCreateIOProcID: %s", d.name, statusText(st))
 	}
+	m.began = time.Now()
 	if st := devStart(d.id, m.proc); st != 0 {
 		destroyIOProcID(d.id, m.proc)
 		mics.Delete(m.id)
@@ -159,11 +162,20 @@ func (m *Mic) Start(ctx context.Context) (<-chan []int16, error) {
 	}
 	out := make(chan []int16, 256)
 	m.done = make(chan struct{})
-	p := &micPump{name: d.name, raw: m.raw, out: out, rs: newResampler(rate), first: micFirstBlock, stall: MicStall, halt: m.halt}
+	p := &micPump{name: d.name, raw: m.raw, out: out, rs: newResampler(rate), first: micFirstBlock, stall: MicStall, halt: m.halt, deviceWatch: true}
 	go func() {
 		p.run()
 		close(m.done)
 	}()
+	go watchInput(m.done, 250*time.Millisecond, micFirstBlock, MicStall, func() (time.Duration, bool) {
+		last := m.lastBlock.Load()
+		return time.Since(m.began) - time.Duration(last), last != 0
+	}, func() error {
+		if current := propF64(d.id, "nsrt", "glob"); current != rate {
+			return fmt.Errorf("%s sample rate changed from %g to %g", d.name, rate, current)
+		}
+		return nil
+	}, func(err error) { m.halt(fmt.Errorf("%s: %w", d.name, err)) })
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -365,6 +377,7 @@ func micProc(dev uint32, now, inData unsafe.Pointer, inTime, outData, outTime un
 	if len(block) == 0 {
 		return 0
 	}
+	m.lastBlock.Store(max(1, int64(time.Since(m.began))))
 	select {
 	case m.raw <- block:
 	default:

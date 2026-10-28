@@ -64,11 +64,12 @@ func (r *Resident) Transcribe(ctx context.Context, wav string, whole bool) (stri
 	if err != nil {
 		return "", fmt.Errorf("asr: %w", err)
 	}
-	var hw string
+	var list []string
 	if r.Hotwords != nil {
-		hw = strings.Join(r.Hotwords(), ", ")
-		hw = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(hw)
+		list = r.Hotwords()
 	}
+	hw := strings.Join(withExtra(ctx, list), ", ")
+	hw = strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(hw)
 	req := wav + "\t" + hw
 	if whole {
 		req += "\twhole"

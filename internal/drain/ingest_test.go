@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -230,6 +231,31 @@ exit 1
 	writeJSON(t, filepath.Join(runs[0], "ingest.json"), map[string]any{"run": "x", "state": "review", "wiki_page": "minutes/p.md"})
 	if s, _ = in.Status("r1"); s["state"] != "running" || s["step"] != "review" || s["wiki_page"] != "minutes/p.md" {
 		t.Fatalf("status %v", s)
+	}
+}
+
+// A failed run's last stdout line names its reason: the error carries it.
+func TestIngestFailureCarriesTheReason(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "pull")
+	writeJSON(t, filepath.Join(dir, "segments.json"), []map[string]any{{"speaker": "mic", "start_s": 1.0, "text": "hi"}})
+	rec := map[string]any{"id": "r1", "source": "mac", "title": "t", "started": "2020-07-08T09:15:00Z"}
+	for _, c := range []struct{ out, want string }{
+		{`echo "commit: assets"; echo '{"state": "failed", "reason": "annex", "error": "git annex copy: rc 1"}'`, "annex"},
+		{`echo "run: failed"`, ""},
+	} {
+		script := filepath.Join(root, "ingest.sh")
+		os.WriteFile(script, []byte("#!/bin/sh\n"+c.out+"\nexit 1\n"), 0o755)
+		in := &Ingester{Command: []string{"sh", script}, Runs: filepath.Join(root, "runs")}
+		_, err := in.Ingest(context.Background(), "r1", dir, rec, false)
+		var ie *IngestError
+		got := ""
+		if errors.As(err, &ie) {
+			got = ie.Reason
+		}
+		if err == nil || got != c.want {
+			t.Fatalf("%s: err %v reason %q, want reason %q", c.out, err, got, c.want)
+		}
 	}
 }
 

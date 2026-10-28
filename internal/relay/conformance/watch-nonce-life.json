@@ -1,0 +1,19 @@
+{
+  "about": "A request nonce stays refused until its first ts + 120 s and is free after, whether or not an alarm purged it (no socket is open, so no alarm runs).",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"close": {"as": "mac", "code": 1000}},
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "w1", "status": 503}},
+    {"advance_ms": 60000},
+    {"post": {"as": "w2", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "w2", "status": 404}},
+    {"advance_ms": 59000},
+    {"post": {"as": "w3", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "w3", "status": 404}},
+    {"advance_ms": 1001},
+    {"post": {"as": "w4", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "w4", "status": 503}}
+  ]
+}

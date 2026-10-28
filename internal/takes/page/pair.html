@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <title>iPhone 遥控 · megavoice</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="pair.css" />
+    <script src="lang.js"></script>
+    <script src="pair.js"></script>
+  </head>
+  <body>
+    <main id="pair" class="pair">
+      <h1 data-en="iPhone Remote">iPhone 遥控</h1>
+      <p class="pair-lead" data-en="Remote control from your iPhone: once paired, the iPhone (and an Apple Watch through it) can start a recording on this Mac, stop and insert the text, insert it and press Return, or cancel.">配对后，iPhone（和通过它的手表）可以让这台 Mac 开始录音、结束并上屏、结束上屏并回车、取消。</p>
+      <p id="pair-why" class="pair-warn" hidden></p>
+      <section id="pair-mac" hidden>
+        <p id="pair-name" class="pair-mono"></p>
+        <p id="pair-advertise" class="pair-warn" hidden></p>
+        <p id="pair-relay" class="pair-mono" hidden></p>
+        <h2 data-en="Pair a new iPhone">配对新 iPhone</h2>
+        <ol class="pair-steps">
+          <li data-en="On the iPhone, open Mega Voice › Settings › Pair Mac (配对 Mac) › Scan (扫码).">在 iPhone 上打开 Mega Voice › 设置 › 配对 Mac › 扫码。</li>
+          <li data-en="Click the button below and scan the QR code with the iPhone. The code is valid for 2 minutes and pairs one iPhone.">点下面的按钮，用 iPhone 扫出现的二维码。二维码 2 分钟内有效，只能配对一台。</li>
+          <li data-en="When the iPhone asks to find devices on your local network, tap Allow.">iPhone 问「查找本地网络上的设备」时点允许。</li>
+        </ol>
+        <button id="pair-new" type="button" data-en="Show a pairing QR code">生成配对二维码</button>
+        <div id="pair-code" hidden>
+          <canvas id="pair-qr" width="1" height="1" aria-label="配对二维码" data-en-aria-label="Pairing QR code"></canvas>
+          <p id="pair-left" class="pair-mono"></p>
+          <details>
+            <summary data-en="Can't scan? Copy the pairing link">扫不了码？复制配对链接</summary>
+            <p class="pair-note" data-en="Copy this line to the iPhone (Universal Clipboard, same Apple ID), then tap Paste Pairing Link (粘贴配对链接) in the app.">把这行复制到 iPhone（同一 Apple ID 的通用剪贴板），在 App 里点「粘贴配对链接」。</p>
+            <textarea id="pair-url" readonly rows="4"></textarea>
+            <button id="pair-copy" type="button" data-en="Copy link">复制链接</button>
+          </details>
+        </div>
+        <h2 data-en="Paired iPhones">已配对的 iPhone</h2>
+        <ul id="pair-phones" class="pair-phones"></ul>
+      </section>
+    </main>
+  </body>
+</html>

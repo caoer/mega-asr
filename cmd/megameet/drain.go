@@ -74,6 +74,9 @@ func drainCmd(o app.LoadOpts, args []string) error {
 			Vocab: func(ctx context.Context) (labels.Vocab, error) { return labels.ReadVocab(ctx, c) }}
 		st.Summarize = sm.Stage
 	}
+	if len(m.Names.Command) > 0 {
+		st.Names = namer(m.Names, c).Stage
+	}
 	d := drain.New(c, st, fmt.Sprintf("%s:%d", hostName(), os.Getpid()))
 	d.State, d.Notify, d.Logf, d.IngestSources, d.Max = drainState(m), notify, log.Printf, m.Ingest.Sources, *most
 	d.FeishuSince, _ = m.Ingest.Since() // valid: app.Load checked it

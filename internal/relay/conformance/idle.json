@@ -1,0 +1,211 @@
+{
+  "about": "The text frame ping is answered pong at any time without being a protocol frame; a socket that pings every 30 s stays; one silent for over 90 s is closed 1000 by the alarm within the next 60 s, and the Mac hears it went. (The Mac's last ping is at 240 s, so at 330 s it is not yet over 90 s silent.)",
+  "layer": "room",
+  "setup": {
+    "mac": "mac",
+    "room": "main",
+    "key": "mac",
+    "devices": [
+      {
+        "role": "phone",
+        "key": "phone1"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "connect": {
+        "as": "u",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "u",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "ping": {
+        "as": "u"
+      }
+    },
+    {
+      "expect": {
+        "as": "u",
+        "raw": "pong"
+      }
+    },
+    {
+      "close": {
+        "as": "u",
+        "code": 1000
+      }
+    },
+    {
+      "connect": {
+        "as": "p1",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "ping": {
+        "as": "p1"
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "raw": "pong"
+      }
+    },
+    {
+      "send": {
+        "as": "p1",
+        "auth": {
+          "role": "phone",
+          "key": "phone1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "peer",
+          "sid": {
+            "$capture": "s1"
+          },
+          "role": "phone",
+          "key": "@phone1",
+          "up": true,
+          "oneshot": false
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "mac",
+        "text": {
+          "t": "peer_ack",
+          "sid": "$s1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "frame": {
+          "t": "ok",
+          "sid": "$s1",
+          "peer": true
+        }
+      }
+    },
+    {
+      "repeat": {
+        "times": 6,
+        "steps": [
+          {
+            "ping": {
+              "as": "mac"
+            }
+          },
+          {
+            "expect": {
+              "as": "mac",
+              "raw": "pong"
+            }
+          },
+          {
+            "ping": {
+              "as": "p1"
+            }
+          },
+          {
+            "expect": {
+              "as": "p1",
+              "raw": "pong"
+            }
+          },
+          {
+            "advance_ms": 30000
+          }
+        ]
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "nothing": true
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "nothing": true
+      }
+    },
+    {
+      "repeat": {
+        "times": 3,
+        "steps": [
+          {
+            "ping": {
+              "as": "mac"
+            }
+          },
+          {
+            "expect": {
+              "as": "mac",
+              "raw": "pong"
+            }
+          },
+          {
+            "advance_ms": 30000
+          }
+        ]
+      }
+    },
+    {
+      "advance_ms": 60000
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "close": 1000
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "peer",
+          "sid": "$s1",
+          "role": "phone",
+          "key": "@phone1",
+          "up": false,
+          "oneshot": false
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "nothing": true
+      }
+    }
+  ]
+}

@@ -29,6 +29,7 @@ type backup struct {
 	// written before done is closed
 	samples int
 	first   time.Time // when its first block arrived
+	err     error     // final source/WAV result, read after done closes
 }
 
 // span is a stretch [from, to) of the main track's samples in which it
@@ -120,8 +121,9 @@ func (c *Controller) startBackup(r *take, src audio.Source) *backup {
 			}
 			b.samples += len(s)
 		}
-		if err := file.Close(); err != nil {
-			log.Printf("session: close %s: %v", b.path, err)
+		cerr := file.Close()
+		if cerr != nil {
+			log.Printf("session: close %s: %v", b.path, cerr)
 		}
 		b.mu.Lock()
 		ended := !b.stopped
@@ -131,7 +133,7 @@ func (c *Controller) startBackup(r *take, src audio.Source) *backup {
 		case werr != nil:
 			off(werr.Error())
 		case ended: // before the take stopped
-			why := MsgStreamCut
+			why := MsgStreamCut()
 			if err := bs.Err(); err != nil {
 				why = err.Error()
 			}
@@ -139,6 +141,10 @@ func (c *Controller) startBackup(r *take, src audio.Source) *backup {
 		}
 		bs.Stop()
 		for range ch {
+		}
+		b.err = errors.Join(werr, cerr, bs.Err())
+		if ended {
+			b.err = errors.Join(b.err, errors.New(MsgStreamCut()))
 		}
 	}()
 	return b
@@ -214,7 +220,7 @@ func (c *Controller) takeBackup(r *take, total int, dead []span) bool {
 	if !r.first.IsZero() {
 		off = int(b.first.Sub(r.first) * audio.Rate / time.Second)
 	}
-	s, used := splice(main, bk, off, dead)
+	s, used, complete := spliceCoverage(main, bk, off, dead)
 	if used == 0 {
 		if audio.TooShort(total) { // the take is not kept, nor its backup
 			remove()
@@ -225,6 +231,7 @@ func (c *Controller) takeBackup(r *take, total int, dead []span) bool {
 	}
 	log.Printf("session: %s: main track dead in %d spans; decoding %.2f s of the backup track %s in their place", name, len(dead), float64(used)/audio.Rate, b.path)
 	r.fromBackup = true
+	r.backupComplete = complete && b.err == nil
 	if len(r.chunks) > 0 { // queued while it streamed; their files go with them
 		old, dir := r.chunks, r.dir
 		c.wg.Add(1)
@@ -249,8 +256,16 @@ func (c *Controller) takeBackup(r *take, total int, dead []span) bool {
 // backup from its own first, recorded before the main track's when off is
 // below 0. used counts the backup's samples taken; with 0, out is main.
 func splice(main, bk []int16, off int, dead []span) (out []int16, used int) {
+	out, used, _ = spliceCoverage(main, bk, off, dead)
+	return out, used
+}
+
+// spliceCoverage also reports whether the backup covers every dead span.
+// A voiced but clipped portion is useful text, but cannot establish a complete take.
+func spliceCoverage(main, bk []int16, off int, dead []span) (out []int16, used int, complete bool) {
 	floor := audio.Floor(bk)
 	at := 0 // main's samples up to here are in out
+	complete = true
 	for _, d := range dead {
 		to := d.to
 		if to < 0 {
@@ -260,7 +275,18 @@ func splice(main, bk []int16, off int, dead []span) (out []int16, used int) {
 		if d.from == 0 {
 			lo = 0
 		}
+		need := to - d.from
+		if d.from == 0 && d.to < 0 {
+			need = len(main) // the whole backup aligns from its own first sample
+		}
+		if hi-lo < need || off+len(bk) < d.from {
+			complete = false
+		}
+		if need == 0 && lo == hi {
+			continue
+		}
 		if lo >= hi || !audio.Voiced(bk[lo:hi], floor) {
+			complete = false
 			continue
 		}
 		out = append(out, main[at:min(d.from, len(main))]...)
@@ -269,7 +295,7 @@ func splice(main, bk []int16, off int, dead []span) (out []int16, used int) {
 		used += hi - lo
 	}
 	if used == 0 {
-		return main, 0
+		return main, 0, false
 	}
-	return append(out, main[at:]...), used
+	return append(out, main[at:]...), used, complete
 }

@@ -22,11 +22,12 @@ import (
 
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/compare"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
-//go:embed page/index.html page/app.js page/styles.css page/fonts/*.woff2
+//go:embed page/index.html page/app.js page/styles.css page/pair.html page/pair.js page/pair.css page/fonts/*.woff2
 var page embed.FS
 
 // Engine is an engine a take can be re-transcribed with.
@@ -40,7 +41,11 @@ type Engine struct {
 
 // PageTitle is the Takes page's title, which a browser window showing the
 // page carries in its own title: the resend picker offers no such window.
-const PageTitle = "录音历史 · megavoice"
+// PageTitleEN is its title in English (page/app.js sets one or the other).
+const (
+	PageTitle   = "录音历史 · megavoice"
+	PageTitleEN = "Recordings · megavoice"
+)
 
 // Handler serves the Takes page and its API under /takes/, and sends the
 // listener's root, the compare panel's old address, to the page.
@@ -75,6 +80,7 @@ func (h *Handler) routes() {
 	// the old address of the compare panel: a browser keeps the address's
 	// fragment, the key, across the redirect
 	h.mux.Handle("GET /{$}", http.RedirectHandler("/takes/", http.StatusFound))
+	h.mux.HandleFunc("GET /takes/lang.js", serveLang)
 	h.mux.Handle("GET /takes/", http.StripPrefix("/takes/", http.FileServerFS(files)))
 	h.mux.HandleFunc("GET /takes/api/takes", h.list)
 	h.mux.HandleFunc("GET /takes/api/take/{id}", h.take)
@@ -258,4 +264,12 @@ func reply(w http.ResponseWriter, v any, err error) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// serveLang is lang.js, which the pages load before their scripts: it sets
+// the page's language to the app's (l10n.HTML), which the scripts read.
+func serveLang(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, "document.documentElement.lang = %q;\n", l10n.HTML())
 }

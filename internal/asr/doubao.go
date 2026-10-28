@@ -30,7 +30,8 @@ type Doubao struct {
 	TwoPass    bool                   // enable_nonstream: each closed sentence re-decoded by the nostream model
 	DDC        bool                   // enable_ddc: fillers and disfluencies dropped
 	// Hotwords returns the terms for a take, read at each one as FunASR
-	// does; nil means none. They go in request.corpus.context.
+	// does; nil means none. They go in request.corpus.context, fitted by
+	// DoubaoHotwords.
 	Hotwords func() []string
 	// Timeout bounds the connect, and the wait for the final text once a
 	// take ends, plus an eighth of the audio still queued then (0: 10 s).
@@ -46,6 +47,13 @@ type Stream interface {
 	Finish(ctx context.Context) (string, error)
 	// Abort ends the stream without a result.
 	Abort()
+}
+
+// Live is a Stream that can say, while its take records, what it has
+// recognised so far. Each answer replaces the last: any of it may still
+// change until the final text.
+type Live interface {
+	Live() string
 }
 
 // Streamer opens a Stream per take. Open returns at once: the connection is
@@ -160,6 +168,7 @@ type result struct {
 	Result struct {
 		Text       string `json:"text"`
 		Utterances []struct {
+			Text  string `json:"text"`
 			Words []struct {
 				Text      string `json:"text"`
 				StartTime int64  `json:"start_time"`
@@ -182,6 +191,20 @@ type Word struct {
 // once Finish has returned the text; nil when the engine gave no times.
 type Timed interface {
 	Words() []Word
+}
+
+// live is the reply's text as the overlay shows it: its sentences joined,
+// without the space the server's text puts between some of them; the text
+// itself when the reply has no sentences.
+func (b result) live() string {
+	if len(b.Result.Utterances) == 0 {
+		return b.Result.Text
+	}
+	var t string
+	for _, u := range b.Result.Utterances {
+		t += u.Text
+	}
+	return t
 }
 
 // words is the words of every utterance of a reply, in order; one without
@@ -226,7 +249,7 @@ func (d *Doubao) request() []byte {
 		},
 	}
 	if d.Hotwords != nil {
-		if hw := d.Hotwords(); len(hw) > 0 {
+		if hw := DoubaoHotwords(d.Hotwords(), d.TwoPass); len(hw) > 0 {
 			words := make([]map[string]string, len(hw))
 			for i, w := range hw {
 				words[i] = map[string]string{"word": w}
@@ -278,6 +301,7 @@ type doubaoStream struct {
 	finished bool   // Finish was called: what is queued ends the take
 	err      error
 	text     string
+	live     string // the newest reply's, as Live gives it
 	words    []Word // the text's, from the same reply
 	logid    string
 	final    chan struct{} // closed on the last-package frame or a failure
@@ -395,7 +419,9 @@ func (s *doubaoStream) run() {
 
 func (s *doubaoStream) read(c *websocket.Conn) {
 	for {
-		_, msg, err := c.Read(s.ctx)
+		ctx, cancel := context.WithTimeout(s.ctx, s.d.timeout())
+		_, msg, err := c.Read(ctx)
+		cancel()
 		if err != nil {
 			s.fail(fmt.Errorf("doubao: %w", err))
 			return
@@ -416,7 +442,7 @@ func (s *doubaoStream) read(c *websocket.Conn) {
 		}
 		s.mu.Lock()
 		if b.Result.Text != "" || r.Last {
-			s.text, s.words = b.Result.Text, b.words()
+			s.text, s.words, s.live = b.Result.Text, b.words(), b.live()
 		}
 		if r.Last {
 			s.closeLocked()
@@ -458,6 +484,13 @@ func (s *doubaoStream) Finish(ctx context.Context) (string, error) {
 	return s.text, nil
 }
 
+// Live is Live: the newest reply's text, "" before the first.
+func (s *doubaoStream) Live() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.live
+}
+
 // Words is Timed: the words of the text Finish returned, nil after a
 // failure.
 func (s *doubaoStream) Words() []Word {
@@ -467,6 +500,14 @@ func (s *doubaoStream) Words() []Word {
 		return nil
 	}
 	return s.words
+}
+
+// Logid is the server's X-Tt-Logid for the take, the handle for a support
+// ticket; "" until the connection is up.
+func (s *doubaoStream) Logid() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.logid
 }
 
 func (s *doubaoStream) Abort() {

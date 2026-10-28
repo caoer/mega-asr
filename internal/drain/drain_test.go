@@ -341,6 +341,138 @@ func TestIngestRunsAndRetriesOnce(t *testing.T) {
 	}
 }
 
+var errAnnex = &IngestError{Reason: "annex", Err: errors.New("ingest: exit status 1: git annex copy --to annex-remote: rc 1")}
+
+// clocked is a drain whose clock the test moves.
+func clocked(m *mem, st Stages, l *logs) (*Drain, *time.Time) {
+	now := t0
+	d := newDrain(m, st, "h:1", l)
+	d.Now = func() time.Time { return now }
+	return d, &now
+}
+
+// An ingest that fails copying the audio to the annex keeps its record and
+// its queue key, waits its backoff, and lands on the next try with no hand
+// Retry.
+func TestAnnexFailureTriesAgainOnBackoff(t *testing.T) {
+	m, f, l := newMem(), &fake{fail: map[string]error{"ingest": errAnnex}}, &logs{}
+	uploaded(m, t, "k", nil)
+	d, now := clocked(m, f.stages(true), l)
+	var lines []string
+	d.Notify = func(s string) { lines = append(lines, s) }
+	run, _ := d.Tick(context.Background())
+	if got := strings.Join(f.calls, ", "); got != "pull k, process k, align k redo=false, ingest k" {
+		t.Fatalf("stages %q", got)
+	}
+	r := m.rec(t, "k")
+	rt, _ := r["retry"].(map[string]any)
+	if r["state"] != "aligned" || r["claim"] != nil || r["stage"] != nil || r["error"] != nil || rt["reason"] != "annex" ||
+		rt["job"] != "ingest" || rt["n"] != 1.0 || rt["at"] != t0.Add(10*time.Minute).Format(time.RFC3339) || !m.has("q.k") {
+		t.Fatalf("record %v", r)
+	}
+	if run.Results[0].Outcome != "retry" || len(lines) != 0 {
+		t.Fatalf("run %+v notify %q", run, lines)
+	}
+	// Before its time: nothing runs, the queue key stays.
+	*now = t0.Add(9 * time.Minute)
+	f.calls = nil
+	d.Tick(context.Background())
+	if len(f.calls) != 0 || !m.has("q.k") {
+		t.Fatalf("early: %q", f.calls)
+	}
+	// At its time it runs the ingest again: fails again, next try in 1 h.
+	*now = t0.Add(10 * time.Minute)
+	d.Tick(context.Background())
+	if got := strings.Join(f.calls, ", "); got != "pull k, ingest k" {
+		t.Fatalf("second try %q", got)
+	}
+	if rt := m.rec(t, "k")["retry"].(map[string]any); rt["n"] != 2.0 || rt["at"] != t0.Add(70*time.Minute).Format(time.RFC3339) {
+		t.Fatalf("second retry %v", rt)
+	}
+	// The remote answers again: the next try lands it.
+	delete(f.fail, "ingest")
+	*now = t0.Add(70 * time.Minute)
+	f.calls = nil
+	d.Tick(context.Background())
+	r = m.rec(t, "k")
+	if f.calls[len(f.calls)-1] != "ingest k" || r["state"] != "ingested" || r["retry"] != nil || r["wiki"] == nil || m.has("q.k") || len(lines) != 0 {
+		t.Fatalf("record %v, calls %q, notify %q", r, f.calls, lines)
+	}
+}
+
+// After the third try again an annex failure fails the record and notifies
+// once; the page's Retry then starts the backoff over.
+func TestAnnexFailureFailsOnceTheBackoffIsSpent(t *testing.T) {
+	m, f, l := newMem(), &fake{fail: map[string]error{"ingest": errAnnex}}, &logs{}
+	uploaded(m, t, "n", nil)
+	d, now := clocked(m, f.stages(true), l)
+	var lines []string
+	d.Notify = func(s string) { lines = append(lines, s) }
+	for i := 0; i < 4; i++ {
+		d.Tick(context.Background())
+		*now = now.Add(6 * time.Hour)
+	}
+	r := m.rec(t, "n")
+	ingests := strings.Count(strings.Join(f.calls, ","), "ingest n")
+	if ingests != 4 || r["state"] != "failed" || r["stage"] != "ingest" || r["retry"] != nil || m.has("q.n") ||
+		!strings.Contains(r["error"].(string), "(tried again 3 times)") {
+		t.Fatalf("record %v, %d ingests", r, ingests)
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "rec.n «t» failed at ingest") {
+		t.Fatalf("notify %q", lines)
+	}
+	r["action"] = "retry"
+	m.put(t, "rec.n", r)
+	m.put(t, "q.n", map[string]string{"state": "failed"})
+	d.Tick(context.Background())
+	if r := m.rec(t, "n"); r["state"] != "aligned" || r["retry"].(map[string]any)["n"] != 1.0 || !m.has("q.n") {
+		t.Fatalf("after the page's retry %v", r)
+	}
+}
+
+// A realign or names action on a record waiting on an annex retry runs and
+// leaves the retry and q.<id> in place: the owed ingest still runs at its
+// time.
+func TestActionKeepsAPendingAnnexRetry(t *testing.T) {
+	for _, c := range []struct{ state, job, action string }{
+		{"aligned", "ingest", "realign"},
+		{"aligned", "ingest", "names"},
+		{"ingested", "reingest", "realign"},
+	} {
+		m, f, l := newMem(), &fake{}, &logs{}
+		at := t0.Add(10 * time.Minute)
+		m.put(t, "rec.r", map[string]any{"id": "r", "source": "mac", "title": "t", "state": c.state, "action": c.action, "files": []any{},
+			"retry": map[string]any{"reason": "annex", "job": c.job, "n": 1, "at": at.Format(time.RFC3339), "error": "annex"}})
+		m.put(t, "q.r", map[string]string{"state": c.state})
+		d, now := clocked(m, f.stages(true), l)
+		d.Tick(context.Background())
+		r := m.rec(t, "r")
+		rt, _ := r["retry"].(map[string]any)
+		if r["action"] != nil || r["state"] != c.state || rt["n"] != 1.0 || rt["job"] != c.job || !m.has("q.r") || strings.Contains(strings.Join(f.calls, ","), "ingest") {
+			t.Fatalf("%+v: after the action %v, calls %q", c, r, f.calls)
+		}
+		*now = at
+		d.Tick(context.Background())
+		if r := m.rec(t, "r"); r["state"] != "ingested" || r["retry"] != nil || r["wiki"] == nil || m.has("q.r") || f.calls[len(f.calls)-1] != "ingest r" {
+			t.Fatalf("%+v: at the retry %v, calls %q", c, r, f.calls)
+		}
+	}
+}
+
+// Another reason fails as before: two tries, failed, one line, no retry.
+func TestOtherIngestFailureIsNotTriedAgain(t *testing.T) {
+	m, f, l := newMem(), &fake{fail: map[string]error{"ingest": &IngestError{Reason: "budget", Err: errors.New("budget")}}}, &logs{}
+	uploaded(m, t, "o", nil)
+	d, _ := clocked(m, f.stages(true), l)
+	var lines []string
+	d.Notify = func(s string) { lines = append(lines, s) }
+	d.Tick(context.Background())
+	r := m.rec(t, "o")
+	if strings.Count(strings.Join(f.calls, ","), "ingest o") != 2 || r["state"] != "failed" || r["retry"] != nil || m.has("q.o") || len(lines) != 1 {
+		t.Fatalf("record %v, calls %q, notify %q", r, f.calls, lines)
+	}
+}
+
 // A minute the backfill already filed arrives with wiki set: processed and
 // aligned (it scores the local recordings), never ingested again.
 func TestWikiSetIsNeverIngestedAgain(t *testing.T) {

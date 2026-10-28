@@ -171,3 +171,23 @@ func TestRepairSkipsBackup(t *testing.T) {
 		t.Fatalf("orphans %v, %v; want the take alone", orphans, err)
 	}
 }
+
+func TestSaveTextReplacesWholeFiles(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	base := filepath.Join(s.Dir, "test")
+	if err := s.SaveText(base, "long raw text", "long corrected text"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveText(base, "r", "t"); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{base + ".raw.txt": "r\n", base + ".txt": "t\n"} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("%s: %q %v", path, got, err)
+		}
+	}
+	if temps, _ := filepath.Glob(filepath.Join(s.Dir, ".transcript-*")); len(temps) != 0 {
+		t.Fatalf("staging files %v", temps)
+	}
+}

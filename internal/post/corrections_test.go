@@ -131,6 +131,28 @@ func TestCorrectionsFile(t *testing.T) {
 	}
 }
 
+// CorrectionsFiles applies its tables as one, longest pattern first across
+// files; a malformed table is skipped and the rest still apply; the list of
+// paths is asked again on every call.
+func TestCorrectionsFiles(t *testing.T) {
+	dir := t.TempDir()
+	user, extra, bad := filepath.Join(dir, "corrections.tsv"), filepath.Join(dir, "d.tsv"), filepath.Join(dir, "bad.tsv")
+	for p, body := range map[string]string{user: "镁分\t镁粉\n", extra: "镁分用\t美分用\n", bad: "no tab\n"} {
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{user, bad}
+	st := CorrectionsFiles(func() []string { return paths })
+	if got, want := st("镁分用完了"), "镁粉用完了"; got != want {
+		t.Errorf("one table and a malformed one: %q, want %q", got, want)
+	}
+	paths = []string{user, extra, filepath.Join(dir, "absent.tsv")}
+	if got, want := st("镁分用完了"), "美分用完了"; got != want {
+		t.Errorf("merged: %q, want %q (the longer pattern of the second file first)", got, want)
+	}
+}
+
 func TestChain(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "corrections.tsv")
 	if err := os.WriteFile(path, []byte(crag), 0o644); err != nil {

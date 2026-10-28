@@ -1,0 +1,26 @@
+{
+  "about": "The Mac's drop closes a phone session with 1000 or fails a pending request with 504; an unknown sid is ignored.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}, {"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": true}}},
+    {"send": {"as": "mac", "text": {"t": "drop", "sid": "AAAAAAAAAAA"}}},
+    {"expect": {"as": "mac", "nothing": true}},
+    {"expect": {"as": "p1", "nothing": true}},
+    {"send": {"as": "mac", "text": {"t": "drop", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "close": 1000}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "phone", "key": "@phone1", "up": false, "oneshot": false}}},
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s2"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s2", "body_of": "w1"}}},
+    {"send": {"as": "mac", "text": {"t": "drop", "sid": "$s2"}}},
+    {"expect": {"as": "w1", "status": 504}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s2", "role": "watch", "key": "@watch1", "up": false, "oneshot": true}}}
+  ]
+}

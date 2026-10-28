@@ -10,20 +10,21 @@ import (
 	"testing"
 	"time"
 
+	"errors"
 	"github.com/caoer/mega-asr/internal/mac"
+	"github.com/caoer/mega-asr/internal/session"
 )
 
 // A resend to the clipboard copies the text and presses nothing: no focus
 // change, no paste, no Enter.
 func TestClipboardPressesNothing(t *testing.T) {
 	var calls []string
-	activate = func(mac.App, time.Duration) error { calls = append(calls, "activate"); return nil }
-	paste = func(string) { calls = append(calls, "paste") }
-	copyText = func(s string) { calls = append(calls, "copy:"+s) }
-	pressReturn = func() { calls = append(calls, "return") }
-	t.Cleanup(func() {
-		activate, paste, copyText, pressReturn = mac.Activate, mac.Paste, mac.CopyText, mac.PressReturn
-	})
+	copyText = func(s string) error { calls = append(calls, "copy:"+s); return nil }
+	pasteInto = func(mac.App, string, time.Duration, time.Duration) (*mac.PasteReceipt, error) {
+		calls = append(calls, "paste")
+		return nil, nil
+	}
+	t.Cleanup(func() { copyText, pasteInto = mac.CopyText, mac.PasteInto })
 	d := Deliverer{}
 	to, err := d.Resolve("clipboard")
 	if err != nil {
@@ -43,38 +44,19 @@ func TestClipboardPressesNothing(t *testing.T) {
 	}
 }
 
-// An app's focused value is read once after the paste: whole when it holds
-// the text, unknown when the element has no text value or the read hangs.
-// The delivery itself is done before the readback is asked for.
+// An unconfirmed original-composer read propagates as an uncertain delivery.
 func TestAppReceived(t *testing.T) {
-	activate = func(mac.App, time.Duration) error { return nil }
-	paste = func(string) {}
-	t.Cleanup(func() {
-		activate, paste, focusedText = mac.Activate, mac.Paste, mac.FocusedText
-	})
-	const text = "Bob Example measured the queue depth every minute. 队列深度每分钟测一次。"
-	hang := make(chan struct{})
-	t.Cleanup(func() { close(hang) })
-	for _, c := range []struct {
-		name  string
-		value func(int32) (string, bool)
-		want  string
-	}{
-		{"holds the text", func(int32) (string, bool) { return "draft " + text, true }, Whole},
-		{"holds its head", func(int32) (string, bool) { return text[:40], true }, Short},
-		{"no text value", func(int32) (string, bool) { return "", false }, Unknown},
-		{"the read hangs", func(int32) (string, bool) { <-hang; return text, true }, Unknown},
-	} {
-		focusedText = c.value
-		d := Deliverer{}
-		to := &Target{App: mac.App{PID: 4242, Name: "Notes"}}
-		if err := d.Deliver(to, text); err != nil {
-			t.Fatalf("%s: deliver %v", c.name, err)
-		}
-		start := time.Now()
-		if got, why := d.Received(to, text); got != c.want || time.Since(start) > fieldDeadline+time.Second {
-			t.Errorf("%s: %s (%s) after %v, want %s", c.name, got, why, time.Since(start), c.want)
-		}
+	pasteInto = func(mac.App, string, time.Duration, time.Duration) (*mac.PasteReceipt, error) {
+		return nil, mac.ErrPasteUnconfirmed
+	}
+	t.Cleanup(func() { pasteInto = mac.PasteInto })
+	d := Deliverer{}
+	to := &Target{App: mac.App{PID: 4242, Name: "Fake composer"}}
+	if err := d.Deliver(to, "invented text"); !errors.Is(err, session.ErrUnconfirmedPaste) {
+		t.Fatal(err)
+	}
+	if err := d.Submit(to); !errors.Is(err, session.ErrUnconfirmedPaste) {
+		t.Fatal(err)
 	}
 }
 

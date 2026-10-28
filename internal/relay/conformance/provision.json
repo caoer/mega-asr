@@ -1,0 +1,44 @@
+{
+  "about": "An empty room admits only a Mac with a valid provision proof; then it ignores provision, and a newer Mac socket supersedes the old one.",
+  "layer": "room",
+  "steps": [
+    {"connect": {"as": "p0", "room": "main"}},
+    {"expect": {"as": "p0", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p0", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "p0", "close": 1008}},
+
+    {"connect": {"as": "m0", "room": "main"}},
+    {"expect": {"as": "m0", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "m0", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "m0", "close": 1008}},
+
+    {"connect": {"as": "m1", "room": "main"}},
+    {"expect": {"as": "m1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "m1", "auth": {"role": "mac", "key": "mac", "provision": "bad"}}},
+    {"expect": {"as": "m1", "close": 1008}},
+
+    {"connect": {"as": "m2", "room": "main"}},
+    {"expect": {"as": "m2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "m2", "auth": {"role": "phone", "key": "mac", "provision": "valid"}}},
+    {"expect": {"as": "m2", "close": 1008}},
+
+    {"connect": {"as": "mac", "room": "main"}},
+    {"expect": {"as": "mac", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "mac", "auth": {"role": "mac", "key": "mac", "provision": "valid"}}},
+    {"expect": {"as": "mac", "frame": {"t": "ok", "peers": []}}},
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [{"role": "phone", "key": "@phone1"}], "remove": []}}},
+    {"expect": {"as": "mac", "frame": {"t": "devices", "keys": [{"role": "phone", "key": "@phone1"}]}}},
+
+    {"connect": {"as": "m3", "room": "main"}},
+    {"expect": {"as": "m3", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "m3", "auth": {"role": "mac", "key": "mac2", "provision": "valid"}}},
+    {"expect": {"as": "m3", "close": 1008}},
+
+    {"connect": {"as": "macB", "room": "main"}},
+    {"expect": {"as": "macB", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "macB", "auth": {"role": "mac", "key": "mac", "provision": "valid"}}},
+    {"expect": {"as": "mac", "close": 4001}},
+    {"expect": {"as": "macB", "frame": {"t": "ok", "peers": []}}},
+    {"expect": {"as": "macB", "nothing": true}}
+  ]
+}

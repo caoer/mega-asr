@@ -1,0 +1,43 @@
+{
+  "about": "Per room: 4 authenticated phones (a 5th closes 1013 after its auth, unannounced), 8 sockets awaiting auth (a 9th closes 1013 before any challenge), 8 pending requests (a 9th verified one is 429).",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}, {"role": "phone", "key": "phone2"}, {"role": "phone", "key": "phone3"}, {"role": "phone", "key": "phone4"}, {"role": "phone", "key": "phone5"}, {"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"repeat": {"times": 4, "steps": [
+      {"connect": {"as": "p{i}", "room": "main"}},
+      {"expect": {"as": "p{i}", "frame": {"t": "challenge", "nonce": "*"}}},
+      {"send": {"as": "p{i}", "auth": {"role": "phone", "key": "phone{i+1}"}}},
+      {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s{i}"}, "role": "phone", "key": "@phone{i+1}", "up": true, "oneshot": false}}},
+      {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s{i}"}}},
+      {"expect": {"as": "p{i}", "frame": {"t": "ok", "sid": "$s{i}", "peer": true}}}
+    ]}},
+    {"connect": {"as": "p5", "room": "main"}},
+    {"expect": {"as": "p5", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p5", "auth": {"role": "phone", "key": "phone5"}}},
+    {"expect": {"as": "p5", "close": 1013}},
+    {"expect": {"as": "mac", "nothing": true}},
+
+    {"repeat": {"times": 8, "steps": [
+      {"connect": {"as": "u{i}", "room": "main"}},
+      {"expect": {"as": "u{i}", "frame": {"t": "challenge", "nonce": "*"}}}
+    ]}},
+    {"connect": {"as": "u8", "room": "main"}},
+    {"expect": {"as": "u8", "close": 1013}},
+    {"advance_ms": 5001},
+    {"repeat": {"times": 8, "steps": [
+      {"expect": {"as": "u{i}", "close": 1008}}
+    ]}},
+    {"connect": {"as": "u9", "room": "main"}},
+    {"expect": {"as": "u9", "frame": {"t": "challenge", "nonce": "*"}}},
+
+    {"repeat": {"times": 8, "steps": [
+      {"post": {"as": "q{i}", "room": "main", "request": {"key": "watch1", "nonce": "q{i}"}}},
+      {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "w{i}"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+      {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$w{i}"}}},
+      {"expect": {"as": "mac", "binary": {"sid": "$w{i}", "body_of": "q{i}"}}}
+    ]}},
+    {"post": {"as": "q8", "room": "main", "request": {"key": "watch1", "nonce": "q8"}}},
+    {"expect": {"as": "q8", "status": 429}},
+    {"expect": {"as": "mac", "nothing": true}}
+  ]
+}

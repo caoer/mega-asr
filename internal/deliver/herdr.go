@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/caoer/mega-asr/internal/session"
 )
 
 // Herdr drives the herdr CLI.
@@ -214,7 +216,7 @@ func request(ctx context.Context, sock, method string, params any) (json.RawMess
 	}
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
-		return nil, fmt.Errorf("herdr %s: %w", method, err)
+		return nil, fmt.Errorf("herdr %s: %w; %w", method, err, session.ErrMaybeSent)
 	}
 	var resp struct {
 		Result json.RawMessage `json:"result"`

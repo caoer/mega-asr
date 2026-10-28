@@ -47,6 +47,7 @@ import (
 
 	"github.com/caoer/mega-asr/internal/asr"
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/post"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -77,6 +78,26 @@ type Deliverer interface {
 	Submit(t Target) error
 }
 
+// ErrMaybeSent marks a Deliver error after which the text may have reached
+// the target anyway: a send command that ran out of time.
+var ErrMaybeSent = l10n.Err("可能已发送", "may have been sent")
+
+var ErrUnconfirmedPaste = fmt.Errorf("%w: paste not confirmed", ErrMaybeSent)
+var ErrClipboardBusy = errors.New("previous paste still owns the clipboard")
+
+// CursorCapturer is a Deliverer whose Capture may name a target other than
+// where the user is typing (the desk keypad's locked Telegram target);
+// CaptureCursor captures where the user is typing.
+type CursorCapturer interface {
+	CaptureCursor() Target
+}
+
+// EndTarget chooses a captured destination from the recording's stop mode.
+// A later Enter may submit a cursor paste, without changing its destination.
+type EndTarget interface {
+	ForEnd(send bool) Target
+}
+
 // ReadBacker is a Deliverer that can read a target back after a delivery:
 // whole, short or unknown, and why; "" when the target has nothing to read.
 type ReadBacker interface {
@@ -98,11 +119,18 @@ type View struct {
 	// Device names the recording take's input ("Handheld BT"); "" when the
 	// source does not say.
 	Device string
+	// Live is what the recording take's stream has recognised so far, any
+	// of it subject to change; nil when its engine does not say (asr.Live).
+	// It is for showing only: the take delivers its final text alone.
+	Live func() string
 	// Started is when the newest take still on its way was stopped; zero
 	// when there is none.
 	Started time.Time
 	// Send says that take presses Enter after its paste.
-	Send bool
+	Send       bool
+	Delivering bool
+	// Target names a locked destination; empty for an ordinary Mac take.
+	Target string
 	// Estimate is the time left until that take's text is ready; 0 when it
 	// cannot be estimated yet.
 	Estimate func() time.Duration
@@ -133,16 +161,25 @@ type Controller struct {
 	Stream asr.Streamer
 	// Tee, when set, is called as a take starts; the TakeTee it returns (nil:
 	// none) gets a copy of the take.
-	Tee         func(base string) TakeTee
-	Post        post.Chain
+	Tee  func(base string) TakeTee
+	Post post.Chain
+	// Names, when set, runs on a dictated take's text after Post and gives
+	// the text to deliver, and the names line to record when it fired (nil:
+	// none). The take's .txt keeps the text before it.
+	Names       func(ctx context.Context, text string) (string, *store.Event)
 	Deliver     Deliverer
 	UI          UI
 	Store       store.Store
-	ChunkDir    string           // chunk WAVs, removed once a take's text is saved
-	MaxDuration time.Duration    // auto-stop per take; 0 = none
-	WholeMax    time.Duration    // a take this long or shorter is decoded whole at stop; 0 streams every take
-	OnState     func(State)      // tells the key tap which keys to take
-	Now         func() time.Time // clock for file names
+	ChunkDir    string        // chunk WAVs, removed once a take's text is saved
+	MaxDuration time.Duration // auto-stop per take; 0 = none
+	WholeMax    time.Duration // a take this long or shorter is decoded whole at stop; 0 streams every take
+	OnState     func(State)   // tells the key tap which keys to take; called under the controller's lock
+	// OnView hears the state and its matching view together, under the lock.
+	OnView func(State, View)
+	// OnDone, when set, is called with a take's base once its final line
+	// (hold or deliver) is on disk, outside the controller's lock.
+	OnDone func(base string)
+	Now    func() time.Time // clock for file names
 	// NewBackup, when set, gives a take's backup track for its main source,
 	// which has started; nil when that source has none. The backup records
 	// beside the main track into Store's backup/<name>.wav, which no listing
@@ -172,6 +209,8 @@ type Controller struct {
 
 	mu       sync.Mutex
 	state    State
+	owner    string        // the owner OnState last saw with state (Published)
+	keys     State         // the key phase OnState last saw (KeyPhase)
 	rec      *take         // the recording take
 	finished []*take       // stopped, not yet delivered, oldest first; cancelled ones too
 	last     chan struct{} // closed when the newest take is done delivering
@@ -185,8 +224,9 @@ type Controller struct {
 	pub        atomic.Pointer[published]
 	prev       string    // the newest take's base
 	prevStop   time.Time // when it stopped
-	// cancelled: the newest take to end was cancelled; a Return with no
-	// take recording is then the app's
+	// cancelled: the newest of the Mac's own takes to end was cancelled; a
+	// Return with no Mac take recording is then the app's. A take a phone
+	// streams neither sets nor clears it.
 	cancelled bool
 
 	resending      map[string]bool // takes a resend is delivering, by base
@@ -237,7 +277,8 @@ type TakeResult struct {
 
 // take is one recording from start to delivery.
 type take struct {
-	target  *pending // what had focus at the tap
+	target  *pending  // what had focus at the tap
+	sink    Deliverer // nil uses the controller's Mac delivery target
 	tapAt   time.Time
 	src     audio.Source
 	stream  asr.Stream // the streaming primary's; nil with a chunk primary
@@ -262,7 +303,9 @@ type take struct {
 	first time.Time
 	// fromBackup: the backup's audio is queued in place of the main track's
 	// dead spans; set on the take's own goroutine before finish.
-	fromBackup bool
+	fromBackup     bool
+	backupComplete bool  // every dead span is covered by a healthy backup
+	captureErr     error // final capture result, including a failure discovered during Stop
 	// interrupted: Interrupt closed its WAV and wrote its last lines; the
 	// recording goroutine ends without a line of its own
 	interrupted atomic.Bool
@@ -284,18 +327,19 @@ type take struct {
 	logged  chan struct{} // closed once the start line and early are on disk
 
 	// guarded by Controller.mu
-	kind       string    // what stopped it: a stop line's kind
-	via        string    // where the stop came from: a stop line's via ("" a key)
-	recAt      time.Time // when it started recording
-	warming    bool      // a Bluetooth input with no live sample yet (View.Warming)
-	noSignal   bool      // View.NoSignal
-	device     string    // View.Device
-	send       bool      // press Enter after delivery
-	sealed     bool      // delivery has decided on send
-	delivering bool
-	cancelled  bool // Esc: transcribed and kept as cancelled, never delivered
-	stopAt     time.Time
-	why        string // non-empty when the stream ended on its own
+	kind        string    // what stopped it: a stop line's kind
+	via         string    // where the stop came from: a stop line's via ("" a key)
+	recAt       time.Time // when it started recording
+	warming     bool      // a Bluetooth input with no live sample yet (View.Warming)
+	noSignal    bool      // View.NoSignal
+	device      string    // View.Device
+	targetLabel string    // View.Target, once capture is ready
+	send        bool      // press Enter after delivery
+	sealed      bool      // delivery has decided on send
+	delivering  bool
+	cancelled   bool // Esc: transcribed and kept as cancelled, never delivered
+	stopAt      time.Time
+	why         string // non-empty when the stream ended on its own
 }
 
 // A take's paste state (take.paste).
@@ -351,17 +395,80 @@ func (c *Controller) ToggleFrom(trigger string) { c.ToggleAt(trigger, time.Now()
 // ToggleAt is ToggleFrom with the time of the key event that asked for it,
 // which a take's start line records as tap_at.
 func (c *Controller) ToggleAt(trigger string, at time.Time) {
+	c.ToggleAtWithCapture(trigger, at, nil)
+}
+
+// ToggleAtWithCapture is ToggleAt with a destination decision made by the
+// input source. Capture still runs asynchronously alongside audio startup.
+func (c *Controller) ToggleAtWithCapture(trigger string, at time.Time, capture func() Target) {
+	c.toggleAt(trigger, at, capture, nil)
+}
+
+// ToggleKeypadAt acts on a tap only while the recording identity seen at
+// key-down still matches. Empty means the gesture began with no recording.
+func (c *Controller) ToggleKeypadAt(at time.Time, capture func() Target, recording string) {
+	c.toggleAt("keypad", at, capture, &recording)
+}
+
+func (c *Controller) toggleAt(trigger string, at time.Time, capture func() Target, recording *string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if recording != nil {
+		current := ""
+		if c.rec != nil {
+			current = filepath.Base(c.rec.base)
+		}
+		if current != *recording {
+			return
+		}
+	}
 	if c.rec == nil {
-		c.startLocked(trigger, at)
+		_ = c.startWithLocked(trigger, at, nil, nil, capture) // the overlay shows why it did not start
 		return
 	}
 	via := ""
 	if trigger == "ctl" {
 		via = "ctl"
 	}
+	if !mayEnd(c.rec, via, false) {
+		c.UI.Flash(MsgStreamTake())
+		return
+	}
 	c.stopFromLocked(via)
+}
+
+// MsgStreamTake is the flash when a Mac key or the Mac's own control would
+// end a take an iPhone keyboard streams: that take is ended on the keyboard.
+func MsgStreamTake() string {
+	return l10n.T("iPhone 键盘正在录音，请在键盘上结束", "The iPhone keyboard is recording: end it on the keyboard")
+}
+
+// Owners of a take, as Published reports them.
+const (
+	OwnerMac    = "mac"    // started on the Mac: its key, menu, control socket, a phone or watch command
+	OwnerStream = "stream" // a phone streams it (StartStream) and receives its text
+)
+
+// ViaExit is the via of the menu's quit and restart, which end what records
+// before the process exits (StopFrom, CancelFrom).
+const ViaExit = "exit"
+
+// mayEnd reports whether a stop or send (cancel false) or a cancel from via
+// may end t. Any caller may end a take of the Mac's own. A take a phone
+// streams is ended by the keyboard connection alone (remote checks it is the
+// owning one), and stopped — never cancelled — by the exit drain, so its
+// text still reaches the phone; the Mac's keys, its menu and control socket
+// and the phone or watch commands leave it recording.
+func mayEnd(t *take, via string, cancel bool) bool {
+	return t.sink == nil || via == "keyboard" || via == ViaExit && !cancel
+}
+
+// ownerOf is t's owner, fixed for its life.
+func ownerOf(t *take) string {
+	if t.sink != nil {
+		return OwnerStream
+	}
+	return OwnerMac
 }
 
 // StopFrom stops the recording take to paste, as a tap does, and never
@@ -372,16 +479,74 @@ func (c *Controller) ToggleAt(trigger string, at time.Time) {
 func (c *Controller) StopFrom(via, id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.recordingLocked(id) {
+	if !c.endableLocked(via, id, false) {
 		return false
 	}
 	c.stopFromLocked(via)
 	return true
 }
 
+// ErrClosing wraps StartFrom's refusal once Close has refused every start.
+var ErrClosing = errors.New("megavoice is exiting")
+
+// StartFrom starts a take for trigger ("iphone", "watch"), which its start
+// line records, and never stops one: while a take records it refuses with
+// ErrRecording. It returns the new take's id, or why no take started (the
+// overlay shows it too). The take locks what has focus now as its target.
+func (c *Controller) StartFrom(trigger string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rec != nil {
+		return "", ErrRecording
+	}
+	if err := c.startLocked(trigger, time.Now()); err != nil {
+		return "", err
+	}
+	return filepath.Base(c.rec.base), nil
+}
+
+// StartStream records a supplied source and delivers only to its sink. It
+// neither opens the Mac's input nor captures its focus or backup microphone.
+func (c *Controller) StartStream(src audio.Source, sink Deliverer, trigger string) (string, error) {
+	if src == nil || sink == nil {
+		return "", errors.New("stream source and sink are required")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rec != nil {
+		return "", ErrRecording
+	}
+	if err := c.startWithLocked(trigger, time.Now(), src, sink, nil); err != nil {
+		return "", err
+	}
+	return filepath.Base(c.rec.base), nil
+}
+
+// SendFrom stops the recording take to paste and press Enter, as a Return
+// while it records does, and never starts one. via and id are StopFrom's. It
+// reports false when it stopped nothing.
+func (c *Controller) SendFrom(via, id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.endableLocked(via, id, false) {
+		return false
+	}
+	c.rec.send = true
+	c.rec.via = via
+	c.stopLocked("enter", "")
+	return true
+}
+
 // recordingLocked reports whether a take records, and is id when id is set.
 func (c *Controller) recordingLocked(id string) bool {
 	return c.rec != nil && (id == "" || filepath.Base(c.rec.base) == id)
+}
+
+// endableLocked reports whether a stop or send (cancel false) or a cancel
+// from via may end the recording take: one records, it is id when id is
+// set, and via may end it (mayEnd).
+func (c *Controller) endableLocked(via, id string, cancel bool) bool {
+	return c.recordingLocked(id) && mayEnd(c.rec, via, cancel)
 }
 
 func (c *Controller) stopFromLocked(via string) {
@@ -397,6 +562,9 @@ type published struct {
 	takes bool      // a take records or is on its way
 	id    string    // the recording take; "" when none records
 	recAt time.Time // when it started
+	phase State
+	owner string // the owner of the take that defines phase; "" when idle
+	keys  State  // the phase of the Mac's own takes (KeyPhase)
 }
 
 func (c *Controller) published() published {
@@ -405,6 +573,27 @@ func (c *Controller) published() published {
 	}
 	return published{}
 }
+
+// Published reports the phase, the recording take's id and how long it has
+// recorded ("" and 0 when none records), and the owner of the take that
+// defines the phase: the recording take's; with none recording, OwnerMac
+// while a take of the Mac's own is on its way, else OwnerStream; "" when
+// idle. One snapshot, never waiting for the controller's mutex; OnState runs
+// after it is stored.
+func (c *Controller) Published() (phase State, id string, elapsed time.Duration, owner string) {
+	p := c.published()
+	if p.id != "" {
+		elapsed = time.Since(p.recAt)
+	}
+	return p.phase, p.id, elapsed, p.owner
+}
+
+// KeyPhase is the phase of the Mac's own takes alone — every take but one a
+// phone streams: what the key tap takes Return and Esc for, since a take a
+// phone streams is not the Mac keys' to end. A phone's take recording while
+// an earlier Mac take transcribes reads Transcribing, so Return still turns
+// that take into a send. It never waits for the controller's mutex.
+func (c *Controller) KeyPhase() State { return c.published().keys }
 
 // Recording reports the recording take's id and how long it has recorded,
 // or ok false. It never waits for the controller's mutex.
@@ -428,23 +617,37 @@ func (c *Controller) Enter() bool {
 }
 
 // EnterWhy is Enter, saying why no take used the Return: "after a cancel",
-// "no take on its way" or "past delivery".
+// "no take on its way", "past delivery", or "stream" when only takes a phone
+// streams could use it (mayEnd), which it leaves as they are. The take it
+// stops or sends is the Mac's own: the recording one, else the newest still
+// on its way, past any take a phone streams.
 func (c *Controller) EnterWhy() (used bool, why string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.rec == nil && c.cancelled {
+	if c.cancelled && (c.rec == nil || c.rec.sink != nil) { // no Mac take records
 		return false, "after a cancel"
 	}
-	if c.rec != nil {
-		c.rec.send = true
-		c.stopLocked("enter", "")
-		return true, ""
-	}
 	why = "no take on its way"
+	if c.rec != nil {
+		if mayEnd(c.rec, "", false) {
+			c.rec.send = true
+			c.stopLocked("enter", "")
+			return true, ""
+		}
+		why = OwnerStream
+	}
 	for i := len(c.finished) - 1; i >= 0; i-- {
 		t := c.finished[i]
-		if t.sealed || t.cancelled {
-			why = "past delivery"
+		switch {
+		case t.cancelled:
+			continue
+		case !mayEnd(t, "", false):
+			why = OwnerStream
+			continue
+		case t.sealed:
+			if why != OwnerStream {
+				why = "past delivery"
+			}
 			continue
 		}
 		if !t.send {
@@ -461,22 +664,24 @@ func (c *Controller) EnterWhy() (used bool, why string) {
 // Cancel ends the recording take without delivering it; its audio and text
 // are still kept, and it ends cancelled once its stream has drained. It is
 // in flight (Busy) until its text is saved, but not in State: no key is
-// taken for it. Earlier takes carry on. It is the key's; CancelFrom names
-// another source.
+// taken for it. Earlier takes carry on. It is the key's, and leaves a take a
+// phone streams recording; CancelFrom names another source.
 func (c *Controller) Cancel() { c.CancelFrom("", "") }
 
 // CancelFrom is Cancel from via ("menu", "ctl"), which its stop line
 // records; id, when set, is the take the caller was shown, as StopFrom's.
-// It reports false when it cancelled nothing.
+// It reports false when it cancelled nothing, as StopFrom's.
 func (c *Controller) CancelFrom(via, id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.recordingLocked(id) {
+	if !c.endableLocked(via, id, true) {
 		return false
 	}
 	r := c.rec
 	c.rec = nil
-	c.cancelled = true
+	if r.sink == nil {
+		c.cancelled = true
+	}
 	r.cancelled = true
 	r.kind, r.via = "cancel", via
 	r.stopLine.Store(&store.Event{Ev: "stop", Kind: "cancel", Via: via})
@@ -612,7 +817,7 @@ func (c *Controller) mark(base string, e store.Event) error {
 	err := store.Append(base, e)
 	if err != nil {
 		log.Printf("session: %s record: %s: %v", filepath.Base(base), e.Ev, err)
-		c.UI.Alert(MsgRecordFailed)
+		c.UI.Alert(MsgRecordFailed())
 	}
 	return err
 }
@@ -629,28 +834,44 @@ func StoreTarget(t Target) *store.Target {
 }
 
 // The overlay's words for a take's outcomes.
-const (
-	MsgRecordFailed = "行为记录写不进去"
-	MsgEmpty        = "无语音"
-	MsgCancelled    = "已取消"
-	MsgASRFailed    = "识别失败 · 已存入历史"
-	MsgIncomplete   = "识别不完整 · 已存入历史"
-	MsgUndelivered  = "未送达 · 文字在剪贴板" // the hotkey's hint follows it
-	// MsgResendFailed: a resend of a take that has reached a target failed;
-	// the take keeps its state, so the hotkey does not take it.
-	MsgResendFailed = "送达失败 · 文字在剪贴板"
-	MsgNotSent      = "已粘贴，未发送 · "
-	MsgSaveFailed   = "录音写不进硬盘"
-	MsgStreamCut    = "录音中断"
-)
+func MsgRecordFailed() string {
+	return l10n.T("行为记录写不进去", "Can't write the take's record")
+}
+func MsgEmpty() string     { return l10n.T("无语音", "No speech") }
+func MsgCancelled() string { return l10n.T("已取消", "Cancelled") }
+func MsgASRFailed() string {
+	return l10n.T("识别失败 · 已存入历史", "Transcription failed · saved in Recordings")
+}
+func MsgIncomplete() string {
+	return l10n.T("识别不完整 · 已存入历史", "Transcription incomplete · saved in Recordings")
+}
+
+// MsgUndelivered: the hotkey's hint follows it.
+func MsgUndelivered() string {
+	return l10n.T("未送达 · 文字在剪贴板", "Not delivered · text on the clipboard")
+}
+
+// MsgResendFailed: a resend of a take that has reached a target failed;
+// the take keeps its state, so the hotkey does not take it.
+func MsgResendFailed() string {
+	return l10n.T("送达失败 · 文字在剪贴板", "Delivery failed · text on the clipboard")
+}
+func MsgNotSent() string { return l10n.T("已粘贴，未发送 · ", "Pasted, not sent · ") }
+func MsgMaybeSent() string {
+	return l10n.T("可能已发送 · 文字在剪贴板", "May have been sent · text on the clipboard")
+}
+func MsgSaveFailed() string {
+	return l10n.T("录音写不进硬盘", "Can't save the recording to disk")
+}
+func MsgStreamCut() string { return l10n.T("录音中断", "Recording cut off") }
 
 // cancelledMsg is the flash of a cancelled take d long.
 func (c *Controller) cancelledMsg(d time.Duration) string {
-	return fmt.Sprintf("%s %s · %s", MsgCancelled, Clock(d), c.hint())
+	return fmt.Sprintf("%s %s · %s", MsgCancelled(), Clock(d), c.hint())
 }
 
 // deliverFailedMsg is the alert of a take left undelivered.
-func (c *Controller) deliverFailedMsg() string { return MsgUndelivered + " · " + c.hint() }
+func (c *Controller) deliverFailedMsg() string { return MsgUndelivered() + " · " + c.hint() }
 
 // Clock writes d as m:ss.
 func Clock(d time.Duration) string {
@@ -666,10 +887,14 @@ type pending struct {
 
 // capture starts Deliver.Capture on its own goroutine, so the focus it reads
 // is the one at the tap however long it takes to answer.
-func (c *Controller) capture() *pending {
+func (c *Controller) captureWith(sink Deliverer) *pending {
+	return capture(sink.Capture)
+}
+
+func capture(f func() Target) *pending {
 	p := &pending{done: make(chan struct{})}
 	go func() {
-		p.t = c.Deliver.Capture()
+		p.t = f()
 		close(p.done)
 	}()
 	return p
@@ -692,21 +917,35 @@ func (c *Controller) releaseLater(p *pending) {
 
 // startLocked locks the target — what has focus as the tap lands — while it
 // starts the stream and opens the take's WAV; the start line is written once
-// the target is known (logStart). tapAt is the key event's time.
-func (c *Controller) startLocked(trigger string, tapAt time.Time) {
+// the target is known (logStart). tapAt is the key event's time. It returns
+// why no take started, which the overlay has shown.
+func (c *Controller) startLocked(trigger string, tapAt time.Time) error {
+	return c.startWithLocked(trigger, tapAt, nil, nil, nil)
+}
+
+func (c *Controller) startWithLocked(trigger string, tapAt time.Time, src audio.Source, sink Deliverer, captureTarget func() Target) error {
 	if msg := c.closing.Load(); msg != nil {
 		log.Printf("session: start refused: %s", *msg)
 		c.UI.Flash(*msg)
-		return
+		return fmt.Errorf("%w: %s", ErrClosing, *msg)
 	}
-	target := c.capture()
-	src := c.NewSource()
+	var target *pending
+	if sink == nil {
+		if captureTarget != nil {
+			target = capture(captureTarget)
+		} else {
+			target = c.captureWith(c.Deliver)
+		}
+		src = c.NewSource()
+	} else {
+		target = c.captureWith(sink)
+	}
 	ch, err := src.Start(context.Background())
 	if err != nil {
 		c.releaseLater(target)
 		log.Printf("session: start: %v", err)
 		c.UI.Flash(err.Error())
-		return
+		return err
 	}
 	file, err := c.Store.Begin(c.now())
 	if err != nil {
@@ -717,8 +956,8 @@ func (c *Controller) startLocked(trigger string, tapAt time.Time) {
 			}
 		}()
 		log.Printf("session: start: %v", err)
-		c.UI.Alert(MsgSaveFailed)
-		return
+		c.UI.Alert(MsgSaveFailed())
+		return fmt.Errorf("%s: %w", MsgSaveFailed(), err)
 	}
 	bt, device := false, ""
 	if d, ok := src.(audio.Described); ok {
@@ -730,6 +969,7 @@ func (c *Controller) startLocked(trigger string, tapAt time.Time) {
 	}
 	r := &take{
 		target:  target,
+		sink:    sink,
 		tapAt:   tapAt,
 		logged:  make(chan struct{}),
 		src:     src,
@@ -758,7 +998,7 @@ func (c *Controller) startLocked(trigger string, tapAt time.Time) {
 	}
 	c.last = r.next
 	c.rec = r
-	if c.NewBackup != nil {
+	if c.NewBackup != nil && sink == nil {
 		r.backup = c.startBackup(r, src)
 	}
 	start := store.Event{At: time.Now(), Ev: "start", Trigger: trigger, TapAt: tapAt, Engine: c.Engine, Model: c.Model, Build: c.Build}
@@ -796,6 +1036,7 @@ func (c *Controller) startLocked(trigger string, tapAt time.Time) {
 		log.Printf("session: %s", n.Note())
 		c.UI.Flash(n.Note())
 	}
+	return nil
 }
 
 // logStart waits for the take's target, then writes its start line and the
@@ -807,6 +1048,14 @@ func (c *Controller) logStart(r *take) {
 		c.writeStartLocked(r, StoreTarget(t))
 	}
 	r.jmu.Unlock()
+	if label, ok := t.(interface{ TargetLabel() string }); ok {
+		c.mu.Lock()
+		if r.kind == "" || r.kind == "enter" {
+			r.targetLabel = label.TargetLabel()
+		}
+		c.updateLocked()
+		c.mu.Unlock()
+	}
 	close(r.logged)
 	log.Printf("session: %s: target locked: %s, %d ms after the tap", filepath.Base(r.base), t, time.Since(r.tapAt).Milliseconds())
 }
@@ -838,13 +1087,15 @@ func (c *Controller) note(r *take, e store.Event) {
 	c.Record(r.base, e)
 }
 
-// NoSignal is the overlay's notice while the recording take's input
+// MsgNoSignal is the overlay's notice while the recording take's input
 // delivers digital silence (View.NoSignal): after audio.DeadAfter of it —
 // audio.BluetoothWarmup at the start of a take on a Bluetooth input, which
 // opens with silence — and for as long as it lasts. A denied Microphone
 // grant delivers zeros, not an error, so this is the only sign of it. The
 // take carries on; the backup track, when there is one, keeps the speech.
-const NoSignal = "无信号 — 麦克风只送来静音 · 录音继续"
+func MsgNoSignal() string {
+	return l10n.T("无信号 — 麦克风只送来静音 · 录音继续", "No signal: the mic sends only silence · still recording")
+}
 
 // stopLocked moves the recording take to the finished queue. kind is what
 // stopped it, as its stop line says (tap, enter, auto, stream_end,
@@ -852,8 +1103,13 @@ const NoSignal = "无信号 — 麦克风只送来静音 · 录音继续"
 func (c *Controller) stopLocked(kind, why string) {
 	r := c.rec
 	c.rec = nil
-	c.cancelled = false
+	if r.sink == nil {
+		c.cancelled = false
+	}
 	r.kind, r.why = kind, why
+	if kind != "enter" {
+		r.targetLabel = ""
+	}
 	r.stopLine.Store(&store.Event{Ev: "stop", Kind: kind, Why: why, Via: r.via})
 	r.stopAt = time.Now()
 	c.prevStop = r.stopAt
@@ -943,7 +1199,7 @@ func (c *Controller) record(r *take, ch <-chan []int16) int {
 			if on {
 				judged := (total + len(s)) / audio.Block // blocks the monitor has judged
 				dead = openSpan(dead, (judged-int(silent/audio.BlockDuration))*audio.Block)
-				log.Printf("session: %s: %s", filepath.Base(r.base), NoSignal)
+				log.Printf("session: %s: %s", filepath.Base(r.base), MsgNoSignal())
 				c.note(r, store.Event{Ev: "no_signal", AfterS: seconds(samplesDuration(total + len(s)))})
 			} else {
 				dead[len(dead)-1].to = total
@@ -965,7 +1221,7 @@ func (c *Controller) record(r *take, ch <-chan []int16) int {
 				log.Printf("session: write %s.wav: %v", r.base, werr)
 				c.mu.Lock()
 				if c.rec == r {
-					c.stopLocked("write_error", MsgSaveFailed)
+					c.stopLocked("write_error", MsgSaveFailed())
 				}
 				c.mu.Unlock()
 			}
@@ -1001,8 +1257,15 @@ func (c *Controller) record(r *take, ch <-chan []int16) int {
 	}
 	c.mu.Lock()
 	cut := c.rec == r // the stream ended on its own
+	r.captureErr = r.src.Err()
+	if r.captureErr != nil && !cut {
+		r.why = r.captureErr.Error()
+	}
 	if cut {
-		why := MsgStreamCut
+		why := MsgStreamCut()
+		if r.sink != nil {
+			why = "" // A phone's last record is a normal end.
+		}
 		if err := r.src.Err(); err != nil {
 			why = err.Error()
 		}
@@ -1010,8 +1273,11 @@ func (c *Controller) record(r *take, ch <-chan []int16) int {
 		c.stopLocked("stream_end", why)
 	}
 	c.mu.Unlock()
+	if r.captureErr != nil && !cut {
+		c.note(r, store.Event{Ev: "capture_error", Why: r.captureErr.Error()})
+	}
 	r.backup.stop()
-	if c.takeBackup(r, total, endSpans(dead, total, hearing.Heard(), cut)) {
+	if c.takeBackup(r, total, endSpans(dead, total, hearing.Heard(), cut || r.captureErr != nil)) {
 		return total
 	}
 	switch {
@@ -1040,8 +1306,12 @@ func Whole(n int, max time.Duration) bool {
 func (c *Controller) finish(r *take, total int) {
 	defer c.done(r)
 	c.mu.Lock()
-	why, cancelled, stopAt := r.why, r.cancelled, r.stopAt
+	why, cancelled, stopAt, captureErr := r.why, r.cancelled, r.stopAt, r.captureErr
 	c.mu.Unlock()
+	if r.backupComplete {
+		captureErr = nil // main-source diagnostics remain in the take's journal
+		why = ""
+	}
 	if r.tee != nil {
 		wav := r.base + ".wav"
 		if audio.TooShort(total) {
@@ -1049,7 +1319,7 @@ func (c *Controller) finish(r *take, total int) {
 		}
 		r.tee.End(stopAt, wav, total)
 	}
-	if audio.TooShort(total) && !r.fromBackup {
+	if audio.TooShort(total) && !r.fromBackup && !(r.sink != nil && r.src.Err() != nil) {
 		c.stitch(r)
 		if r.stream != nil {
 			r.stream.Abort()
@@ -1062,17 +1332,21 @@ func (c *Controller) finish(r *take, total int) {
 		c.Record(r.base, store.Event{Ev: "hold", Why: "empty"})
 		switch {
 		case cancelled:
-			c.UI.Flash(MsgCancelled)
+			c.UI.Flash(MsgCancelled())
 		case total == 0 && why != "":
 			c.UI.Flash(why)
 		default:
-			c.UI.Flash(MsgEmpty)
+			c.UI.Flash(MsgEmpty())
 		}
 		return
 	}
 	if cancelled {
 		c.Record(r.base, store.Event{Ev: "hold", Why: "cancelled"})
-		c.UI.Flash(c.cancelledMsg(samplesDuration(total)))
+		if r.sink != nil {
+			c.UI.Flash(l10n.T("iPhone 录音已取消 · 已存入历史", "iPhone recording cancelled · saved in Recordings"))
+		} else {
+			c.UI.Flash(c.cancelledMsg(samplesDuration(total)))
+		}
 	}
 	var streamErr error
 	var raw string
@@ -1137,6 +1411,14 @@ func (c *Controller) finish(r *take, total int) {
 	if failed > 0 {
 		log.Printf("session: %d of %d chunks failed; megavoice retranscribe %s is the retry", failed, len(r.chunks), filepath.Base(r.base))
 	}
+	saved := text
+	if c.Names != nil && c.OnChunks == nil && text != "" {
+		var ev *store.Event
+		if text, ev = c.Names(c.ctx(), text); ev != nil {
+			c.Record(r.base, *ev)
+			log.Printf("session: names %d ms, %d spans judged, %d written: %q", ev.LatencyMS, ev.N, len(ev.Names), text)
+		}
+	}
 	<-r.turn
 	unlock, _ := c.LockDelivery(0)
 	defer unlock()
@@ -1146,13 +1428,17 @@ func (c *Controller) finish(r *take, total int) {
 	switch {
 	case cancelled:
 		return
+	case r.sink != nil && r.src.Err() != nil:
+		c.Record(r.base, store.Event{Ev: "hold", Why: r.src.Err().Error()})
+		c.UI.Alert(l10n.T("iPhone 录音中断 · 已存入历史", "iPhone recording cut off · saved in Recordings"))
+		return
 	case text == "" && failed > 0:
 		c.Record(r.base, store.Event{Ev: "hold", Why: "asr_failed"})
-		c.UI.Alert(MsgASRFailed)
+		c.UI.Alert(MsgASRFailed())
 		return
 	case text == "":
 		c.Record(r.base, store.Event{Ev: "hold", Why: "empty"})
-		c.UI.Flash(MsgEmpty)
+		c.UI.Flash(MsgEmpty())
 		return
 	}
 	c.mu.Lock()
@@ -1160,29 +1446,57 @@ func (c *Controller) finish(r *take, total int) {
 	c.updateLocked()
 	c.mu.Unlock()
 	target := r.target.get()
+	if et, ok := target.(EndTarget); ok {
+		// The recording's stop chooses the destination. Enter during
+		// processing can only add Enter after an already chosen paste.
+		target = et.ForEnd(r.kind == "enter" && failed == 0 && captureErr == nil)
+	}
 	de := store.Event{Ev: "deliver", N: 1, Via: "auto", Target: StoreTarget(target), Chars: chars(text), Submit: "none", Source: "delivered"}
-	if failed > 0 { // no .txt: the record keeps the partial text
+	if failed > 0 || text != saved { // no .txt, or not its text: the record keeps what went out
 		de.Text = text
 	}
 	if !r.paste.CompareAndSwap(0, pasteBegun) { // Interrupt marked it undelivered: that stays true
 		return
 	}
-	if err := c.Deliver.Deliver(target, text); err != nil {
+	deliverer := c.Deliver
+	if r.sink != nil {
+		deliverer = r.sink
+	}
+	if err := deliverer.Deliver(target, text); err != nil {
 		r.paste.Store(0) // nothing landed
 		c.seal(r)
-		log.Printf("session: deliver to %s: %v; text left on the clipboard", target, err)
+		if r.sink != nil {
+			log.Printf("session: deliver to %s: %v; text kept in history", target, err)
+		} else {
+			log.Printf("session: deliver to %s: %v; text left on the clipboard", target, err)
+		}
 		de.Err = err.Error()
 		c.Record(r.base, de)
-		c.Record(r.base, store.Event{Ev: "hold", Why: "deliver_failed"})
-		c.UI.Alert(c.deliverFailedMsg())
+		hold := "deliver_failed"
+		if errors.Is(err, ErrMaybeSent) {
+			hold = "delivery_cut"
+		}
+		c.Record(r.base, store.Event{Ev: "hold", Why: hold})
+		switch {
+		case r.sink != nil:
+			c.UI.Alert(l10n.T("iPhone 文字未送达 · 已存入历史", "iPhone text not delivered · saved in Recordings"))
+		case errors.Is(err, ErrClipboardBusy):
+			c.UI.Alert(msgClipboardBusy())
+		case errors.Is(err, ErrUnconfirmedPaste):
+			c.UI.Alert(msgUnconfirmedPaste())
+		case errors.Is(err, ErrMaybeSent):
+			c.UI.Alert(MsgMaybeSent())
+		default:
+			c.UI.Alert(c.deliverFailedMsg())
+		}
 		return
 	}
 	de.OK = true
 	log.Printf("session: delivered to %s", target)
 	var serr error
-	if c.seal(r) {
+	if send := c.seal(r); send && failed == 0 && captureErr == nil {
 		de.Submit = "ok"
-		if serr = c.Deliver.Submit(target); serr != nil {
+		if serr = deliverer.Submit(target); serr != nil {
 			log.Printf("session: Enter to %s: %v", target, serr)
 			de.Submit, de.Err = "err", serr.Error()
 		} else {
@@ -1190,12 +1504,23 @@ func (c *Controller) finish(r *take, total int) {
 		}
 	}
 	c.Record(r.base, de)
-	c.readBack(r.base, de.N, target, text)
+	if errors.Is(serr, ErrUnconfirmedPaste) {
+		c.Record(r.base, store.Event{Ev: "hold", Why: "delivery_cut"})
+	} else if captureErr != nil {
+		c.Record(r.base, store.Event{Ev: "hold", Why: "incomplete"})
+	}
+	if r.sink == nil {
+		c.readBack(r.base, de.N, target, text)
+	}
 	switch {
+	case errors.Is(serr, ErrUnconfirmedPaste):
+		c.UI.Alert(msgUnconfirmedSend())
 	case serr != nil:
-		c.UI.Alert(MsgNotSent + serr.Error())
+		c.UI.Alert(MsgNotSent() + serr.Error())
+	case captureErr != nil:
+		c.UI.Alert(l10n.T("录音不完整 · 已粘贴未发送 · ", "Recording incomplete · pasted, not sent · ") + captureErr.Error())
 	case failed > 0:
-		c.UI.Alert(MsgIncomplete)
+		c.UI.Alert(MsgIncomplete())
 	case why != "":
 		c.UI.Flash(why)
 	}
@@ -1238,12 +1563,15 @@ func (c *Controller) done(r *take) {
 	<-r.turn
 	close(r.next)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.finished = slices.DeleteFunc(c.finished, func(t *take) bool { return t == r })
 	c.updateLocked()
 	c.omu.Lock()
 	delete(c.open, r)
 	c.omu.Unlock()
+	c.mu.Unlock()
+	if c.OnDone != nil {
+		c.OnDone(r.base)
+	}
 }
 
 // seal ends the window in which Enter can turn a paste into a send and
@@ -1515,7 +1843,22 @@ func (c *Controller) queueTake(t *take, bg bool) {
 // what changed. A cancelled take is in neither: the key tap takes no key
 // for it and the overlay shows no wait for it.
 func (c *Controller) updateLocked() {
-	p := &published{takes: c.rec != nil || len(c.finished) > 0}
+	live := slices.DeleteFunc(slices.Clone(c.finished), func(t *take) bool { return t.cancelled })
+	mine := slices.DeleteFunc(slices.Clone(live), func(t *take) bool { return t.sink != nil })
+	st, keys := phaseOf(c.rec, live), phaseOf(c.rec, mine)
+	if c.rec != nil && c.rec.sink != nil {
+		keys = phaseOf(nil, mine)
+	}
+	owner := ""
+	switch {
+	case c.rec != nil:
+		owner = ownerOf(c.rec)
+	case len(mine) > 0:
+		owner = OwnerMac
+	case len(live) > 0:
+		owner = OwnerStream
+	}
+	p := &published{takes: c.rec != nil || len(c.finished) > 0, phase: st, owner: owner, keys: keys}
 	if c.rec != nil {
 		p.id, p.recAt = filepath.Base(c.rec.base), c.rec.recAt
 	}
@@ -1525,21 +1868,8 @@ func (c *Controller) updateLocked() {
 	} else {
 		c.poke()
 	}
-	live := slices.DeleteFunc(slices.Clone(c.finished), func(t *take) bool { return t.cancelled })
-	st := Idle
-	switch {
-	case c.rec != nil:
-		st = Recording
-	case len(live) > 0:
-		st = Transcribing
-		for _, t := range live {
-			if t.delivering {
-				st = Delivering
-			}
-		}
-	}
-	if st != c.state {
-		c.state = st
+	if st != c.state || owner != c.owner || keys != c.keys {
+		c.state, c.owner, c.keys = st, owner, keys
 		if c.OnState != nil {
 			c.OnState(st)
 		}
@@ -1550,10 +1880,20 @@ func (c *Controller) updateLocked() {
 		v.Warming = c.rec.warming
 		v.NoSignal = c.rec.noSignal
 		v.Device = c.rec.device
+		v.Target = c.rec.targetLabel
+		v.Send = c.rec.send
+		if l, ok := c.rec.stream.(asr.Live); ok {
+			v.Live = l.Live
+		}
 	}
 	if n := len(live); n > 0 {
 		t := live[n-1]
-		v.Started, v.Send = t.stopAt, t.send
+		v.Delivering = t.delivering && t.send && t.targetLabel != ""
+		v.Started = t.stopAt
+		if c.rec == nil {
+			v.Send = t.send
+			v.Target = t.targetLabel
+		}
 		takes := slices.Clone(c.finished) // every one of them is ahead in the ASR queue
 		v.Estimate = func() time.Duration {
 			var p int64
@@ -1563,19 +1903,40 @@ func (c *Controller) updateLocked() {
 			return c.est.left(p)
 		}
 	}
-	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send}); k != c.shown {
+	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send, v.Target, v.Delivering}); k != c.shown {
 		c.shown = k
 		c.UI.Show(v)
 	}
+	if c.OnView != nil {
+		c.OnView(st, v)
+	}
+}
+
+// phaseOf is the phase of rec recording and live, the stopped takes still
+// on their way.
+func phaseOf(rec *take, live []*take) State {
+	if rec != nil {
+		return Recording
+	}
+	st := Idle
+	for _, t := range live {
+		st = max(st, Transcribing)
+		if t.delivering {
+			st = Delivering
+		}
+	}
+	return st
 }
 
 // viewKey is what makes one View differ from another.
 type viewKey struct {
-	rec      *take
-	warming  bool
-	noSignal bool
-	started  time.Time
-	send     bool
+	rec        *take
+	warming    bool
+	noSignal   bool
+	started    time.Time
+	send       bool
+	target     string
+	delivering bool
 }
 
 func (c *Controller) newChunker() Chunker {

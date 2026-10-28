@@ -75,8 +75,24 @@
 #                            # after one, before more Chinese text, becomes a comma. They add to the
 #                            # built-in list (就是 然后 因为 但是 而且 或者 所以)
 
+[names]
+# on = true                  # the dictation names gate: a take with a span that sounds the same as a listed
+#                            # person's name is judged by Jev, and the delivered text carries the names it accepts
+# people = "~/.config/megavoice/people.json"   # the names pull's people index, read at each take
+# key_file = "~/.config/megavoice/typesafe.key"   # the file holding the TypeSafe key (the key never goes in this file)
+# key_var = ""               # the KEY=value line in key_file that holds it; "" when the file is the key alone
+# threshold = 0.5            # an option Jev gives this probability or more is applied
+# timeout = "1500ms"         # past this the take is delivered as decoded
+
 [deliver]
 # herdr_apps = ["com.github.wez.wezterm"]   # bundle ids of the terminals herdr runs in
+
+[keypad]                     # the desk keypad: a take started while it is locked goes to the locked Telegram group/topic
+# sender = "user"            # user: the account ccc-telegram on via is logged in to, unsigned; bot: the ccc-telegram bot
+# via = ""                   # the host whose ccc-telegram holds the live session, reached by ssh; unset and no send: a locked take fails (未送达)
+# state = "~/.local/state/megavoice/keypad.json"   # the targets, the pick and the lock
+# send = []                  # an argv replacing the ssh command: {chat} {topic} {text}, the text also on stdin; exit 0 is sent.
+#                            # {text} only as a whole argv element of a program taking it as data; ssh or sh -c: read the text from stdin
 
 [store]
 # data = "~/.local/share/megavoice/utterances"   # every take's WAV and texts; default $XDG_DATA_HOME/megavoice/utterances
@@ -124,6 +140,14 @@
 # model = "claude-haiku-4-5" # a cheap model: a meeting costs well under $0.05
 # max_chars = 40000          # transcript characters sent at most; a longer meeting sends its head and tail
 
+[meeting.names]
+# command = []               # a headless Claude Code launcher the drain asks to repair person names (-p and its flags appended);
+#                            # empty runs no pass. After Process, and for a speaker resolved to a person, one call per window
+#                            # reads the people.index record; our segments' text is rewritten (raw kept), Feishu's corrections go in names.json
+# effort = "medium"          # --effort of each call; "" passes none
+# concurrency = 4            # calls at once, 1-8
+# window_chars = 200         # characters of consecutive segments one call reads
+
 [meeting.page]
 # url = ""                   # the ccc-pages service, e.g. "https://pages.example"; required when slug is set
 # slug = ""                  # the meetings page (meetings-<16 hex>); "" is no page
@@ -137,6 +161,24 @@
 
 [meeting.drain]
 # notify = []                # a program the one-line failure report is appended to, e.g. ["ccc-telegram", "sendAsBot"]; empty only logs it
+
+# The iPhone remote: a paired iPhone (and the watch through it) starts a take
+# here, stops it to paste or to paste and press Return, or cancels it. A phone
+# pairs once by scanning the QR code of the menu's iPhone 遥控…; that page
+# also lists the paired phones and revokes them. Read at start.
+[remote]
+# enabled = false            # listen for paired phones (TLS, registered over Bonjour as _megavoice-ctl._tcp)
+# listen = ":7867"           # host:port the phones reach; ":7867" is every interface
+# state = "~/.local/state/megavoice/remote"   # TLS key (0600) and paired phones, in a 0700 directory
+
+# The relay: the same remote from any network, through the Mega Voice relay
+# (one link from this Mac to its room; end-to-end sealed; needs [remote]
+# enabled). A phone pairs once more on the LAN to gain it. Read at start.
+[remote.relay]
+# enabled = false            # hold a link to the relay's room
+# url = ""                   # the relay, https://host only, e.g. "https://voice.0xtau.com"; no default
+# provision_key = ""         # file holding the relay's provision key: 64 hex characters, mode 0600
+# room_tag_key = ""          # file holding the relay's room-tag key: 64 hex characters, mode 0600
 
 # megavoice on Linux — `megavoice mic serve` records [capture] on this host
 # and serves it to the Macs paired with it (`megavoice mic pair` prints the

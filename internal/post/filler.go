@@ -62,7 +62,11 @@ func enFillers(s string) string {
 		for j < len(s) && unicode.IsSpace(firstRune(s[j:])) {
 			j += len(string(firstRune(s[j:])))
 		}
-		b.WriteString(s[pos:i])
+		segment := s[pos:i]
+		if strings.ContainsRune(".,?!", firstRune(s[j:])) {
+			segment = strings.TrimRightFunc(segment, unicode.IsSpace)
+		}
+		b.WriteString(segment)
 		pos, from = j, j
 	}
 	b.WriteString(s[pos:])
@@ -164,7 +168,7 @@ var joinRules = []struct {
 	{regexp.MustCompile(`([。？！])，`), "$1"},
 	{regexp.MustCompile(`^[，、\s\p{Z}]+`), ""},
 	{regexp.MustCompile(`[ \t]{2,}`), " "},
-	{regexp.MustCompile(` ([,.?!])`), "$1"},
+	{regexp.MustCompile(`([\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]) ([,.?!])`), "$1$2"},
 }
 
 // joinPass tidies the punctuation the deletions leave behind.

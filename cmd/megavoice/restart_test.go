@@ -124,10 +124,67 @@ func recorded(base string, n int) bool {
 	return err == nil && st.Size() >= int64(44+2*n)
 }
 
+// stepClock is restart --when-idle's clock in the test's hand: the wait
+// loop parks in sleep until the test lets one poll through, and each poll
+// moves the clock by the poll's length.
+type stepClock struct {
+	mu     sync.Mutex
+	t      time.Time
+	parked chan struct{}
+	run    chan struct{}
+}
+
+func newStepClock() *stepClock {
+	return &stepClock{t: time.Unix(0, 0), parked: make(chan struct{}), run: make(chan struct{})}
+}
+
+func (c *stepClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *stepClock) sleep(d time.Duration) {
+	c.parked <- struct{}{}
+	<-c.run
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+// waitParked returns once the wait loop has finished its last poll without
+// exiting and waits for the next.
+func (c *stepClock) waitParked(t *testing.T, codes chan int) {
+	t.Helper()
+	select {
+	case <-c.parked:
+	case n := <-codes:
+		t.Fatalf("exited %d before the quiet", n)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the wait loop never polled")
+	}
+}
+
+// step lets the wait loop take one poll.
+func (c *stepClock) step(t *testing.T, codes chan int) {
+	t.Helper()
+	c.waitParked(t, codes)
+	c.run <- struct{}{}
+}
+
 func pendingRestart(t *testing.T, c controller) (*takeCommands, chan int) {
+	t.Helper()
+	return pendingRestartOn(t, c, nil)
+}
+
+// pendingRestartOn is pendingRestart with its wait on clk; nil is the wall clock.
+func pendingRestartOn(t *testing.T, c controller, clk *stepClock) (*takeCommands, chan int) {
 	t.Helper()
 	codes := make(chan int, 2)
 	k := &takeCommands{ctrl: c, flash: func(string) {}, exit: func(n int) { codes <- n }, quiet: 100 * time.Millisecond}
+	if clk != nil {
+		k.now, k.sleep = clk.now, clk.sleep
+	}
 	resp, _ := k.handle(ctl.Request{Cmd: "restart", Args: json.RawMessage(`{"when_idle":true}`)})
 	if !resp.OK || string(resp.Data) != `{"state":"pending"}` {
 		t.Fatalf("restart --when-idle: %+v", resp)
@@ -222,17 +279,25 @@ func TestRestartWhenIdleWaitsForResend(t *testing.T) {
 		done <- de
 	}()
 	eventually(t, "the resend in flight", c.Busy)
-	_, codes := pendingRestart(t, c)
-	noExit(t, codes, 500*time.Millisecond)
+	clk := newStepClock()
+	_, codes := pendingRestartOn(t, c, clk)
+	// quiet 100 ms, a poll every 10 ms: 30 polls with the resend in flight
+	// pass three quiets without an exit
+	for range 30 {
+		clk.step(t, codes)
+	}
+	clk.waitParked(t, codes)
 	close(deliver)
 	if de := <-done; !de.OK {
 		t.Fatalf("resend %+v", de)
 	}
-	t0 := time.Now()
-	exited(t, codes)
-	if d := time.Since(t0); d < 90*time.Millisecond {
-		t.Fatalf("exited %v after the resend; the quiet is 100 ms", d)
+	// the quiet counts from the last poll that saw the resend: the 10th poll
+	// after it exits, and none before
+	clk.run <- struct{}{}
+	for range 9 {
+		clk.step(t, codes)
 	}
+	exited(t, codes)
 	if _, err := c.Resend(session.Resend{ID: "20200101-090000", To: pane("scratch"), Via: "cli"}); err == nil || err.Error() != "正在重启" {
 		t.Fatalf("a resend after the restart fired: %v", err)
 	}
@@ -249,12 +314,18 @@ func TestSignalDuringRecording(t *testing.T) {
 	eventually(t, "1 s recorded", func() bool { return recorded(base, audio.Rate) })
 	sig := make(chan os.Signal, 1)
 	codes := make(chan int, 2)
-	go onSignal(sig, c, time.Second, func(n int) { codes <- n })
+	interrupted := make(chan struct{})
+	go func() {
+		defer close(interrupted)
+		onSignal(sig, c, time.Second, func(n int) { codes <- n })
+	}()
 	sig <- syscall.SIGTERM
 	if n := <-codes; n != 75 {
 		t.Fatalf("exit %d, want 75", n)
 	}
-	time.Sleep(200 * time.Millisecond) // the take's own goroutines, which the exit would end, write nothing more
+	// The deadline can fire before Interrupt finishes its disk writes.
+	<-interrupted
+	c.Wait()
 	b, _ := os.ReadFile(base + ".wav")
 	if data := binary.LittleEndian.Uint32(b[40:]); len(b) < 44+2*audio.Rate || int(data) != len(b)-44 || binary.LittleEndian.Uint32(b[4:]) != data+36 {
 		t.Fatalf("wav %d bytes, header data %d", len(b), data)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/caoer/mega-asr/internal/audio"
 
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
 )
@@ -38,13 +39,16 @@ const (
 	labelH     = 18.0
 	devH       = 16.0 // the input's name above the waveform
 	subH       = 16.0 // the stopwatch line above that
+	liveH      = 20.0 // the live text line, between the panel and the stopwatch line
 	waveY      = labelH + 8
 	waveH      = ovH - labelH - devH - 16
 	ovFromBase = 90.0 // above the bottom of the visible frame
 )
 
 // warmingText stands in for the waveform while the input delivers nothing.
-const warmingText = "麦克风启动中… 先别说话"
+func warmingText() string {
+	return l10n.T("麦克风启动中… 先别说话", "Mic starting… don't speak yet")
+}
 
 // amber is the weak-signal bar colour, and the warming text's.
 var amber = [3]float64{1.0, 0.72, 0.2}
@@ -53,8 +57,8 @@ var amber = [3]float64{1.0, 0.72, 0.2}
 // full-screen apps, that ignores the mouse and never becomes key: the
 // recording input's name over a waveform of the last 4 s coloured by signal
 // quality — or, while that input is still waking up, a pulsing "do not speak
-// yet" — a one-line state label, and a stopwatch line on top while a take
-// transcribes. It is a dark HUD in light and dark mode alike.
+// yet" — a one-line state label, above them the text recognised so far while
+// the engine says it, and a stopwatch line on top while a take transcribes. It is a dark HUD in light and dark mode alike.
 // Methods may be called from any goroutine.
 type Overlay struct {
 	mu      sync.Mutex
@@ -65,10 +69,10 @@ type Overlay struct {
 	hideAt  *time.Timer
 
 	// main thread only
-	panel, text, sub, dev, warm objc.ID
-	bars                        [nColours]objc.ID
-	curMain, curSub, curDev     string
-	curWarm                     bool
+	panel, text, sub, dev, warm, live objc.ID
+	bars                              [nColours]objc.ID
+	curMain, curSub, curDev, curLive  string
+	curWarm                           bool
 }
 
 // Wave is a recording take as the overlay shows it; the zero Wave shows
@@ -77,6 +81,9 @@ type Wave struct {
 	Quality func() []audio.Quality // the waveform; nil: none
 	Device  string                 // the input's name; "" leaves the line empty
 	Warming bool                   // the input delivers nothing yet: say so instead of the waveform
+	// Live is the text recognised so far, shown on a line of its own above
+	// the panel, its newest end when it is too long; nil or "": no line.
+	Live func() string
 }
 
 // view is what the overlay shows; the animation goroutine gets a copy.
@@ -138,7 +145,9 @@ func (o *Overlay) build() {
 	o.dev = textLayer(root, CGRect{8, ovH - devH - 6, ovW - 16, devH}, 11, white, 0.6, scale)
 	o.sub = textLayer(root, CGRect{8, ovH - 2, ovW - 16, subH}, 11, white, 0.75, scale)
 	o.warm = textLayer(root, CGRect{12, waveY + (waveH-20)/2, ovW - 24, 20}, 15, amber, 1, scale)
-	setText(o.warm, warmingText)
+	o.live = textLayer(root, CGRect{8, ovH - 2, ovW - 16, liveH}, 13, white, 0.95, scale)
+	send(o.live, "setTruncationMode:", nsString("start")) // the newest words stay in view
+	setText(o.warm, warmingText())
 	send(o.warm, "setHidden:", true)
 	o.panel = panel
 }
@@ -156,13 +165,21 @@ func textLayer(root objc.ID, frame CGRect, size float64, rgb [3]float64, alpha, 
 }
 
 // place centres the panel near the bottom of the screen with the key window,
-// tall enough for the stopwatch line when it has one.
+// tall enough for the live text and stopwatch lines when it has them, the
+// stopwatch line on top.
 func (o *Overlay) place() {
 	scr := send(class("NSScreen"), "mainScreen")
 	if scr == 0 {
 		return
 	}
 	h := ovH
+	if o.curLive != "" {
+		h += liveH
+	}
+	send(class("CATransaction"), "begin")
+	send(class("CATransaction"), "setDisableActions:", true)
+	send(o.sub, "setFrame:", CGRect{8, h - 2, ovW - 16, subH})
+	send(class("CATransaction"), "commit")
 	if o.curSub != "" {
 		h += subH
 	}
@@ -282,6 +299,7 @@ type frame struct {
 	main, sub string
 	dev       string
 	warm      bool
+	live      string
 	pulse     float64 // the warming text's opacity
 	sw        string
 	sec       time.Duration
@@ -292,6 +310,10 @@ func (f *frame) next(v view) {
 		f.q = v.wave.Quality()
 	}
 	f.dev, f.warm = v.wave.Device, v.wave.Warming
+	f.live = ""
+	if v.wave.Live != nil {
+		f.live = v.wave.Live()
+	}
 	if f.warm {
 		f.pulse = warmPulse(time.Now())
 	}
@@ -324,8 +346,8 @@ func warmPulse(t time.Time) float64 {
 	return 0.725 + 0.275*math.Cos(2*math.Pi*ph)
 }
 
-// render updates the labels, resizing the panel when the stopwatch line comes
-// or goes, swaps the waveform and the warming text, and redraws the waveform
+// render updates the labels, resizing the panel when the live text or the
+// stopwatch line comes or goes, swaps the waveform and the warming text, and redraws the waveform
 // when wave is set.
 func (o *Overlay) render(f frame, wave bool) {
 	if f.main != o.curMain {
@@ -336,13 +358,19 @@ func (o *Overlay) render(f frame, wave bool) {
 		setText(o.dev, f.dev)
 		o.curDev = f.dev
 	}
+	resize := false
+	if f.live != o.curLive {
+		resize = (f.live == "") != (o.curLive == "")
+		setText(o.live, f.live)
+		o.curLive = f.live
+	}
 	if f.sub != o.curSub {
-		resize := (f.sub == "") != (o.curSub == "")
+		resize = resize || (f.sub == "") != (o.curSub == "")
 		setText(o.sub, f.sub)
 		o.curSub = f.sub
-		if resize {
-			o.place()
-		}
+	}
+	if resize {
+		o.place()
 	}
 	send(class("CATransaction"), "begin")
 	send(class("CATransaction"), "setDisableActions:", true)

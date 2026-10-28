@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/caoer/mega-asr/internal/app"
+	"github.com/caoer/mega-asr/internal/l10n"
 )
 
 // inputView is an input the Input menu offers: audio.Input as the menu
@@ -18,7 +18,7 @@ type inputView struct {
 
 // nextTake is the Input menu's footer: the source is read from the file as
 // each take starts, so a pick needs no restart.
-const nextTake = "Applies at the next take"
+func nextTake() string { return l10n.T("Applies at the next take", "下一条录音起生效") }
 
 // capturePick is the writes that make a local input the source: its UID,
 // its name (shown while it is not connected), its channel, then the source,
@@ -79,11 +79,11 @@ func (v voiceState) remote(name string) *remoteView {
 func (v voiceState) remoteLabel(name string) string {
 	switch r := v.remote(name); {
 	case r == nil:
-		return name + " (remote mic, not paired)"
+		return name + l10n.T(" (remote mic, not paired)", "（远程麦克风，未配对）")
 	case r.Offline:
-		return name + " (remote mic, offline)"
+		return name + l10n.T(" (remote mic, offline)", "（远程麦克风，离线）")
 	}
-	return name + " (remote mic)"
+	return name + l10n.T(" (remote mic)", "（远程麦克风）")
 }
 
 // inputName is the input takes record from, as the Input row names it.
@@ -97,20 +97,22 @@ func (v voiceState) inputName() string {
 	}
 	name := v.pinnedName()
 	if c.Mic == "default" {
-		name = "System default"
+		name = l10n.T("System default", "系统默认")
 		if d := v.defaultInput(); d != nil {
-			name += " (" + d.Name + ")"
+			name += l10n.F(" (%s)", "（%s）", d.Name)
 		}
 	} else if v.input(c.Mic) == nil {
-		name += " (not connected)"
+		name += l10n.T(" (not connected)", "（未连接）")
 	}
 	if c.MicChannel > 0 {
-		name += fmt.Sprintf(", channel %d", c.MicChannel)
+		name += l10n.F(", channel %d", "，第 %d 声道", c.MicChannel)
 	}
 	return name
 }
 
-func sshLabel(c app.CaptureConfig) string { return "Array over ssh (" + c.Host + ")" }
+func sshLabel(c app.CaptureConfig) string {
+	return l10n.F("Array over ssh (%s)", "经 ssh 的麦克风阵列（%s）", c.Host)
+}
 
 // pinnedName is the pinned input's name: the connected input's, else the
 // name the pick wrote, else its UID.
@@ -151,31 +153,31 @@ func (v voiceState) addRows() row {
 	for _, f := range v.Found {
 		var how []string
 		if f.Advertised != "" {
-			how = append(how, "advertised as "+f.Advertised)
+			how = append(how, l10n.F("advertised as %s", "广播名 %s", f.Advertised))
 		}
 		if v.remote(f.Name) != nil {
-			how = append(how, "paired")
+			how = append(how, l10n.T("paired", "已配对"))
 		}
 		if f.SSH == "" {
 			how = append(how, "PIN")
 		}
 		title := f.Name
 		if how != nil {
-			title += " (" + strings.Join(how, ", ") + ")"
+			title += l10n.F(" (%s)", "（%s）", strings.Join(how, l10n.T(", ", "，")))
 		}
 		sub = append(sub, row{title: title, enabled: ok, act: &act{kind: actPair, arg: f.Addr, key: f.SSH}})
 	}
 	switch {
 	case v.Scanning:
-		sub = append(sub, row{title: "Searching…"})
+		sub = append(sub, row{title: l10n.T("Searching…", "正在查找…")})
 	case v.Found == nil:
-		sub = append(sub, row{title: "No mic server found"})
+		sub = append(sub, row{title: l10n.T("No mic server found", "没有找到麦克风服务")})
 	}
 	if v.FoundNote != "" {
 		sub = append(sub, row{title: "⚠︎ " + trim(v.FoundNote, 90), color: "orange"})
 	}
-	sub = append(sub, row{sep: true}, row{title: "Other…", enabled: ok, act: &act{kind: actAddRemote}})
-	return row{title: "Add Remote Mic…", enabled: true, sub: sub}
+	sub = append(sub, row{sep: true}, row{title: l10n.T("Other…", "其他…"), enabled: ok, act: &act{kind: actAddRemote}})
+	return row{title: l10n.T("Add Remote Mic…", "添加远程麦克风…"), enabled: true, sub: sub}
 }
 
 // inputRows is the Input submenu: the system default, each input of this
@@ -188,9 +190,9 @@ func (v voiceState) inputRows() row {
 	pick := func(title string, on bool, sets [][2]string) row {
 		return row{title: title, enabled: ok, checked: on, act: &act{kind: actCapture, sets: sets}}
 	}
-	def := "System default"
+	def := l10n.T("System default", "系统默认")
 	if d := v.defaultInput(); d != nil {
-		def += " (" + d.Name + ")"
+		def += l10n.F(" (%s)", "（%s）", d.Name)
 	}
 	sub := []row{pick(def, local && c.Mic == "default", capturePick("default", "", 0)), {sep: true}}
 	for _, in := range v.Inputs {
@@ -199,14 +201,14 @@ func (v voiceState) inputRows() row {
 			sub = append(sub, pick(in.Name, on, capturePick(in.UID, in.Name, 0)))
 			continue
 		}
-		chans := []row{pick("All channels, mixed", on && c.MicChannel == 0, capturePick(in.UID, in.Name, 0)), {sep: true}}
+		chans := []row{pick(l10n.T("All channels, mixed", "全部声道，混合"), on && c.MicChannel == 0, capturePick(in.UID, in.Name, 0)), {sep: true}}
 		for n := 1; n <= in.Channels; n++ {
-			chans = append(chans, pick(fmt.Sprintf("Channel %d", n), on && c.MicChannel == n, capturePick(in.UID, in.Name, n)))
+			chans = append(chans, pick(l10n.F("Channel %d", "第 %d 声道", n), on && c.MicChannel == n, capturePick(in.UID, in.Name, n)))
 		}
 		sub = append(sub, row{title: in.Name, enabled: true, checked: on, sub: chans})
 	}
 	if c.Mic != "default" && v.input(c.Mic) == nil {
-		sub = append(sub, row{title: v.pinnedName() + " (not connected)", checked: local})
+		sub = append(sub, row{title: v.pinnedName() + l10n.T(" (not connected)", "（未连接）"), checked: local})
 	}
 	if c.Host != "" && c.Device != "" {
 		sub = append(sub, row{sep: true}, pick(sshLabel(c), c.Source == "ssh", [][2]string{{"capture.source", `"ssh"`}}))
@@ -222,8 +224,8 @@ func (v voiceState) inputRows() row {
 	}
 	sub = append(sub, v.addRows())
 	if forget != nil {
-		sub = append(sub, row{title: "Forget Remote Mic", enabled: ok, sub: forget})
+		sub = append(sub, row{title: l10n.T("Forget Remote Mic", "移除远程麦克风"), enabled: ok, sub: forget})
 	}
-	sub = append(sub, row{sep: true}, row{title: nextTake})
-	return row{title: "Input: " + v.inputName(), enabled: true, sub: sub}
+	sub = append(sub, row{sep: true}, row{title: nextTake()})
+	return row{title: l10n.T("Input: ", "输入：") + v.inputName(), enabled: true, sub: sub}
 }

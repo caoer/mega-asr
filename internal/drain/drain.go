@@ -69,6 +69,10 @@ type Stages struct {
 	// record's `ingest` key carries it; ok is false while there is none.
 	// Nil mirrors nothing.
 	IngestStatus func(id string) (status map[string]any, ok bool)
+	// Names repairs person names in the transcripts pulled into dir: every
+	// window when focus is nil, else the windows that may name one of the
+	// focus people (person slugs). Nil runs none ([meeting.names]).
+	Names func(ctx context.Context, id, dir string, rec map[string]any, focus []string) (Patch, error)
 	// Resolve turns the speakers named by hand on record id (raw), role →
 	// name, into wiki person pages: one row per name, person "" when the
 	// name is ambiguous. Nil resolves none ([meeting.ingest] people_resolve).
@@ -89,6 +93,10 @@ type Drain struct {
 	// PeopleRetry is how long a failed resolve of a named speaker waits
 	// before the next.
 	PeopleRetry time.Duration
+	// AnnexBackoff is how long an ingest that failed copying the audio to
+	// the annex remote (reason annex) waits before each try again; once they
+	// are spent the next such failure fails the record. Empty fails at once.
+	AnnexBackoff []time.Duration
 
 	// IngestSources are the sources whose records the ingest takes on its
 	// own; others rest at aligned until a reingest action asks for it.
@@ -113,18 +121,41 @@ type Drain struct {
 }
 
 // New is a drain with the default timings: a 30 min lease renewed every
-// 5 min, uploads abandoned after 24 h, swept hourly.
+// 5 min, uploads abandoned after 24 h, swept hourly, an annex failure tried
+// again after 10 min, 1 h and 6 h.
 func New(reg Registry, st Stages, by string) *Drain {
 	return &Drain{Reg: reg, Stages: st, By: by, IngestSources: []string{"mac", "room", "phone", "file"},
 		Lease: 30 * time.Minute, Beat: 5 * time.Minute, Abandon: 24 * time.Hour, Sweep: time.Hour,
-		Mirror: 15 * time.Second, PeopleRetry: time.Hour, Now: time.Now}
+		Mirror: 15 * time.Second, PeopleRetry: time.Hour,
+		AnnexBackoff: []time.Duration{10 * time.Minute, time.Hour, 6 * time.Hour}, Now: time.Now}
+}
+
+// IngestError is an ingest that failed with the reason the ingest command gave
+// for it (annex, claude, budget, gates, ...).
+type IngestError struct {
+	Reason string
+	Err    error
+}
+
+func (e *IngestError) Error() string { return e.Err.Error() }
+func (e *IngestError) Unwrap() error { return e.Err }
+
+// Retry is a record's scheduled try again of a job that failed for a reason
+// that passes (the record's `retry` key): Job runs once At is past; N is
+// the tries scheduled so far.
+type Retry struct {
+	Reason string    `json:"reason"`
+	Job    string    `json:"job"`
+	N      int       `json:"n"`
+	At     time.Time `json:"at"`
+	Error  string    `json:"error"`
 }
 
 // Result is what a tick did with one queued record.
 type Result struct {
 	ID      string  `json:"id"`
-	Job     string  `json:"job,omitempty"` // full | realign | reingest | ingest
-	Outcome string  `json:"outcome"`       // aligned | ingested | parked | failed | lost | skipped | removed
+	Job     string  `json:"job,omitempty"` // full | realign | reingest | ingest | names
+	Outcome string  `json:"outcome"`       // aligned | ingested | parked | retry | failed | lost | skipped | removed
 	Error   string  `json:"error,omitempty"`
 	Secs    float64 `json:"secs,omitempty"`
 }
@@ -149,7 +180,8 @@ type State struct {
 }
 
 // Tick runs one pass: the abandoned sweep when due, the named speakers'
-// people when Resolve is set, then every queued record once, newest first.
+// people when Resolve is set (and the names passes they owe when Names is),
+// then every queued record once, newest first.
 func (d *Drain) Tick(ctx context.Context) (Run, error) {
 	st := d.load()
 	run := Run{By: d.By, Started: d.Now()}
@@ -160,7 +192,7 @@ func (d *Drain) Tick(ctx context.Context) (Run, error) {
 			st.LastSweep = d.Now()
 		}
 	}
-	if d.Stages.Resolve != nil {
+	if d.Stages.Resolve != nil || d.Stages.Names != nil {
 		st.People = d.people(ctx, st.People)
 	}
 	// Newest first, the queue listed again after each record: a meeting
@@ -225,6 +257,7 @@ type view struct {
 		Expires time.Time `json:"expires"`
 	} `json:"claim"`
 	Wiki      *Wiki   `json:"wiki"`
+	Retry     *Retry  `json:"retry"`
 	Updated   string  `json:"updated"`
 	Started   string  `json:"started"`
 	DurationS float64 `json:"duration_s"`
@@ -258,8 +291,14 @@ func (d *Drain) job(v view) (job, why string) {
 		return "realign", ""
 	case v.Action == "reingest" && after:
 		return "reingest", ""
+	case v.Action == "names" && after:
+		return "names", ""
 	case v.Action != "":
 		return "full", ""
+	case v.retrying() && now.Before(v.Retry.At):
+		return "", fmt.Sprintf("%s: try %d at %s", v.Retry.Reason, v.Retry.N, v.Retry.At.Format(time.RFC3339))
+	case v.retrying():
+		return v.Retry.Job, ""
 	case v.State == "uploaded":
 		return "full", ""
 	case v.State == "processing":
@@ -268,6 +307,34 @@ func (d *Drain) job(v view) (job, why string) {
 		return "ingest", "" // died while ingesting
 	}
 	return "", "state " + v.State
+}
+
+// retrying says whether v waits on a scheduled try again.
+func (v view) retrying() bool {
+	return v.Retry != nil && v.Retry.Job != "" && v.State != "failed"
+}
+
+// retry is the try again an ingest that failed with werr in job on v owes:
+// a failure copying the audio to the annex remote is tried again after each
+// AnnexBackoff in turn, counted from the record's last scheduled try, or
+// from none when a page action asked for this run. ok is false when it owes
+// none: the record fails.
+func (d *Drain) retry(v view, job string, werr error) (r Retry, ok bool) {
+	var ie *IngestError
+	if !errors.As(werr, &ie) || ie.Reason != "annex" {
+		return r, false
+	}
+	n := 0
+	if v.Retry != nil && v.Action == "" {
+		n = v.Retry.N
+	}
+	if n >= len(d.AnnexBackoff) {
+		return r, false
+	}
+	if job != "reingest" {
+		job = "ingest"
+	}
+	return Retry{Reason: ie.Reason, Job: job, N: n + 1, At: d.Now().Add(d.AnnexBackoff[n]).UTC(), Error: oneLine(werr.Error())}, true
 }
 
 // one claims queued record id and runs its job.
@@ -292,7 +359,7 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 	job, why := d.job(v)
 	if job == "" {
 		res.Outcome, res.Error = "skipped", why
-		if v.State == "deleted" || v.Claim == nil && v.Action == "" && (v.State == "ingested" || v.State == "failed" || v.State == "aligned") {
+		if v.State == "deleted" || v.Claim == nil && v.Action == "" && !v.retrying() && (v.State == "ingested" || v.State == "failed" || v.State == "aligned") {
 			d.unqueue(ctx, id) // nothing left to do: a stale queue key
 			res.Outcome = "removed"
 		}
@@ -313,7 +380,7 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 	if job == "full" {
 		raw["state"], raw["stage"] = "processing", "pull"
 	} else {
-		raw["stage"] = map[string]string{"realign": "align", "reingest": "ingest", "ingest": "ingest"}[job]
+		raw["stage"] = map[string]string{"realign": "align", "reingest": "ingest", "ingest": "ingest", "names": "names"}[job]
 	}
 	raw["updated"] = at
 	if _, err := d.Reg.CAS(ctx, key, recSchema, raw, o.Version); err != nil {
@@ -352,20 +419,47 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 		}
 		return res
 	}
+	if werr != nil && stage == "ingest" {
+		if r, ok := d.retry(v, job, werr); ok {
+			// The record keeps its state and its q.<id>; job() takes it again
+			// once r.At is past.
+			res.Outcome, res.Error = "retry", werr.Error()
+			if err := c.write(ctx, func(raw map[string]any) error {
+				raw["retry"] = r
+				delete(raw, "stage")
+				delete(raw, "claim")
+				return nil
+			}); err != nil {
+				res.Error += "; and the retry was not written: " + err.Error()
+				return res
+			}
+			d.logf("%s: %s failure: try %d of %d at %s", key, r.Reason, r.N, len(d.AnnexBackoff), r.At.Format(time.RFC3339))
+			return res
+		}
+	}
 	if werr != nil {
 		res.Outcome, res.Error = "failed", werr.Error()
+		msg := werr.Error()
+		var ie *IngestError
+		if v.Retry != nil && v.Action == "" && errors.As(werr, &ie) && ie.Reason == v.Retry.Reason {
+			msg += fmt.Sprintf(" (tried again %d times)", v.Retry.N)
+		}
 		if err := c.write(ctx, func(raw map[string]any) error {
-			raw["state"], raw["stage"], raw["error"] = "failed", stage, werr.Error()
+			raw["state"], raw["stage"], raw["error"] = "failed", stage, msg
 			delete(raw, "claim")
+			delete(raw, "retry")
 			return nil
 		}); err != nil {
 			res.Error += "; and the failed state was not written: " + err.Error()
 		}
 		d.unqueue(ctx, id)
-		d.notify(fmt.Sprintf("megameet: %s failed at %s: %s (%s)", title(v), stage, oneLine(werr.Error()), d.By))
+		d.notify(fmt.Sprintf("megameet: %s failed at %s: %s (%s)", title(v), stage, oneLine(msg), d.By))
 		return res
 	}
 	res.Outcome = fin.outcome
+	// A job that runs no ingest (realign, names) leaves a pending retry and
+	// its q.<id> in place: the ingest it owes is still owed.
+	owed := v.retrying() && (job == "realign" || job == "names")
 	if err := c.write(ctx, func(raw map[string]any) error {
 		if fin.patch != nil {
 			if err := fin.patch(raw); err != nil {
@@ -375,6 +469,9 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 		if fin.state != "" {
 			raw["state"] = fin.state
 		}
+		if !owed {
+			delete(raw, "retry")
+		}
 		delete(raw, "stage")
 		delete(raw, "claim")
 		return nil
@@ -382,7 +479,7 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 		res.Outcome, res.Error = "failed", "final write: "+err.Error()
 		return res
 	}
-	if fin.unqueue {
+	if fin.unqueue && !owed {
 		d.unqueue(ctx, id)
 	}
 	return res
@@ -421,6 +518,18 @@ func (d *Drain) work(ctx context.Context, c *claim, job string, v view) (finish,
 			return finish{}, "align", err
 		}
 		return finish{patch: p, outcome: "realigned", unqueue: true}, "", nil
+	case "names":
+		if st.Names == nil {
+			return finish{outcome: "parked", unqueue: true}, "", nil
+		}
+		dir, err := st.Pull(ctx, v.ID)
+		if err != nil {
+			return finish{}, "pull", err
+		}
+		if err := d.names(ctx, c, v, dir, false); err != nil {
+			return finish{}, "names", err
+		}
+		return finish{outcome: "names", unqueue: true}, "", nil
 	case "reingest", "ingest":
 		if v.Test {
 			return finish{patch: skipped(testWhy), outcome: "parked", unqueue: true}, "", nil
@@ -437,6 +546,9 @@ func (d *Drain) work(ctx context.Context, c *claim, job string, v view) (finish,
 				return finish{patch: skipped(why), outcome: "parked", unqueue: true}, "", nil
 			}
 		}
+		if err := d.names(ctx, c, v, dir, false); err != nil {
+			return finish{}, "names", err
+		}
 		return d.ingest(ctx, c, dir, job == "reingest")
 	}
 	dir, err := st.Pull(ctx, v.ID)
@@ -448,6 +560,9 @@ func (d *Drain) work(ctx context.Context, c *claim, job string, v view) (finish,
 	}
 	if err := st.Process(ctx, v.ID, dir); err != nil {
 		return finish{}, "asr", err
+	}
+	if err := d.names(ctx, c, v, dir, true); err != nil {
+		return finish{}, "names", err
 	}
 	d.summarize(ctx, c, v, dir)
 	if err := c.write(ctx, stageTo("align")); err != nil {
@@ -491,6 +606,57 @@ func (d *Drain) work(ctx context.Context, c *claim, job string, v view) (finish,
 	return d.ingest(ctx, c, dir, false)
 }
 
+// names runs the names pass on the claimed record when it owes one (all
+// is a fresh transcript: every window) and writes its summary. A pass that
+// fails is logged and reported, never the record's: the text stays as it
+// was and the next job tries again; a refusal by the model's account is in
+// the summary. Only a lost claim or a stop is returned.
+func (d *Drain) names(ctx context.Context, c *claim, v view, dir string, all bool) error {
+	if d.Stages.Names == nil {
+		return nil
+	}
+	err := d.namesOnce(ctx, c, v, dir, all)
+	if err == nil || errors.Is(err, errLost) || ctx.Err() != nil {
+		return err
+	}
+	d.logf("%s: names: %v", c.key, err)
+	d.notify(fmt.Sprintf("megameet: %s: names not corrected: %s (%s)", title(v), oneLine(err.Error()), d.By))
+	return nil
+}
+
+func (d *Drain) namesOnce(ctx context.Context, c *claim, v view, dir string, all bool) error {
+	o, err := d.Reg.Record(ctx, c.key)
+	if err != nil {
+		return err
+	}
+	raw, _, err := decode(o)
+	if err != nil {
+		return err
+	}
+	pending, focus := NamesPending(raw)
+	if all {
+		pending, focus = true, nil
+	}
+	if !pending {
+		return nil
+	}
+	if err := c.write(ctx, stageTo("names")); err != nil {
+		return err
+	}
+	p, err := d.Stages.Names(ctx, v.ID, dir, raw, focus)
+	if err != nil {
+		return err
+	}
+	stage := raw["stage"] // the job's own stage, back once the pass is done
+	return c.write(ctx, func(r map[string]any) error {
+		if err := p(r); err != nil {
+			return err
+		}
+		r["stage"] = stage
+		return nil
+	})
+}
+
 // summarize writes the processed meeting's display title, labels and
 // summary before the ingest reads the record. A failure is logged and
 // reported, never the record's: what it would write stays absent.
@@ -520,7 +686,8 @@ func (d *Drain) summarize(ctx context.Context, c *claim, v view, dir string) {
 	d.notify(fmt.Sprintf("megameet: %s not titled or summarized: %s (%s)", title(v), oneLine(err.Error()), d.By))
 }
 
-// ingest runs the ingest, once more after a failure, and writes wiki.
+// ingest runs the ingest, once more after a failure that is not the annex
+// copy's (one tries again on AnnexBackoff), and writes wiki.
 func (d *Drain) ingest(ctx context.Context, c *claim, dir string, replace bool) (finish, string, error) {
 	var w Wiki
 	var err error
@@ -540,7 +707,8 @@ func (d *Drain) ingest(ctx context.Context, c *claim, dir string, replace bool) 
 			break
 		}
 		d.logf("%s: ingest attempt %d: %v", c.key, try+1, err)
-		if ctx.Err() != nil {
+		var ie *IngestError
+		if ctx.Err() != nil || errors.As(err, &ie) && ie.Reason == "annex" && len(d.AnnexBackoff) > 0 {
 			break
 		}
 	}

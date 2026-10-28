@@ -286,7 +286,7 @@ A delivery's error is herdr's or the system's words as the record keeps them, an
 | `herdr socket: …`, herdr's CLI not found or refused | `herdr 没有运行` |
 | `no app was frontmost` | `当时没有前台应用` |
 | `<App> (pid N) has quit`, `no running application with pid N` | `<App> 已经退出`, `应用已经退出` |
-| `<App> did not take focus within …` | `<App> 没有切到前台` |
+| `<App> did not take focus within …` | `<App> 没能回到原来的窗口和输入框` |
 | `<App> lost focus before Enter` | `粘贴后 <App> 失去了焦点` |
 | `another delivery is under way` | `另一条正在送达，等它完成再发` |
 | `no space left on device`, `permission denied` | `磁盘满了`, `没有写入的权限` |

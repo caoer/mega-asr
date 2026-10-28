@@ -1,0 +1,17 @@
+{
+  "about": "A Mac that does not acknowledge a peer within 1.5 s: the phone gets peer false, the Mac socket is closed 1012 as half-open, and with it every phone socket.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"advance_ms": 1400},
+    {"expect": {"as": "p1", "nothing": true}},
+    {"advance_ms": 101},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": false}}},
+    {"expect": {"as": "mac", "close": 1012}},
+    {"expect": {"as": "p1", "close": 1012}}
+  ]
+}

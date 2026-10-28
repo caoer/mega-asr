@@ -57,13 +57,19 @@ func ParseCorrections(r io.Reader) (Corrections, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
+	c.order()
+	return c, nil
+}
+
+// order puts longer patterns first and, of two the same length, the
+// exact-case one first.
+func (c Corrections) order() {
 	sort.SliceStable(c, func(i, j int) bool {
 		if len(c[i].From) != len(c[j].From) {
 			return len(c[i].From) > len(c[j].From)
 		}
 		return !folds(c[i].From) && folds(c[j].From)
 	})
-	return c, nil
 }
 
 func folds(s string) bool { return !strings.ContainsFunc(s, unicode.IsUpper) }
@@ -125,24 +131,39 @@ func hanBeside(s string, i, j int) bool {
 	return unicode.Is(unicode.Han, r1) || unicode.Is(unicode.Han, r2)
 }
 
-// CorrectionsFile is a Stage that reads the table at path on every call, so
-// an edit takes effect at the next utterance. A missing file corrects
-// nothing; a malformed one is logged and skipped.
+// CorrectionsFile is CorrectionsFiles over the one path.
 func CorrectionsFile(path string) Stage {
+	return CorrectionsFiles(func() []string { return []string{path} })
+}
+
+// CorrectionsFiles is a Stage that reads the tables paths names on every
+// call and applies them as one table, so an edit, a new file or a removed
+// one takes effect at the next utterance. A missing file corrects nothing; a
+// malformed one is logged and skipped, and the others still apply.
+func CorrectionsFiles(paths func() []string) Stage {
 	return func(s string) string {
-		f, err := os.Open(path)
-		if err != nil {
-			if !os.IsNotExist(err) {
-				log.Printf("post: corrections: %v", err)
+		var all Corrections
+		for _, path := range paths() {
+			c, err := readCorrections(path)
+			if err != nil {
+				log.Printf("post: corrections %s: %v", path, err)
+				continue
 			}
-			return s
+			all = append(all, c...)
 		}
-		defer f.Close()
-		c, err := ParseCorrections(f)
-		if err != nil {
-			log.Printf("post: corrections %s: %v", path, err)
-			return s
-		}
-		return c.Apply(s)
+		all.order()
+		return all.Apply(s)
 	}
+}
+
+func readCorrections(path string) (Corrections, error) {
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return ParseCorrections(f)
 }

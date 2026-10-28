@@ -1,4 +1,4 @@
-import type { Segment } from "../types";
+import type { NameMark, Segment } from "../types";
 
 const CJK = /[　-鿿豈-﫿]/;
 export const joinText = (a: string, b: string) => (!a ? b : !b ? a : CJK.test(a.slice(-1)) || CJK.test(b[0]) ? a + b : `${a} ${b}`);
@@ -9,6 +9,8 @@ export interface Turn {
   end: number;
   text: string;
   raw: string | null;
+  /** Names the names pass wrote into the turn's text. */
+  names: NameMark[];
 }
 
 const TURN_CHARS = 160;
@@ -23,8 +25,9 @@ export function turnsOf(segs: Segment[]): Turn[] {
     if (last && last.speaker === s.speaker && s.start - last.end < 3 && last.text.length + text.length <= TURN_CHARS) {
       last.text = joinText(last.text, text);
       if (s.raw) last.raw = joinText(last.raw ?? "", s.raw.trim());
+      if (s.names?.length) last.names = [...last.names, ...s.names];
       last.end = s.end;
-    } else out.push({ speaker: s.speaker, start: s.start, end: s.end, text, raw: s.raw ?? null });
+    } else out.push({ speaker: s.speaker, start: s.start, end: s.end, text, raw: s.raw ?? null, names: s.names ?? [] });
   }
   return out;
 }
@@ -74,5 +77,42 @@ export function splitMatches(text: string, q: string): { t: string; hit: boolean
     i = j + needle.length;
   }
   if (i < text.length) out.push({ t: text.slice(i), hit: false });
+  return out;
+}
+
+/** A piece of turn text: plain, or a name that opens a person's page. */
+export interface NamePart {
+  t: string;
+  /** The person's slug, when this piece is a name. */
+  person?: string;
+  /** What the transcript had here before the names pass, when it changed it. */
+  heard?: string;
+}
+
+/**
+ * Split text into names and plain pieces. The names are those the names pass
+ * wrote (marks, with what was heard) and the full names of known people
+ * (names: text → slug); the longest match wins at each place.
+ */
+export function nameParts(text: string, marks: NameMark[], names: Map<string, string>): NamePart[] {
+  const terms = new Map<string, { person: string; heard?: string }>();
+  for (const [t, person] of names) if (t.length >= 2) terms.set(t, { person });
+  for (const m of marks) if (m.text) terms.set(m.text, { person: m.person, heard: m.heard });
+  if (!terms.size) return [{ t: text }];
+  const keys = [...terms.keys()].sort((a, b) => b.length - a.length);
+  const out: NamePart[] = [];
+  let plain = "";
+  for (let i = 0; i < text.length; ) {
+    const k = keys.find((x) => text.startsWith(x, i));
+    if (!k) {
+      plain += text[i++];
+      continue;
+    }
+    if (plain) out.push({ t: plain });
+    plain = "";
+    out.push({ t: k, ...terms.get(k)! });
+    i += k.length;
+  }
+  if (plain) out.push({ t: plain });
   return out;
 }

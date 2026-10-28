@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -21,10 +22,10 @@ import (
 // appended. The Chinese ones are shown on the page as they are.
 var (
 	ErrNoTake         = errors.New("no such take")
-	ErrRecording      = errors.New("还在录音")
-	ErrTranscribing   = errors.New("还在识别")
-	ErrResending      = errors.New("这条正在重发")
-	ErrRetranscribing = errors.New("这条正在重新识别")
+	ErrRecording      = l10n.Err("还在录音", "Still recording")
+	ErrTranscribing   = l10n.Err("还在识别", "Still transcribing")
+	ErrResending      = l10n.Err("这条正在重发", "This take is being resent")
+	ErrRetranscribing = l10n.Err("这条正在重新识别", "This take is being re-transcribed")
 	ErrNoText         = errors.New("no text")
 	ErrNotNamed       = errors.New("the config does not name this cloud engine")
 )
@@ -166,36 +167,56 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 		log.Printf("session: resend %s to %s: %v; text left on the clipboard", name, q.To, err)
 		de.At, de.Err = time.Now(), err.Error()
 		rerr := c.Record(base, de)
-		msg := MsgResendFailed
+		msg := MsgResendFailed()
 		if !reached {
 			msg = c.deliverFailedMsg()
 			if rerr == nil {
-				rerr = c.Record(base, store.Event{Ev: "hold", Why: "deliver_failed"})
+				hold := "deliver_failed"
+				if errors.Is(err, ErrMaybeSent) {
+					hold = "delivery_cut"
+				}
+				rerr = c.Record(base, store.Event{Ev: "hold", Why: hold})
 			}
+		}
+		if errors.Is(err, ErrMaybeSent) {
+			msg = MsgMaybeSent()
+		}
+		if errors.Is(err, ErrUnconfirmedPaste) {
+			msg = msgUnconfirmedPaste()
+		}
+		if errors.Is(err, ErrClipboardBusy) {
+			msg = msgClipboardBusy()
 		}
 		c.UI.Alert(msg)
 		return de, unrecorded(rerr, "the delivery failed: "+de.Err)
 	}
 	de.OK = true
-	verb := "已粘贴"
+	verb := l10n.T("已粘贴", "Pasted")
+	unconfirmed := false
 	switch {
 	case copyOnly(q.To):
-		verb = "已复制"
+		verb = l10n.T("已复制", "Copied")
 	case q.Send:
 		de.Submit = "ok"
 		if err := c.Deliver.Submit(q.To); err != nil {
 			log.Printf("session: resend %s: Enter to %s: %v", name, q.To, err)
 			de.Submit, de.Err = "err", err.Error()
+			unconfirmed = errors.Is(err, ErrUnconfirmedPaste)
 		} else {
-			verb = "已发送"
+			verb = l10n.T("已发送", "Sent")
 		}
 	}
 	de.At = time.Now()
 	rerr := c.Record(base, de)
+	if unconfirmed && rerr == nil {
+		rerr = c.Record(base, store.Event{Ev: "hold", Why: "delivery_cut"})
+	}
 	c.readBack(base, n, q.To, text)
 	log.Printf("session: resent %s to %s (%s, %d characters, n %d)", name, q.To, source, de.Chars, n)
-	if de.Err != "" {
-		c.UI.Alert(MsgNotSent + de.Err)
+	if unconfirmed {
+		c.UI.Alert(msgUnconfirmedSend())
+	} else if de.Err != "" {
+		c.UI.Alert(MsgNotSent() + de.Err)
 	} else {
 		c.UI.Flash(resentMsg(verb, evs, text, where))
 	}
@@ -233,7 +254,7 @@ func resentMsg(verb string, evs []store.Event, text, where string) string {
 	if len(head) > 10 {
 		head = append(head[:10], '…')
 	}
-	return fmt.Sprintf("%s「%s」→ %s", msg, string(head), where)
+	return l10n.F("%s「%s」→ %s", "%s “%s” → %s", msg, string(head), where)
 }
 
 // textOf is the take's text of the kind named (Resend's Text) and the
@@ -455,4 +476,17 @@ func (c *Controller) decodeQueued(ctx context.Context, base, dir string, s []int
 		return raw, fmt.Errorf("%d of %d chunks failed: %v", failed, len(t.chunks), first)
 	}
 	return raw, nil
+}
+
+// The alerts of a delivery left unconfirmed.
+func msgClipboardBusy() string {
+	return l10n.T("上段粘贴尚未确认 · 本段文字已存入历史", "Last paste not confirmed yet · this text is saved in Recordings")
+}
+
+func msgUnconfirmedPaste() string {
+	return l10n.T("粘贴未确认 · 未发送 · 文字在剪贴板", "Paste not confirmed · not sent · text on the clipboard")
+}
+
+func msgUnconfirmedSend() string {
+	return l10n.T("原输入框未确认 · 未发送 · 文字在剪贴板", "Couldn't confirm the original field · not sent · text on the clipboard")
 }

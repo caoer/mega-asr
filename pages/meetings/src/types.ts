@@ -159,4 +159,24 @@ export interface Segment {
   end: number;
   text: string;
   raw?: string | null;
+  /** Its place in the file as written (the names pass keys on it). */
+  idx?: number;
+  /** Names the names pass wrote into `text`. */
+  names?: NameMark[];
+}
+
+/** One name the drain's names pass wrote: what stands in the text, the person's slug, and what the transcript had. */
+export interface NameMark {
+  text: string;
+  person: string;
+  heard: string;
+}
+
+/** One text the names pass changed (`names.json`, schema names@1). */
+export interface NamesChange {
+  src: "ours" | "feishu";
+  i: number;
+  before: string;
+  text: string;
+  names: NameMark[];
 }

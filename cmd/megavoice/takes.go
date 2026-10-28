@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/ctl"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/takes"
 )
 
@@ -47,11 +48,20 @@ func pageURL(addr string, err error) (page, note string) {
 	case addr != "":
 		return keyedURL(addr, "/takes/"), ""
 	case errors.Is(err, syscall.EADDRINUSE):
-		return "", "端口被别的程序占用，录音历史打不开"
+		return "", l10n.T("端口被别的程序占用，录音历史打不开", "Another program holds the port, so Recordings can't open")
 	case err != nil:
-		return "", "录音历史打不开：" + err.Error()
+		return "", l10n.T("录音历史打不开：", "Recordings can't open: ") + err.Error()
 	}
 	return "", ""
+}
+
+// phonePageURL is the menu's iPhone pairing page address, with the key, on
+// the listener this process holds at addr; "" with none held.
+func phonePageURL(addr string, _ error) string {
+	if addr == "" {
+		return ""
+	}
+	return keyedURL(addr, "/takes/pair.html")
 }
 
 // takesCmd is `megavoice takes url [--rotate]`: the Takes page's address,

@@ -2,10 +2,12 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClean(t *testing.T) {
@@ -31,9 +33,9 @@ func TestClean(t *testing.T) {
 func TestHotwordArgs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hotwords.txt")
-	list := "levain\n# a note\n\tbanneton \nproof, bake\n\n"
+	list := "levain\n# a note\n\tbanneton \nproof, bake\n\nlevain\n"
 	for i := 0; i < MaxHotwords; i++ {
-		list += "t\n"
+		list += "t" + strings.Repeat("x", i) + "\n"
 	}
 	if err := os.WriteFile(path, []byte(list), 0o644); err != nil {
 		t.Fatal(err)
@@ -64,5 +66,45 @@ func TestHotwordArgs(t *testing.T) {
 	whole := FunASR{Root: "/m", VADGPU: true}.command(context.Background(), "a.wav", true)
 	if got := strings.Join(whole.Args, " "); strings.Contains(got, "--vad") {
 		t.Errorf("a whole request still runs the VAD: %q", got)
+	}
+}
+
+// ReadHotwords over several files is one list: a term the first file holds
+// is not repeated, and the cap applies after the merge.
+func TestReadHotwordsMerged(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "hotwords.txt"), filepath.Join(dir, "names.txt")
+	list := "levain\n"
+	for i := 1; i < MaxHotwords; i++ {
+		list += "t" + strings.Repeat("x", i) + "\n"
+	}
+	if err := os.WriteFile(a, []byte("levain\nbanneton\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte(list), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hw := ReadHotwords(a, filepath.Join(dir, "absent.txt"), b)
+	if len(hw) != MaxHotwords || hw[0] != "levain" || hw[1] != "banneton" || hw[2] != "tx" {
+		t.Fatalf("ReadHotwords: %d terms, first %q", len(hw), hw[:3])
+	}
+}
+
+func TestExecDeadlineAndNextRequest(t *testing.T) {
+	root := t.TempDir()
+	os.MkdirAll(filepath.Join(root, "bin"), 0755)
+	bin := filepath.Join(root, "bin", "llama-funasr-cli")
+	os.WriteFile(bin, []byte("#!/bin/sh\nexec sleep 30\n"), 0755)
+	f := FunASR{Root: root, timeout: 30 * time.Millisecond}
+	start := time.Now()
+	if _, err := f.Transcribe(context.Background(), "missing.wav", true); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline: %v", err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("exec did not release worker")
+	}
+	os.WriteFile(bin, []byte("#!/bin/sh\necho next\n"), 0755)
+	if text, err := f.Transcribe(context.Background(), "missing.wav", true); err != nil || text != "next" {
+		t.Fatalf("next request: %q %v", text, err)
 	}
 }

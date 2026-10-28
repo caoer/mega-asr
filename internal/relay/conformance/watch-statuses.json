@@ -1,0 +1,25 @@
+{
+  "about": "A verified request the Mac cannot answer: no reply in 5 s is 504; no peer_ack in 1.5 s is 503 and the Mac socket closes 1012; no Mac at all is 503.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s1", "body_of": "w1"}}},
+    {"advance_ms": 4900},
+    {"expect": {"as": "w1", "nothing": true}},
+    {"advance_ms": 101},
+    {"expect": {"as": "w1", "status": 504}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "watch", "key": "@watch1", "up": false, "oneshot": true}}},
+
+    {"post": {"as": "w2", "room": "main", "request": {"key": "watch1", "nonce": "n2"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+    {"advance_ms": 1501},
+    {"expect": {"as": "w2", "status": 503}},
+    {"expect": {"as": "mac", "close": 1012}},
+
+    {"post": {"as": "w3", "room": "main", "request": {"key": "watch1", "nonce": "n3"}}},
+    {"expect": {"as": "w3", "status": 503}}
+  ]
+}

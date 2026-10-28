@@ -1,0 +1,5 @@
+/* What a person sees. scripts/bundle.sh writes the build’s name over each name placeholder. */
+"CFBundleName" = "@NAME@";
+"CFBundleDisplayName" = "@NAME@";
+"NSMicrophoneUsageDescription" = "Records your voice to transcribe it where you are typing.";
+"NSLocalNetworkUsageDescription" = "Finds and connects to remote mics on your network, such as a mic array plugged into another computer, and lets your paired iPhone find it to start and stop recording.";

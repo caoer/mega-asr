@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -22,7 +24,11 @@ import (
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/ctl"
 	"github.com/caoer/mega-asr/internal/deliver"
+	"github.com/caoer/mega-asr/internal/keypad"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
+	"github.com/caoer/mega-asr/internal/relay/client"
+	"github.com/caoer/mega-asr/internal/remote"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 	"github.com/caoer/mega-asr/internal/takes"
@@ -51,14 +57,16 @@ type tapEvent struct {
 }
 
 type server struct {
-	cfg  app.Config
-	opts app.LoadOpts
-	flag serveFlags
-	key  mac.TapKey
-	ctrl *session.Controller
-	dlv  deliver.Deliverer // the controller's, for the targets a resend names
-	ov   *mac.Overlay
-	taps chan tapIn
+	cfg      app.Config
+	opts     app.LoadOpts
+	flag     serveFlags
+	key      mac.TapKey
+	ctrl     *session.Controller
+	lifetime *serverLifetime
+	exit     func(int)
+	dlv      deliver.Deliverer // the controller's, for the targets a resend names
+	ov       *mac.Overlay
+	taps     chan tapIn
 
 	mu     sync.Mutex
 	tap    *mac.Tap
@@ -68,6 +76,13 @@ type server struct {
 	takes       *takes.Handler // the Takes page, whose index the menu's count reads
 	undelivered atomic.Int64   // the takes undelivered and not seen, every 5 s
 	panel       atomic.Pointer[panelState]
+
+	releases    *releases              // a staging build's update loop; nil on a dev build
+	releaseLine atomic.Pointer[string] // the menu's update or model-download line
+
+	phones    atomic.Pointer[remote.Server] // the paired phones' listener; nil when off
+	desk      *desk                         // the desk keypad; nil under --no-tap
+	phonesWhy string                        // why there is none, for the pairing page
 }
 
 // panelState is the loopback listener servePanel holds, or why it holds none.
@@ -153,7 +168,13 @@ func serve(o app.LoadOpts, args []string) error {
 		return err
 	}
 	app.Seed()
-	s := &server{cfg: cfg, opts: o, flag: sf, key: key, taps: make(chan tapIn, 16)}
+	s := &server{cfg: cfg, opts: o, flag: sf, key: key, taps: make(chan tapIn, 16), lifetime: newServerLifetime()}
+	defer s.lifetime.close()
+	s.exit = s.lifetime.wrapExit(relaunching(os.Exit))
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sig)
+	go onSignal(sig, s.lifetime, signalWait, s.exit)
 	mac.Run(s.ready)
 	return nil
 }
@@ -200,6 +221,39 @@ func (s *server) ready() {
 		FocusWait: time.Second,
 		Settle:    150 * time.Millisecond,
 	}
+	var dlv session.Deliverer = s.dlv
+	var deskRouter *deliver.Router
+	var telegramStream *deliver.TelegramStream
+	ui := &overlayUI{ov: s.ov, after: time.AfterFunc}
+	if !s.flag.noTap {
+		send, err := keypadSend(s.cfg.Keypad) // config validation leaves err nil
+		if err != nil {
+			log.Printf("serve: keypad: %v; a locked take fails to send", err)
+		}
+		send.Copy = deliver.CopyText
+		send.OnSent = func(t *deliver.TelegramTarget) {
+			label := t.Group
+			if t.TopicLabel != "" {
+				label += " / " + t.TopicLabel
+			}
+			ui.Flash(l10n.T("已发送 · ", "Sent · ") + label)
+		}
+		if send.Stream != nil {
+			s.lifetime.start(send.Stream.Run)
+			telegramStream = send.Stream
+			if stop, err := mac.WatchConnectivity(send.Stream.Reconnect); err != nil {
+				log.Printf("serve: Telegram wake/network watcher: %v", err)
+			} else {
+				s.lifetime.start(func(ctx context.Context) { <-ctx.Done(); stop() })
+			}
+		}
+		s.desk = newDesk(&keypad.Outlet{}, s.cfg.Keypad.State)
+		if telegramStream != nil {
+			s.desk.ensureSend = telegramStream.Ensure
+		}
+		deskRouter = s.desk.router(s.dlv, send)
+		dlv = deskRouter
+	}
 	s.ctrl = &session.Controller{
 		Engine:      engine,
 		Model:       model,
@@ -211,8 +265,9 @@ func (s *server) ready() {
 		Stream:      s.cfg.Streamer(),
 		Tee:         s.cfg.Fanout(s.opts, tr).Tee,
 		Post:        s.cfg.Post(),
-		Deliver:     s.dlv,
-		UI:          &overlayUI{ov: s.ov, after: time.AfterFunc},
+		Names:       s.cfg.NamesStage(),
+		Deliver:     dlv,
+		UI:          ui,
 		Store:       store.Store{Dir: s.cfg.Store.Data},
 		NewChunker:  s.cfg.Chunker,
 		ChunkDir:    chunkDir(),
@@ -221,30 +276,54 @@ func (s *server) ready() {
 		Sound:       mac.Beep,
 		HotkeyKey:   chordKey(s.key.Name),
 		OnState: func(st session.State) {
+			keys := s.ctrl.KeyPhase() // stored before OnState runs
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if s.tap != nil {
-				s.tap.SetPhase(phaseOf(st))
+				s.tap.SetPhase(phaseOf(keys))
+			}
+			if r := s.phones.Load(); r != nil {
+				r.Changed()
+			}
+		},
+		OnView: func(st session.State, v session.View) {
+			if s.desk != nil {
+				s.desk.view(st, v)
+			}
+		},
+		OnDone: func(base string) {
+			if r := s.phones.Load(); r != nil {
+				takeDone(r, base)
 			}
 		},
 	}
-	s.cmds = &takeCommands{ctrl: s.ctrl, flash: s.ctrl.UI.Flash, exit: os.Exit, lastKey: s.lastKey}
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-	go onSignal(sig, s.ctrl, signalWait, os.Exit)
+	if s.desk != nil {
+		s.desk.windowHasKeys = mac.WindowHasKeys
+		s.desk.bind(s.ctrl, time.Duration(s.cfg.Tap.Window), func(at time.Time, target *deliver.TelegramTarget, recording string) {
+			s.onTapFrom("keypad", mac.Result{Tap: true}, at, func() session.Target { return deskRouter.CaptureKeypad(target) }, recording)
+		})
+		go s.desk.run(context.Background())
+	}
+	s.lifetime.bind(s.ctrl)
+	exit := s.exit
+	s.cmds = &takeCommands{ctrl: s.ctrl, flash: s.ctrl.UI.Flash, exit: exit, lastKey: s.lastKey}
+	s.ctrl.Recover()
+	s.startPhones()
 	s.takes = takes.New(s.cfg.Store.Data, s.cfg.Labels(), s.cfg.TakesEngines(s.opts))
 	go s.countUndelivered()
 	s.menu().show()
 	if !g.Accessibility && !s.flag.noTap {
 		mac.PromptAccessibility()
 		log.Printf("serve: Accessibility is off — System Settings › Privacy & Security › Accessibility › MegaVoice")
-		s.ov.Flash("MegaVoice needs Accessibility — System Settings › Privacy & Security", 6*time.Second)
+		s.ov.Flash(l10n.F("%s needs Accessibility — System Settings › Privacy & Security", "%s 需要辅助功能权限 — 系统设置 › 隐私与安全性", app.Name()), 6*time.Second)
 	}
-	s.ctrl.Recover()
 	if _, err := ctl.Listen(sockPath(), s.handle); err != nil {
-		log.Fatalf("serve: control socket: %v", err)
+		log.Printf("serve: control socket: %v", err)
+		exit(1)
+		return
 	}
 	go s.dispatch(s.ctrl)
+	s.startReleases()
 	if s.flag.noTap {
 		log.Printf("serve: --no-tap: no key tap; drive it with toggle and cancel")
 	} else {
@@ -289,7 +368,7 @@ func (s *server) servePanel() net.Listener {
 	go func() {
 		// http.Serve closes ln when it returns, and the port is free for
 		// another process: the key is rotated, as after a failed bind
-		err := http.Serve(ln, guard(th, ln))
+		err := http.Serve(ln, guard(s.panelMux(th), ln))
 		s.panel.Store(&panelState{err: err})
 		if _, rerr := kf.Rotate(); rerr != nil {
 			err = fmt.Errorf("%w; rotating the key: %v", err, rerr)
@@ -300,13 +379,110 @@ func (s *server) servePanel() net.Listener {
 	return ln
 }
 
+// panelMux is the loopback listener's routes: the pairing page's API under
+// /takes/api/remote, the Takes page for the rest.
+func (s *server) panelMux(th http.Handler) http.Handler {
+	ph := remote.PageHandler(s.phones.Load(), s.phonesWhy)
+	mux := http.NewServeMux()
+	mux.Handle("/takes/api/remote", ph)
+	mux.Handle("/takes/api/remote/", ph)
+	mux.Handle("/", th)
+	return mux
+}
+
+// startPhones starts the paired phones' listener when remote.enabled says
+// so; a failure leaves the rest of the agent running and the pairing page
+// says why.
+func (s *server) startPhones() {
+	rc := s.cfg.Remote
+	if !rc.Enabled {
+		s.phonesWhy = l10n.F("iPhone 遥控没有开启：在 ~/.config/megavoice/config.toml 写 [remote] enabled = true，再从菜单重启 %s", "iPhone Remote is off: put [remote] enabled = true in ~/.config/megavoice/config.toml, then restart %s from the menu", app.Name())
+		return
+	}
+	r, err := remote.New(remote.Config{
+		Listen: rc.Listen,
+		State:  rc.State,
+		Name:   computerName(),
+		Takes:  phoneTakes{ctrl: s.ctrl, refuseTake: s.cmds.refuseStart, flash: s.ctrl.UI.Flash},
+		Recent: func(n int) []remote.Recent { return recentTakes(s.cfg.Store.Data, n) },
+		Advertise: func(ctx context.Context, port int, txt []string, onName func(string)) error {
+			return mac.Register(ctx, remote.ServiceType, port, txt, onName)
+		},
+		ASRKey: func(string) (remote.ASRKey, error) { return doubaoKey(s.cfg.ASR.Doubao) },
+	})
+	if err != nil {
+		s.phonesWhy = l10n.T("iPhone 遥控起不来：", "iPhone Remote couldn't start: ") + err.Error()
+		log.Printf("serve: iPhone remote: %v", err)
+		return
+	}
+	if rc.Relay.Enabled {
+		if err := startRelay(r, rc); err != nil {
+			r.RelayFailed(l10n.T("中继没有启动：", "The relay didn't start: ") + err.Error())
+			log.Printf("serve: relay: %v", err)
+		}
+	}
+	s.phones.Store(r)
+	go func() {
+		if err := r.Serve(context.Background()); err != nil {
+			log.Printf("serve: iPhone remote: %v", err)
+		}
+	}()
+}
+
+// startRelay holds this Mac's link to its relay room beside the listener:
+// the identity in the remote state directory (minted on first use), the
+// link's keys from [remote.relay].
+func startRelay(r *remote.Server, rc app.RemoteConfig) error {
+	prov, tag, err := rc.Relay.Keys()
+	if err != nil {
+		return err
+	}
+	id, err := remote.LoadIdentity(rc.State, tag)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimSuffix(rc.Relay.URL, "/")
+	cl, err := client.New(client.Config{URL: url, Room: id.Room, Key: id.Sig, ProvisionKey: prov, Handler: r})
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	r.AttachRelay(ctx, remote.Relay{URL: url, RoomTagKey: tag, Identity: id, Link: cl})
+	go cl.Run(ctx)
+	return nil
+}
+
+// doubaoKey is the Doubao plan key a paired phone asks for (asr_key), read
+// from key_file now, with the endpoint and resource the config names.
+func doubaoKey(d app.DoubaoConfig) (remote.ASRKey, error) {
+	k, err := d.Key()
+	if err != nil {
+		return remote.ASRKey{}, err
+	}
+	return remote.ASRKey{Key: k, URL: d.URL, ResourceID: d.ResourceID}, nil
+}
+
+// computerName is this Mac's name until Bonjour names the service.
+func computerName() string {
+	h, _ := os.Hostname()
+	if i := strings.IndexByte(h, '.'); i > 0 {
+		h = h[:i]
+	}
+	if h == "" {
+		h = "Mac"
+	}
+	return h
+}
+
 // menu is the status item's menu over this agent: its take, its count of
 // undelivered takes, and the listener it holds.
 func (s *server) menu() *meetMenu {
-	return meetMenuOf(s.opts, s.cfg, func() voiceTake {
-		id, d, rec := s.ctrl.Recording()
-		return voiceTake{ID: id, Recording: rec, Elapsed: d}
+	m := meetMenuOf(s.opts, s.cfg, func() voiceTake {
+		_, id, d, owner := s.ctrl.Published()
+		return voiceTake{ID: id, Recording: id != "", Elapsed: d, Stream: owner == session.OwnerStream}
 	}, func() int { return int(s.undelivered.Load()) }, s.listening)
+	m.release = s.releaseLineNow
+	return m
 }
 
 // listening is the address of the loopback listener this process holds, or
@@ -387,6 +563,7 @@ func (s *server) installTap() {
 		t, err := mac.StartTap(mac.Detector{Key: s.key, Window: time.Duration(s.cfg.Tap.Window), Quiet: time.Duration(s.cfg.Tap.Quiet)}, s.onTap)
 		if err == nil {
 			s.mu.Lock()
+			t.SetPhase(phaseOf(s.ctrl.KeyPhase()))
 			s.tap = t
 			s.mu.Unlock()
 			log.Printf("serve: tap installed on %s", s.key.Name)
@@ -414,27 +591,23 @@ func (s *server) lastKey() time.Time {
 	return t.LastKey()
 }
 
-// phaseOf tells the key tap which keys the controller's state takes.
-func phaseOf(st session.State) mac.Phase {
-	switch st {
-	case session.Recording:
-		return mac.PhaseRecording
-	case session.Transcribing, session.Delivering:
-		return mac.PhaseProcessing
-	}
-	return mac.PhaseIdle
-}
-
 // tapIn is a Result of the key tap and the time of its key event.
 type tapIn struct {
-	r  mac.Result
-	at time.Time
+	r         mac.Result
+	at        time.Time
+	trigger   string
+	capture   func() session.Target
+	recording string
 }
 
 // onTap runs on the main thread inside the tap callback: hand off, never block.
 func (s *server) onTap(r mac.Result, at time.Time) {
+	s.onTapFrom("tap", r, at, nil, "")
+}
+
+func (s *server) onTapFrom(trigger string, r mac.Result, at time.Time, capture func() session.Target, recording string) {
 	select {
-	case s.taps <- tapIn{r, at}:
+	case s.taps <- tapIn{r, at, trigger, capture, recording}:
 	default:
 		log.Printf("tap: dropped, controller busy")
 	}
@@ -460,7 +633,11 @@ func (s *server) dispatch(c tapTaker) {
 			s.events = s.events[len(s.events)-50:]
 		}
 		s.mu.Unlock()
-		takeTap(r, in.at, c, s.cmds, mac.PressReturn)
+		takeTap(r, in.at, in.trigger, in.capture, in.recording, c, s.cmds, func() {
+			if err := mac.PressReturn(); err != nil {
+				log.Printf("tap: Return: %v", err)
+			}
+		})
 	}
 }
 
@@ -471,12 +648,33 @@ func (s *server) handle(req ctl.Request) ctl.Response {
 	switch req.Cmd {
 	case "status":
 		return ctl.Reply(s.status())
+	case "update":
+		return s.updateReply()
+	case "remote-rotate":
+		r := s.phones.Load()
+		if r == nil {
+			return ctl.Fail(errors.New("the iPhone remote is off"))
+		}
+		prefix, err := r.RotateRelay()
+		if err != nil {
+			return ctl.Fail(err)
+		}
+		return ctl.Reply(map[string]string{"room_prefix": prefix, "next": l10n.T("pair every phone again: menu › iPhone 遥控…", "pair every phone again: menu › iPhone Remote…")})
 	case "spike":
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		return ctl.Reply(s.events)
 	case "paste":
-		unlock, err := s.ctrl.LockDelivery(10 * time.Second)
+		deadline := req.Deadline
+		if deadline.IsZero() {
+			deadline = time.Now().Add(8 * time.Second)
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		if time.Until(deadline) <= 0 {
+			return ctl.Fail(context.DeadlineExceeded)
+		}
+		unlock, err := s.ctrl.LockDelivery(min(5*time.Second, time.Until(deadline)))
 		if err != nil {
 			return ctl.Fail(err)
 		}
@@ -491,7 +689,9 @@ func (s *server) handle(req ctl.Request) ctl.Response {
 				return ctl.Fail(err)
 			}
 		}
-		mac.Paste(req.Text)
+		if err := mac.PasteContext(ctx, req.Text); err != nil {
+			return ctl.Fail(err)
+		}
 		return ctl.Reply(map[string]any{"pasted": len(req.Text)})
 	case "takes", "events":
 		return s.handleTakes(req)

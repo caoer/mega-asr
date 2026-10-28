@@ -1,0 +1,25 @@
+{
+  "about": "A phone's frame, or the phone socket closing, while the room still waits for peer_ack ends that wait. A frame closes the phone 1008. A close leaves the Mac's socket up. The Mac, told the session came up, hears it went down, and a late peer_ack is ignored.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"send": {"as": "p1", "binary": {"hex": "00"}}},
+    {"expect": {"as": "p1", "close": 1008}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "phone", "key": "@phone1", "up": false, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "mac", "nothing": true}},
+    {"connect": {"as": "p2", "room": "main"}},
+    {"expect": {"as": "p2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p2", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"close": {"as": "p2", "code": 1000}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s2", "role": "phone", "key": "@phone1", "up": false, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s2"}}},
+    {"advance_ms": 1501},
+    {"expect": {"as": "mac", "nothing": true}}
+  ]
+}

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/ebitengine/purego"
 )
 
@@ -31,7 +32,7 @@ type Service struct {
 
 // ErrLocalNetwork is Browse's error when Local Network privacy refuses this
 // app the network (System Settings › Privacy & Security › Local Network).
-var ErrLocalNetwork = errors.New("Local Network access is off for this app (System Settings › Privacy & Security › Local Network)")
+var ErrLocalNetwork = l10n.Err("Local Network access is off for this app (System Settings › Privacy & Security › Local Network)", "这个 App 没有本地网络权限（系统设置 › 隐私与安全性 › 本地网络）")
 
 const (
 	dnsFlagMoreComing      = 0x1

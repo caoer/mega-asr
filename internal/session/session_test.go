@@ -387,6 +387,67 @@ func TestTapTapPastesIntoTargetAtStart(t *testing.T) {
 	}
 }
 
+type labeledDeliveryTarget struct{ Target }
+
+func (labeledDeliveryTarget) TargetLabel() string { return "Fixture group" }
+
+type labeledDeliverer struct{ *fakeDeliverer }
+
+func (d labeledDeliverer) Capture() Target { return labeledDeliveryTarget{d.fakeDeliverer.Capture()} }
+
+func TestLockedSendPublishesDeliveryPhase(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "fixture")
+	r.c.Deliver = labeledDeliverer{r.del}
+	r.c.Toggle()
+	r.c.Enter()
+	r.wait(t)
+	r.ui.mu.Lock()
+	defer r.ui.mu.Unlock()
+	for _, v := range r.ui.views {
+		if v.Delivering && v.Send && v.Target == "Fixture group" {
+			return
+		}
+	}
+	t.Fatal("locked send never published its pending delivery view")
+}
+
+// Names runs after Post on a dictated take: the delivered text is its, the
+// .txt keeps the text before it, and its names line and the deliver line's
+// text are in the record.
+func TestNamesCorrectsTheDeliveredText(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "问一下林小雨 派森")
+	r.c.Names = func(_ context.Context, text string) (string, *store.Event) {
+		return strings.ReplaceAll(text, "林小雨", "林晓雨"), &store.Event{Ev: "names", N: 1, LatencyMS: 280,
+			Names: []store.NameEdit{{From: "林小雨", To: "林晓雨", Person: "林晓雨", P: 0.9}}}
+	}
+	r.c.Toggle()
+	r.c.Toggle()
+	r.wait(t)
+	if got := r.del.got(); got != "telegram|问一下林晓雨 Python" {
+		t.Fatalf("delivered %q", got)
+	}
+	base := r.dir + "/20200417-104200"
+	if txt, _ := os.ReadFile(base + ".txt"); string(txt) != "问一下林小雨 Python\n" {
+		t.Fatalf("txt %q", txt)
+	}
+	evs, err := store.Read(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names, deliver *store.Event
+	for i := range evs {
+		switch evs[i].Ev {
+		case "names":
+			names = &evs[i]
+		case "deliver":
+			deliver = &evs[i]
+		}
+	}
+	if names == nil || len(names.Names) != 1 || names.Names[0].To != "林晓雨" || deliver == nil || deliver.Text != "问一下林晓雨 Python" {
+		t.Fatalf("names %+v, deliver %+v", names, deliver)
+	}
+}
+
 // described is a fakeSource that names its device.
 type described struct {
 	*fakeSource
@@ -655,7 +716,7 @@ func TestChunkFailureDeliversTheRest(t *testing.T) {
 	r.c.Toggle()
 	r.c.Toggle()
 	r.wait(t)
-	if got := r.del.got(); got != "telegram|one three" || !strings.Contains(r.ui.String(), "alert:"+MsgIncomplete) {
+	if got := r.del.got(); got != "telegram|one three" || !strings.Contains(r.ui.String(), "alert:"+MsgIncomplete()) {
 		t.Fatalf("delivered %q, ui %s", got, r.ui)
 	}
 	if got := files(t, r.dir); got != "20200417-104200.events.jsonl,20200417-104200.wav" {
@@ -717,7 +778,7 @@ func TestShortClipDiscarded(t *testing.T) {
 	r.c.Toggle()
 	r.c.Toggle()
 	r.wait(t)
-	if r.asr.n() != 0 || r.del.got() != "" || !strings.Contains(r.ui.String(), "flash:"+MsgEmpty) || files(t, r.dir) != "20200417-104200.events.jsonl" {
+	if r.asr.n() != 0 || r.del.got() != "" || !strings.Contains(r.ui.String(), "flash:"+MsgEmpty()) || files(t, r.dir) != "20200417-104200.events.jsonl" {
 		t.Fatalf("asr %d, delivered %q, ui %s, files %s", r.asr.n(), r.del.got(), r.ui, files(t, r.dir))
 	}
 }
@@ -726,7 +787,7 @@ func TestStreamCutTranscribesWhatArrived(t *testing.T) {
 	r := newRig(t, &fakeSource{n: audio.Rate, cut: true}, "partial")
 	r.c.Toggle()
 	r.wait(t) // the cut is noticed without a tap
-	if r.del.got() != "telegram|partial" || !strings.Contains(r.ui.String(), "flash:stream cut") {
+	if r.del.got() != "telegram|partial" || !strings.Contains(r.ui.String(), "alert:录音不完整 · 已粘贴未发送 · stream cut") {
 		t.Fatalf("delivered %q, ui %s", r.del.got(), r.ui)
 	}
 }
@@ -753,12 +814,12 @@ func TestEmptyStreamFlashesWhy(t *testing.T) {
 }
 
 // A stream that ends on its own mid-take: the take is decoded and delivered
-// from what arrived, and the flash carries the source's error.
-func TestMidTakeCutFlashesTheSourceError(t *testing.T) {
+// from what arrived without sending; the alert carries the source's error.
+func TestMidTakeCutReportsTheSourceError(t *testing.T) {
 	r := newRig(t, &fakeSource{n: audio.Rate, cut: true, cutErr: errors.New("Boom Mic stopped delivering audio")}, "half a thought")
 	r.c.Toggle()
 	r.wait(t)
-	if r.del.got() != "telegram|half a thought" || !strings.Contains(r.ui.String(), "flash:Boom Mic stopped delivering audio,") {
+	if r.del.got() != "telegram|half a thought" || !strings.Contains(r.ui.String(), "alert:录音不完整 · 已粘贴未发送 · Boom Mic stopped delivering audio,") {
 		t.Fatalf("delivered %q, ui %s", r.del.got(), r.ui)
 	}
 }
@@ -877,7 +938,7 @@ func TestNoSignalLastsWhileSilent(t *testing.T) {
 	}
 	r.c.Toggle()
 	r.wait(t)
-	if r.del.got() != "telegram|text" || r.ui.noSignals() != 1 || strings.Contains(r.ui.String(), "flash:"+NoSignal) {
+	if r.del.got() != "telegram|text" || r.ui.noSignals() != 1 || strings.Contains(r.ui.String(), "flash:"+MsgNoSignal()) {
 		t.Fatalf("delivered %q, notice on %d times, ui %s", r.del.got(), r.ui.noSignals(), r.ui)
 	}
 	if on := line(base, "no_signal"); on.AfterS != 3 || !strings.Contains(logs.String(), "signal back at 4.50 s") {
@@ -1168,6 +1229,43 @@ func TestStreamPrimaryDeliversItsText(t *testing.T) {
 	}
 }
 
+// liveStream is a stream that says what it has recognised so far.
+type liveStream struct {
+	fakeStream
+	live string
+}
+
+func (l liveStream) Live() string { return l.live }
+
+type liveStreamer struct{ fakeStreamer }
+
+func (f *liveStreamer) Open() asr.Stream {
+	return liveStream{f.fakeStreamer.Open().(fakeStream), "流式中"}
+}
+
+// The recording take's view carries its stream's live text; the views after
+// the stop do not, and the take delivers the final text alone.
+func TestStreamLiveTextOnTheView(t *testing.T) {
+	gate := make(chan struct{})
+	r := newRig(t, &fakeSource{n: audio.Rate, stopGate: gate}, "local")
+	r.c.Stream = &liveStreamer{fakeStreamer{text: "最终文字"}}
+	r.c.Toggle()
+	r.waitView(t, "with live text", func(v View) bool { return v.Live != nil && v.Live() == "流式中" })
+	r.c.Toggle()
+	close(gate)
+	r.wait(t)
+	if got := r.del.got(); got != "telegram|最终文字" {
+		t.Fatalf("delivered %q", got)
+	}
+	r.ui.mu.Lock()
+	defer r.ui.mu.Unlock()
+	for _, v := range r.ui.views {
+		if v.Quality == nil && v.Live != nil {
+			t.Errorf("a view with no recording take has live text: %+v", v)
+		}
+	}
+}
+
 // A stream that fails leaves the take to the chunk ASR, from its WAV, as
 // recording would have cut it.
 func TestStreamFailureFallsBackToASR(t *testing.T) {
@@ -1278,19 +1376,19 @@ func TestFinalLineBeforeFlash(t *testing.T) {
 		{name: "cancel", act: func(r *rig) { r.c.Toggle(); r.c.Cancel() },
 			msg: "已取消 0:01 · 右Option+Esc 重贴", want: "cancelled/"},
 		{name: "empty text", setup: func(r *rig) { r.asr.texts = []string{""} },
-			msg: MsgEmpty, want: "empty/"},
+			msg: MsgEmpty(), want: "empty/"},
 		{name: "deliver error", setup: func(r *rig) { r.del.deliverErr = errors.New("pane gone") },
 			msg: "未送达 · 文字在剪贴板 · 右Option+Esc 重贴", want: "undelivered/deliver_failed"},
 		{name: "every chunk failed", setup: func(r *rig) { r.asr.fail = map[int]bool{1: true} },
-			msg: MsgASRFailed, want: "undelivered/asr_failed"},
+			msg: MsgASRFailed(), want: "undelivered/asr_failed"},
 		{name: "one chunk failed", setup: func(r *rig) {
 			r.src.n = 3 * audio.Rate
 			r.c.NewChunker = func() Chunker { return &everyN{n: audio.Rate} }
 			r.asr.fail = map[int]bool{2: true}
-		}, msg: MsgIncomplete, want: "undelivered/incomplete"},
+		}, msg: MsgIncomplete(), want: "undelivered/incomplete"},
 		{name: "Enter error", setup: func(r *rig) { r.del.submitErr = errors.New("lost focus") },
 			act: func(r *rig) { r.c.Toggle(); r.c.Enter() },
-			msg: MsgNotSent + "lost focus", want: "pasted/"},
+			msg: MsgNotSent() + "lost focus", want: "pasted/"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r, base := rig2020(t, &fakeSource{n: audio.Rate}, "a take written for the test")
@@ -1835,7 +1933,7 @@ func TestEnterWhy(t *testing.T) {
 	r, _ = rig2020(t, &fakeSource{n: audio.Rate}, "text")
 	r.del.submitErr = errors.New("no Enter")
 	r.ui.probe = func(msg string) string {
-		if !strings.HasPrefix(msg, MsgNotSent) {
+		if !strings.HasPrefix(msg, MsgNotSent()) {
 			return ""
 		}
 		used, why := r.c.EnterWhy()
@@ -1849,5 +1947,161 @@ func TestEnterWhy(t *testing.T) {
 	r.wait(t)
 	if !slices.Contains(r.ui.probed, "false past delivery") {
 		t.Errorf("past delivery: probed %q", r.ui.probed)
+	}
+}
+
+// A remote start starts a take and never stops one; its start line names
+// the trigger. A send stops it to paste and press Enter, its stop line naming
+// the remote. OnDone hears the take once its final line is on disk.
+func TestStartFromSendFrom(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "你好")
+	var done []string
+	var dmu sync.Mutex
+	r.c.OnDone = func(b string) {
+		dmu.Lock()
+		done = append(done, filepath.Base(b)+" "+state(b))
+		dmu.Unlock()
+	}
+	if r.c.SendFrom("iphone", "") {
+		t.Fatal("SendFrom with no take recording reported a stop")
+	}
+	r.del.setFront("notes")
+	id, err := r.c.StartFrom("iphone")
+	if err != nil || id != "20200417-104200" {
+		t.Fatalf("StartFrom = %q, %v", id, err)
+	}
+	if id2, err := r.c.StartFrom("iphone"); !errors.Is(err, ErrRecording) || id2 != "" {
+		t.Fatalf("a second StartFrom = %q, %v; want ErrRecording", id2, err)
+	}
+	if !r.c.SendFrom("iphone", id) {
+		t.Fatal("SendFrom did not stop the recording take")
+	}
+	r.wait(t)
+	if got := r.del.got(); got != "notes|你好;notes|⏎" {
+		t.Fatalf("delivered %q", got)
+	}
+	evs, _ := store.Read(base)
+	if evs[0].Ev != "start" || evs[0].Trigger != "iphone" {
+		t.Fatalf("start line %+v", evs[0])
+	}
+	if e := stopLine(t, base); e.Kind != "enter" || e.Via != "iphone" {
+		t.Fatalf("stop line kind %q via %q, want enter via iphone", e.Kind, e.Via)
+	}
+	dmu.Lock()
+	defer dmu.Unlock()
+	if want := []string{"20200417-104200 sent/"}; !slices.Equal(done, want) {
+		t.Fatalf("OnDone heard %q, want %q", done, want)
+	}
+}
+
+// Once Close refuses starts, StartFrom says so.
+func TestStartFromClosing(t *testing.T) {
+	r, _ := rig2020(t, &fakeSource{n: audio.Rate}, "你好")
+	r.c.Close("正在重启")
+	if id, err := r.c.StartFrom("watch"); !errors.Is(err, ErrClosing) || id != "" {
+		t.Fatalf("StartFrom while closing = %q, %v", id, err)
+	}
+	if got := files(t, r.dir); got != "" {
+		t.Fatalf("a refused start left %s", got)
+	}
+}
+
+// A delivery that timed out may have landed: the overlay says so, and the
+// record keeps the error, never a plain 未送达.
+func TestMaybeSentDelivery(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "ship it")
+	r.del.deliverErr = fmt.Errorf("telegram: timeout, no answer in 20s; %w", ErrMaybeSent)
+	r.c.Toggle()
+	r.c.Toggle()
+	r.wait(t)
+	ui := r.ui.String()
+	if !strings.Contains(ui, "alert:"+MsgMaybeSent()) || strings.Contains(ui, "未送达") {
+		t.Fatalf("ui %s", ui)
+	}
+	base := filepath.Join(r.dir, "20200417-104200")
+	evs, _ := store.Read(base)
+	if st := store.State(evs); st.Why != "delivery_cut" {
+		t.Fatalf("uncertain delivery %+v", st)
+	}
+	if id, err := r.c.HotkeyTake(r.c.now()); err != nil || id != "" {
+		t.Fatalf("automatic duplicate candidate %q %v", id, err)
+	}
+}
+
+func TestChunkFailureNeverSubmits(t *testing.T) {
+	r := newRig(t, &fakeSource{n: 3 * audio.Rate}, "one", "two", "three")
+	r.asr.fail = map[int]bool{2: true}
+	r.c.NewChunker = func() Chunker { return &everyN{n: audio.Rate} }
+	r.c.Toggle()
+	r.c.Enter()
+	r.wait(t)
+	if got := r.del.got(); got != "telegram|one three" {
+		t.Fatalf("partial paste: %q", got)
+	}
+	evs, _ := store.Read(filepath.Join(r.dir, "20200417-104200"))
+	for _, e := range evs {
+		if e.Ev == "deliver" && e.Submit != "none" {
+			t.Fatalf("partial take submitted: %+v", e)
+		}
+	}
+}
+
+type tailFailureSource struct {
+	*fakeSource
+	mu    sync.Mutex
+	final error
+}
+
+func (s *tailFailureSource) Stop() {
+	s.mu.Lock()
+	s.final = errors.New("stream cut: exit status 255")
+	s.mu.Unlock()
+	s.fakeSource.Stop()
+}
+func (s *tailFailureSource) Err() error { s.mu.Lock(); defer s.mu.Unlock(); return s.final }
+
+func TestCaptureFailureDuringStopNeverSubmits(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "partial sentence")
+	r.c.NewSource = func() audio.Source { return &tailFailureSource{fakeSource: &fakeSource{n: audio.Rate}} }
+	r.c.Toggle()
+	r.c.Enter()
+	r.wait(t)
+	if got := r.del.got(); got != "telegram|partial sentence" {
+		t.Fatalf("delivered %q", got)
+	}
+	base := filepath.Join(r.dir, "20200417-104200")
+	evs, _ := store.Read(base)
+	capture := false
+	for _, e := range evs {
+		if e.Ev == "capture_error" && strings.Contains(e.Why, "255") {
+			capture = true
+		}
+		if e.Ev == "deliver" && e.Submit != "none" {
+			t.Fatalf("truncated capture submitted: %+v", e)
+		}
+	}
+	if state := store.State(evs); !capture || state.State != "undelivered" || state.Why != "incomplete" {
+		t.Fatalf("capture=%v state=%+v", capture, state)
+	}
+	if !strings.Contains(r.ui.String(), "录音不完整") {
+		t.Fatal(r.ui.String())
+	}
+}
+
+func TestUnconfirmedComposerBeforeEnterRemainsUncertain(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "text")
+	r.del.submitErr = ErrUnconfirmedPaste
+	r.c.Toggle()
+	r.c.Enter()
+	r.wait(t)
+	evs, _ := store.Read(filepath.Join(r.dir, "20200417-104200"))
+	if st := store.State(evs); st.State != "undelivered" || st.Why != "delivery_cut" {
+		t.Fatalf("unconfirmed composer recorded as %+v", st)
+	}
+	if !strings.Contains(r.ui.String(), "原输入框未确认 · 未发送 · 文字在剪贴板") {
+		t.Fatal(r.ui.String())
+	}
+	if id, err := r.c.HotkeyTake(r.c.now()); err != nil || id != "" {
+		t.Fatalf("automatic duplicate %q %v", id, err)
 	}
 }

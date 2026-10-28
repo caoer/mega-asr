@@ -90,6 +90,10 @@ func (d *Drain) people(ctx context.Context, tries map[string]PeopleTry) map[stri
 		if err != nil || v.State == "deleted" {
 			continue
 		}
+		d.namesOwed(ctx, raw, v)
+		if d.Stages.Resolve == nil {
+			continue
+		}
 		todo := handNamed(raw)
 		for role, name := range todo {
 			t, ok := tries[peopleKey(v.ID, role)]
@@ -189,7 +193,8 @@ func (d *Drain) setPeople(ctx context.Context, id string, set map[string]Person)
 			return nil // renamed or named meanwhile
 		}
 		queue := false
-		if v.State == "ingested" {
+		switch {
+		case v.State == "ingested":
 			switch v.Action {
 			case "":
 				raw["action"], queue = "reingest", true
@@ -197,6 +202,14 @@ func (d *Drain) setPeople(ctx context.Context, id string, set map[string]Person)
 				queue = true
 			default:
 				d.logf("rec.%s: %s is queued: the reingest for its people waits for a Re-ingest", id, v.Action)
+			}
+		case v.State == "aligned" && d.Stages.Names != nil:
+			// The names pass corrects the people just resolved.
+			switch v.Action {
+			case "":
+				raw["action"], queue = "names", true
+			case "names":
+				queue = true
 			}
 		}
 		raw["updated"] = d.Now().UTC().Format(time.RFC3339Nano)
@@ -207,12 +220,59 @@ func (d *Drain) setPeople(ctx context.Context, id string, set map[string]Person)
 		if err != nil {
 			return err
 		}
-		d.logf("rec.%s: people: %s%s", id, strings.Join(wrote, ", "), map[bool]string{true: "; reingest queued"}[queue])
+		queued := ""
+		if queue {
+			queued = fmt.Sprintf("; %s queued", raw["action"])
+		}
+		d.logf("rec.%s: people: %s%s", id, strings.Join(wrote, ", "), queued)
 		if queue {
 			if _, err := d.Reg.CAS(ctx, "q."+id, queueSchema, map[string]string{"state": v.State}, 0); err != nil && pages.Code(err) != "version_conflict" {
 				return fmt.Errorf("q.%s: %w", id, err)
 			}
 		}
 		return nil
+	}
+}
+
+// namesOwed queues the names pass on a record that had one when a speaker
+// has since got a person it did not know — named on the page by an exact
+// index match, which sets person with no resolve. A record never passed, a
+// refused pass, or one with an action queued is left alone.
+func (d *Drain) namesOwed(ctx context.Context, raw map[string]any, v view) {
+	if d.Stages.Names == nil || raw["names"] == nil || v.Action != "" || v.State != "aligned" && v.State != "ingested" {
+		return
+	}
+	if v.Claim != nil && v.Claim.Expires.After(d.Now()) {
+		return
+	}
+	if _, focus := NamesPending(raw); len(focus) == 0 {
+		return
+	}
+	key := "rec." + v.ID
+	for try := 0; try < 5; try++ {
+		o, err := d.Reg.Record(ctx, key)
+		if err != nil {
+			d.logf("%s: names: %v", key, err)
+			return
+		}
+		cur, cv, err := decode(o)
+		if err != nil || cv.Action != "" || cv.Claim != nil && cv.Claim.Expires.After(d.Now()) {
+			return
+		}
+		cur["action"] = "names"
+		cur["updated"] = d.Now().UTC().Format(time.RFC3339Nano)
+		_, err = d.Reg.CAS(ctx, key, recSchema, cur, o.Version)
+		if pages.Code(err) == "version_conflict" {
+			continue
+		}
+		if err != nil {
+			d.logf("%s: names: %v", key, err)
+			return
+		}
+		if _, err := d.Reg.CAS(ctx, "q."+v.ID, queueSchema, map[string]string{"state": cv.State}, 0); err != nil && pages.Code(err) != "version_conflict" {
+			d.logf("q.%s: %v", v.ID, err)
+		}
+		d.logf("%s: a speaker has a person the names pass did not know: names queued", key)
+		return
 	}
 }

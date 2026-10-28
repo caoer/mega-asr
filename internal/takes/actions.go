@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/compare"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -38,7 +39,9 @@ type App struct {
 // showsPage says whether a paste into a would land in a Takes page: a is
 // the frontmost app (the browser the page is used in), or its front window
 // shows the page, as a browser window behind the one in use can.
-func (a App) showsPage() bool { return a.Front || strings.Contains(a.Title, PageTitle) }
+func (a App) showsPage() bool {
+	return a.Front || strings.Contains(a.Title, PageTitle) || strings.Contains(a.Title, PageTitleEN)
+}
 
 // Target is one entry of the resend picker. To is what the resend sends as
 // "to"; Label names the target in full.
@@ -140,7 +143,7 @@ func (h *Handler) targets(w http.ResponseWriter, r *http.Request) {
 	for _, a := range apps {
 		add("app", appTarget(a))
 	}
-	add("clipboard", Target{To: "clipboard", Label: "剪贴板"})
+	add("clipboard", Target{To: "clipboard", Label: l10n.T("剪贴板", "Clipboard")})
 	reply(w, out, nil)
 }
 
@@ -150,7 +153,7 @@ func (h *Handler) targets(w http.ResponseWriter, r *http.Request) {
 func live(t *store.Target, panes []Pane, apps []App) (Target, bool) {
 	switch {
 	case t.Kind == "clipboard":
-		return Target{To: "clipboard", Label: "剪贴板"}, true
+		return Target{To: "clipboard", Label: l10n.T("剪贴板", "Clipboard")}, true
 	case t.Pane != "":
 		for _, p := range panes {
 			if p.ID == t.Pane {

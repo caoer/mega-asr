@@ -203,13 +203,52 @@ func rawFiles(raw map[string]any) []File {
 // An empty result (no speech: transcript.md has no bytes) is not uploaded —
 // the page refuses a zero-byte file — and an earlier file of its role goes.
 func Publish(ctx context.Context, pg Pages, id, dir string, o Outcome, eng Engine) error {
+	return putFiles(ctx, pg, id, dir, false, []fileSpec{{"segments", "segments.json", "json"}, {"transcript", "transcript.md", "md"}},
+		func(raw map[string]any) {
+			raw["engine"] = eng
+			s, _ := raw["scores"].(map[string]any)
+			if s == nil {
+				s = map[string]any{}
+			}
+			s["loops"], s["rtf"] = o.Loops, round3(o.RTF())
+			raw["scores"] = s
+		})
+}
+
+// PublishNames uploads what the names pass left in dir — segments.json and
+// transcript.md when it rewrote our text, and names.json — as Publish does,
+// touching only their files[] entries. A file dir does not hold is left as
+// the record has it.
+func PublishNames(ctx context.Context, pg Pages, id, dir string, ours bool) error {
+	specs := []fileSpec{{"names", "names.json", "json"}}
+	if ours {
+		segs, err := ReadSegments(filepath.Join(dir, "segments.json"))
+		if err != nil {
+			return err
+		}
+		if err := WriteTranscript(filepath.Join(dir, "transcript.md"), segs); err != nil {
+			return err
+		}
+		specs = append(specs, fileSpec{"segments", "segments.json", "json"}, fileSpec{"transcript", "transcript.md", "md"})
+	}
+	return putFiles(ctx, pg, id, dir, true, specs, nil)
+}
+
+type fileSpec struct{ role, name, codec string }
+
+// putFiles uploads each file of specs from dir and swaps it into the
+// record's files[] by CAS, deleting the file it replaces; also changes the
+// record in the same write. An empty file is not uploaded and its role's
+// entry goes; a missing one is an error unless optional, which skips it.
+func putFiles(ctx context.Context, pg Pages, id, dir string, optional bool, specs []fileSpec, also func(raw map[string]any)) error {
 	var up []File
 	var empty []string
-	for _, f := range []struct{ role, name, codec string }{
-		{"segments", "segments.json", "json"}, {"transcript", "transcript.md", "md"},
-	} {
+	for _, f := range specs {
 		path := filepath.Join(dir, f.name)
 		sum, size, err := digest(path)
+		if optional && errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -249,13 +288,9 @@ func Publish(ctx context.Context, pg Pages, id, dir string, o Outcome, eng Engin
 			files[k] = u
 		}
 		raw["files"] = files
-		raw["engine"] = eng
-		s, _ := raw["scores"].(map[string]any)
-		if s == nil {
-			s = map[string]any{}
+		if also != nil {
+			also(raw)
 		}
-		s["loops"], s["rtf"] = o.Loops, round3(o.RTF())
-		raw["scores"] = s
 		raw["updated"] = time.Now().UTC()
 		return true, nil
 	})

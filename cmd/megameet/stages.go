@@ -51,7 +51,7 @@ func serverStages(ctx context.Context, cfg app.Config, c *pages.Client) (drain.S
 // in its pulled directory when they are not there — a reingest on a host
 // that did not process it.
 func pullResults(ctx context.Context, c *pages.Client, rec meeting.Record, dir string) error {
-	for role, name := range map[string]string{"segments": "segments.json", "transcript": "transcript.md"} {
+	for role, name := range map[string]string{"segments": "segments.json", "transcript": "transcript.md", "names": drain.NamesFile} {
 		f, ok := rec.File(role)
 		path := filepath.Join(dir, name)
 		if _, err := os.Stat(path); !ok || err == nil {

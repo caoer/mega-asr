@@ -3,6 +3,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,33 @@ import (
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/session"
 )
+
+func TestOverlayNamesLockedTakeTarget(t *testing.T) {
+	u, ov, _ := newTestUI()
+	wave := func() []audio.Quality { return nil }
+	u.Show(session.View{Quality: wave})
+	macLabel := ov.label
+	u.Show(session.View{Quality: wave, Target: "Fixture group / Fixture topic"})
+	if !strings.Contains(ov.label, "→ Fixture group / Fixture topic") || !strings.Contains(ov.label, "录音键 粘贴") {
+		t.Fatalf("locked take label %q", ov.label)
+	}
+	u.Show(session.View{Quality: wave})
+	if ov.label != macLabel {
+		t.Fatalf("Mac take label %q, want %q", ov.label, macLabel)
+	}
+}
+
+func TestOverlayShowsPendingTelegramDelivery(t *testing.T) {
+	u, ov, _ := newTestUI()
+	u.Show(session.View{Started: time.Now(), Send: true, Delivering: true, Target: "Fixture group / Fixture topic"})
+	if !strings.Contains(ov.label, "发送中…") || strings.Contains(ov.label, "已发送") {
+		t.Fatal(ov.label)
+	}
+	u.Flash("已发送 · Fixture group / Fixture topic")
+	if ov.label != "已发送 · Fixture group / Fixture topic" {
+		t.Fatal(ov.label)
+	}
+}
 
 // fakeOverlay keeps what the overlay shows: the label, "" once hidden, and
 // whether a waveform is drawn under it.
@@ -57,13 +85,13 @@ func newTestUI() (*overlayUI, *fakeOverlay, *fakeClock) {
 // has its 1.5 s.
 func TestOverlayAlertOutlastsTheOutcome(t *testing.T) {
 	u, ov, clk := newTestUI()
-	u.Alert(session.MsgRecordFailed)
-	u.Flash(session.MsgEmpty)
-	if ov.label != session.MsgRecordFailed {
-		t.Fatalf("label %q, want the alert %q", ov.label, session.MsgRecordFailed)
+	u.Alert(session.MsgRecordFailed())
+	u.Flash(session.MsgEmpty())
+	if ov.label != session.MsgRecordFailed() {
+		t.Fatalf("label %q, want the alert %q", ov.label, session.MsgRecordFailed())
 	}
-	if d := clk.expire(t); d != 6*time.Second || ov.label != session.MsgEmpty {
-		t.Fatalf("alert lasted %v, then label %q; want 6s, then %q", d, ov.label, session.MsgEmpty)
+	if d := clk.expire(t); d != 6*time.Second || ov.label != session.MsgEmpty() {
+		t.Fatalf("alert lasted %v, then label %q; want 6s, then %q", d, ov.label, session.MsgEmpty())
 	}
 	if d := clk.expire(t); d != 1500*time.Millisecond || ov.label != "" {
 		t.Fatalf("flash lasted %v, then label %q; want 1.5s, then hidden", d, ov.label)
@@ -75,11 +103,11 @@ func TestOverlayAlertOutlastsTheOutcome(t *testing.T) {
 // them is shown once the alert is over.
 func TestOverlayFlashWaitsForAlert(t *testing.T) {
 	u, ov, clk := newTestUI()
-	u.Alert(session.MsgUndelivered)
+	u.Alert(session.MsgUndelivered())
 	u.Show(session.View{Started: time.Unix(1577836800, 0), Quality: func() []audio.Quality { return nil }})
 	u.Flash("Podium Condenser not connected — using Built-in Microphone")
 	u.Flash("已取消 0:04")
-	if ov.label != session.MsgUndelivered || !ov.wave {
+	if ov.label != session.MsgUndelivered() || !ov.wave {
 		t.Fatalf("label %q, waveform %v; want the alert over the moving waveform", ov.label, ov.wave)
 	}
 	u.Show(session.View{})
@@ -91,11 +119,11 @@ func TestOverlayFlashWaitsForAlert(t *testing.T) {
 // A second failure waits its turn and is shown once, however often it comes.
 func TestOverlayAlertsTakeTurns(t *testing.T) {
 	u, ov, clk := newTestUI()
-	u.Alert(session.MsgRecordFailed)
-	u.Alert(session.MsgASRFailed)
-	u.Alert(session.MsgRecordFailed)
-	u.Alert(session.MsgASRFailed)
-	for _, want := range []string{session.MsgRecordFailed, session.MsgASRFailed, ""} {
+	u.Alert(session.MsgRecordFailed())
+	u.Alert(session.MsgASRFailed())
+	u.Alert(session.MsgRecordFailed())
+	u.Alert(session.MsgASRFailed())
+	for _, want := range []string{session.MsgRecordFailed(), session.MsgASRFailed(), ""} {
 		if ov.label != want {
 			t.Fatalf("label %q, want %q", ov.label, want)
 		}
@@ -112,20 +140,20 @@ func TestOverlayNoSignalLastsWhileSilent(t *testing.T) {
 	u, ov, clk := newTestUI()
 	wave := func() []audio.Quality { return nil }
 	u.Show(session.View{Quality: wave})
-	u.Alert(session.MsgUndelivered)
+	u.Alert(session.MsgUndelivered())
 	u.Show(session.View{Quality: wave, NoSignal: true})
-	if ov.label != session.MsgUndelivered {
+	if ov.label != session.MsgUndelivered() {
 		t.Fatalf("label %q, want the alert over the notice", ov.label)
 	}
-	if clk.expire(t); ov.label != session.NoSignal || !ov.wave {
+	if clk.expire(t); ov.label != session.MsgNoSignal() || !ov.wave {
 		t.Fatalf("after the alert: label %q, waveform %v; want the notice over the waveform", ov.label, ov.wave)
 	}
 	u.Flash("已取消 0:04")
-	if clk.expire(t); ov.label != session.NoSignal {
+	if clk.expire(t); ov.label != session.MsgNoSignal() {
 		t.Fatalf("after a flash: label %q, want the notice", ov.label)
 	}
 	u.Show(session.View{Quality: wave})
-	if ov.label == session.NoSignal || ov.label == "" {
+	if ov.label == session.MsgNoSignal() || ov.label == "" {
 		t.Fatalf("signal back: label %q, want the recording label", ov.label)
 	}
 }

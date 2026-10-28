@@ -21,6 +21,7 @@ import (
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/ctl"
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/micserver"
 )
@@ -30,11 +31,13 @@ import (
 // record every 30 s — and renders meetState on a status item.
 type meetMenu struct {
 	config   string                 // the config file the pickers write
+	flag     string                 // --config as given: "" lets the default file be absent
 	global   []string               // the global flags a megavoice command from the menu gets
 	sock     string                 // megameet serve's control socket
 	listener func() (string, error) // the listener this process holds, or why none
 	take     func() voiceTake       // the dictation take recording now
 	count    func() int             // the takes undelivered and not seen
+	release  func() string          // a staging build's update or model-download line; nil on a dev build
 	item     *mac.StatusItem
 	wake     chan struct{}
 
@@ -56,11 +59,13 @@ func meetMenuOf(o app.LoadOpts, running app.Config, take func() voiceTake, count
 		sock:     filepath.Join(filepath.Dir(stateDir()), "megameet", "ctl.sock"), // megameet's stateDir()/ctl.sock
 		wake:     make(chan struct{}, 1),
 		listener: listener,
+		flag:     o.Path,
 	}
 	if o.Path != "" {
 		m.global = []string{"--config", o.Path}
 	}
 	m.st.Voice.Running, m.st.Voice.Store = voiceOf(running), running.Store.Data
+	m.st.Voice.Staging = app.Channel != ""
 	return m
 }
 
@@ -126,8 +131,12 @@ func (m *meetMenu) poll() {
 	var s meetStatus
 	err := m.call("status", nil, 2*time.Second, &s)
 	tk, n := m.take(), m.count()
+	var rl string
+	if m.release != nil {
+		rl = m.release()
+	}
 	m.mu.Lock()
-	m.st.Voice.Take, m.st.Voice.Undelivered = tk, n
+	m.st.Voice.Take, m.st.Voice.Undelivered, m.st.Voice.Release = tk, n, rl
 	was := m.st.Status.Recording
 	if err != nil {
 		m.st.Down, m.st.Status = err.Error(), meetStatus{}
@@ -167,12 +176,10 @@ func (m *meetMenu) readLocal() {
 	if err != nil {
 		log.Printf("menu: inputs: %v", err)
 	}
-	pick, page, fileErr := "default", "", ""
-	l, err := load(app.LoadOpts{Path: m.config})
-	if err == nil {
+	pick, page := "default", ""
+	l, fileErr := menuConfig(m.flag)
+	if fileErr == "" {
 		pick, page = l.Meeting.Capture.Mic, meetingsPage(l.Meeting.Page)
-	} else {
-		fileErr = err.Error()
 	}
 	var models []model
 	ggufs, _ := filepath.Glob(filepath.Join(app.FinetuneDir(), "*", "*.gguf"))
@@ -212,6 +219,7 @@ func (m *meetMenu) readLocal() {
 	v.File, v.FileErr, v.Models, v.Logs = voiceOf(l.Config), fileErr, models, logs
 	v.Hotwords, v.Corrections = app.HotwordsPath(), app.CorrectionsPath()
 	v.Takes, v.TakesNote = pageURL(m.listener()) // read at every open: a rotated key applies at once
+	v.Phone = phonePageURL(m.listener())
 	if fileErr == "" {
 		v.Store = l.Store.Data
 		v.Compare = compareSettings{On: l.Compare.On, Engines: l.Compare.Engines}
@@ -225,6 +233,11 @@ func (m *meetMenu) opened() {
 	m.open = true
 	m.lastAt = time.Time{}
 	m.mu.Unlock()
+	m.render()
+	go m.refreshOpen()
+}
+
+func (m *meetMenu) refreshOpen() {
 	m.readLocal()
 	go m.probeRemotes()
 	m.mu.Lock()
@@ -288,9 +301,9 @@ func (m *meetMenu) probeRemotes() {
 // addRemote is Add Remote Mic › Other…: it asks for a mic server's host,
 // then pairs as a found box does.
 func (m *meetMenu) addRemote() {
-	vals, ok := mac.Prompt("Add Remote Mic",
-		"The machine that runs `megavoice mic serve`, e.g. the Linux box your mic array is plugged into.", "Next",
-		[]mac.Field{{Label: "Host", Placeholder: "micbox or micbox:7866"}})
+	vals, ok := mac.Prompt(l10n.T("Add Remote Mic", "添加远程麦克风"),
+		l10n.T("The machine that runs `megavoice mic serve`, e.g. the Linux box your mic array is plugged into.", "运行 `megavoice mic serve` 的机器，比如接着麦克风阵列的那台 Linux。"), l10n.T("Next", "下一步"),
+		[]mac.Field{{Label: l10n.T("Host", "主机"), Placeholder: l10n.T("micbox or micbox:7866", "micbox 或 micbox:7866")}})
 	if !ok || strings.TrimSpace(vals[0]) == "" {
 		return
 	}
@@ -319,7 +332,7 @@ func (m *meetMenu) pair(dest, port, addr string) {
 				log.Printf("menu: pair %s over ssh: %v", dest, err)
 				m.readLocal()
 				m.note(err)
-				mac.Later(func() { mac.Alert("Pairing with "+dest+" failed", err.Error()) })
+				mac.Later(func() { mac.Alert(l10n.F("Pairing with %s failed", "与 %s 配对失败", dest), err.Error()) })
 				return
 			}
 			log.Printf("menu: pair %s over ssh: %v; asking for the PIN", dest, err)
@@ -339,15 +352,17 @@ func (m *meetMenu) pinPair(addr string, why error) {
 	// a TLS answer, not only a TCP one: a proxy's fake IP accepts TCP
 	// and closes, and the PIN prompt would come before the failure
 	if err := micserver.Probe(context.Background(), addr); err != nil {
-		mac.Later(func() { mac.Alert(addr+" unreachable", err.Error()+"\n\nIs `megavoice mic serve` running there?") })
+		mac.Later(func() {
+			mac.Alert(l10n.F("%s unreachable", "连不上 %s", addr), err.Error()+l10n.T("\n\nIs `megavoice mic serve` running there?", "\n\n那台机器上在运行 `megavoice mic serve` 吗？"))
+		})
 		return
 	}
-	msg := "Run `megavoice mic pair` on " + hostOf(addr) + " and type the 8-digit PIN it shows. It works once, for 2 minutes."
+	msg := l10n.F("Run `megavoice mic pair` on %s and type the 8-digit PIN it shows. It works once, for 2 minutes.", "在 %s 上运行 `megavoice mic pair`，输入它显示的 8 位 PIN。只能用一次，2 分钟内有效。", hostOf(addr))
 	if why != nil {
-		msg = "Pairing over ssh did not work (" + trim(why.Error(), 160) + ").\n\n" + msg
+		msg = l10n.F("Pairing over ssh did not work (%s).\n\n", "经 ssh 配对没有成功（%s）。\n\n", trim(why.Error(), 160)) + msg
 	}
 	mac.Later(func() {
-		vals, ok := mac.Prompt("Pair with "+hostOf(addr), msg, "Pair", []mac.Field{{Label: "PIN", Placeholder: "8 digits"}})
+		vals, ok := mac.Prompt(l10n.F("Pair with %s", "与 %s 配对", hostOf(addr)), msg, l10n.T("Pair", "配对"), []mac.Field{{Label: "PIN", Placeholder: l10n.T("8 digits", "8 位数字")}})
 		if !ok {
 			return
 		}
@@ -360,12 +375,12 @@ func (m *meetMenu) pinPair(addr string, why error) {
 			m.note(err)
 			if err != nil {
 				log.Printf("menu: pair %s: %v", addr, err)
-				mac.Later(func() { mac.Alert("Pairing with "+hostOf(addr)+" failed", err.Error()) })
+				mac.Later(func() { mac.Alert(l10n.F("Pairing with %s failed", "与 %s 配对失败", hostOf(addr)), err.Error()) })
 				return
 			}
 			log.Printf("menu: paired with %s (%s) as %s", r.Name, r.Addr, r.Client)
 			mac.Later(func() {
-				mac.Alert("Paired with "+r.Name, "Dictation records from "+r.Name+"'s mic from the next take. On "+r.Name+", `megavoice mic revoke "+r.Client+"` ends it.")
+				mac.Alert(l10n.F("Paired with %s", "已与 %s 配对", r.Name), l10n.F("Dictation records from %[1]s's mic from the next take. On %[1]s, `megavoice mic revoke %[2]s` ends it.", "从下一条录音起，听写用 %[1]s 的麦克风录音。在 %[1]s 上运行 `megavoice mic revoke %[2]s` 可以解除。", r.Name, r.Client))
 			})
 		}()
 	})
@@ -507,7 +522,7 @@ func (m *meetMenu) do(a act) {
 // first, and the choice made either ends it and exits or keeps it recording.
 func (m *meetMenu) exit(cmd string) {
 	tk := m.take()
-	o := exitOffer(cmd, tk.Elapsed)
+	o := exitOffer(cmd, tk.Elapsed, tk.Stream)
 	choice := -1
 	if tk.Recording {
 		labels := make([]string, len(o.choices))

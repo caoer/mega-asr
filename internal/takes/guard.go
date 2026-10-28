@@ -16,10 +16,14 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/caoer/mega-asr/internal/l10n"
 )
 
 // Denied is the body of every refusal: where the page is opened from.
-const Denied = "从菜单栏重新打开录音历史\n"
+func Denied() string {
+	return l10n.T("从菜单栏重新打开录音历史\n", "Open Recordings again from the menu bar\n")
+}
 
 // KeyFile is the listener's key: 128 random bits, hex, in a 0600 file of a
 // 0700 state directory. It changes on Rotate: megavoice serve rotates it at
@@ -189,7 +193,7 @@ func same(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byt
 func deny(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	w.Write([]byte(Denied))
+	w.Write([]byte(Denied()))
 }
 
 // host reports whether a request's Host is a loopback address with the

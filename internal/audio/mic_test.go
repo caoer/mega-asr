@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -242,5 +243,35 @@ func TestMicPumpDrainsOnClose(t *testing.T) {
 	// All but the resampler's half-kernel of lookahead arrives, at the level fed.
 	if len(got) < 3000 || !slices.Contains(got, toInt16(0.5)) {
 		t.Fatalf("delivered %d samples", len(got))
+	}
+}
+
+func TestDeviceWatchIgnoresBlockedConsumer(t *testing.T) {
+	done := make(chan struct{})
+	defer close(done)
+	halted := make(chan error, 1)
+	go watchInput(done, time.Millisecond, 5*time.Millisecond, 5*time.Millisecond, func() (time.Duration, bool) { return time.Second, true }, func() error { return nil }, func(err error) { halted <- err })
+	select {
+	case err := <-halted:
+		if err == nil {
+			t.Fatal("missing device stall")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked consumer hid device stall")
+	}
+}
+
+func TestDeviceWatchStopsOnRateChange(t *testing.T) {
+	done := make(chan struct{})
+	defer close(done)
+	halted := make(chan error, 1)
+	go watchInput(done, time.Millisecond, time.Second, time.Second, func() (time.Duration, bool) { return 0, true }, func() error { return fmt.Errorf("sample rate changed") }, func(err error) { halted <- err })
+	select {
+	case err := <-halted:
+		if err == nil {
+			t.Fatal("missing format error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("format change not checked")
 	}
 }

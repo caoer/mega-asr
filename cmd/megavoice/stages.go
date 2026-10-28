@@ -104,6 +104,9 @@ func transcribe(o app.LoadOpts, args []string) error {
 		return err
 	}
 	fmt.Println(text)
+	if id := d.logid(); id != "" {
+		fmt.Fprintln(os.Stderr, "doubao logid", id)
+	}
 	return nil
 }
 
@@ -112,10 +115,30 @@ func transcribe(o app.LoadOpts, args []string) error {
 // temporary store. The controller's log is dropped, so stdout — which the
 // menu's checks show — carries the text alone.
 type decoder struct {
-	r   *offline
-	tr  asr.Transcriber
-	ui  *flashes
-	tmp string
+	r      *offline
+	tr     asr.Transcriber
+	ui     *flashes
+	tmp    string
+	stream *lastStream // the streaming engine's, nil for funasr
+}
+
+// lastStream is a Streamer that keeps the stream it opened last.
+type lastStream struct {
+	asr.Streamer
+	last asr.Stream
+}
+
+func (l *lastStream) Open() asr.Stream { l.last = l.Streamer.Open(); return l.last }
+
+// logid is the last take's Doubao logid, "" for none.
+func (d *decoder) logid() string {
+	if d.stream == nil {
+		return ""
+	}
+	if s, ok := d.stream.last.(interface{ Logid() string }); ok {
+		return s.Logid()
+	}
+	return ""
 }
 
 func newDecoder(c app.Config, engine string, plain bool) (*decoder, error) {
@@ -138,6 +161,10 @@ func newDecoder(c app.Config, engine string, plain bool) (*decoder, error) {
 	}
 	d := &decoder{r: newOffline(c, tr, pc, filepath.Join(tmp, "takes"), ""), tr: tr, ui: &flashes{}, tmp: tmp}
 	d.r.ctrl.UI = d.ui
+	if s := d.r.ctrl.Stream; s != nil {
+		d.stream = &lastStream{Streamer: s}
+		d.r.ctrl.Stream = d.stream
+	}
 	return d, nil
 }
 
@@ -148,7 +175,7 @@ func (d *decoder) text(wav string) (string, error) {
 	}
 	d.ui.take()
 	text, _, _ := d.r.take(wav, math.Inf(1))
-	if msg := d.ui.take(); msg == session.MsgASRFailed || msg == session.MsgIncomplete {
+	if msg := d.ui.take(); msg == session.MsgASRFailed() || msg == session.MsgIncomplete() {
 		return "", fmt.Errorf("%s: %s", filepath.Base(wav), msg)
 	}
 	return text, nil

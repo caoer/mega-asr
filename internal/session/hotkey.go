@@ -9,11 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
 // MsgNothingToResend is the hotkey's flash when no take qualifies.
-const MsgNothingToResend = "10 分钟内没有可重贴的录音"
+func MsgNothingToResend() string {
+	return l10n.T("10 分钟内没有可重贴的录音", "No take from the last 10 minutes to paste again")
+}
 
 const (
 	// hotkeyWithin: the hotkey reaches the takes started this long ago or
@@ -27,13 +30,13 @@ const (
 // ErrHotkeyNoText is the hotkey's answer when the newest cancelled take
 // has no text: its transcription failed, or it ended before its text was
 // saved.
-var ErrHotkeyNoText = errors.New(MsgASRFailed)
+var ErrHotkeyNoText = l10n.Err("识别失败 · 已存入历史", "Transcription failed · saved in Recordings")
 
 // ErrHotkeySilent is the hotkey's answer when the newest cancelled take is
 // silent: its transcription heard no words.
-var ErrHotkeySilent = errors.New("没有识别到文字")
+var ErrHotkeySilent = l10n.Err("没有识别到文字", "No words heard")
 
-// HotkeyTake is the take the hotkey pastes at now: the newest undelivered
+// HotkeyTake is the Mac-input take the hotkey pastes at now: the newest undelivered
 // take with text among those started in the last 10 minutes, else the
 // newest cancelled take of 1 s or more among them; "" when there is none.
 // An undelivered take whose paste an exit cut (delivery_cut: it most likely
@@ -65,6 +68,9 @@ func (c *Controller) HotkeyTake(now time.Time) (string, error) {
 		return "", nil
 	}
 	for _, r := range recs {
+		if phoneInput(r.Base) {
+			continue
+		}
 		if st := store.State(r.Events); st.State != "undelivered" || st.Why == "delivery_cut" || st.Dismissed {
 			continue
 		}
@@ -73,6 +79,9 @@ func (c *Controller) HotkeyTake(now time.Time) (string, error) {
 		}
 	}
 	for _, r := range recs {
+		if phoneInput(r.Base) {
+			continue
+		}
 		if store.State(r.Events).State != "cancelled" || stopLength(r.Events) < hotkeyMinCancelled {
 			continue
 		}
@@ -85,6 +94,14 @@ func (c *Controller) HotkeyTake(now time.Time) (string, error) {
 		return filepath.Base(r.Base), nil
 	}
 	return "", nil
+}
+
+// Phone dictation stays in history for explicit choices, but never becomes
+// the Mac hotkey's implicit resend or cancelled-take fallback. Legacy takes
+// without an input sidecar keep their existing eligibility.
+func phoneInput(base string) bool {
+	in, err := store.LoadInput(base)
+	return err == nil && in.Source == "phone"
 }
 
 // stopLength is a take's length as its stop line gives it; 0 without one.
@@ -118,7 +135,7 @@ func (c *Controller) Hotkey() {
 		c.UI.Flash(err.Error())
 		return
 	case id == "":
-		c.UI.Flash(MsgNothingToResend)
+		c.UI.Flash(MsgNothingToResend())
 		return
 	case !c.hotkeying.CompareAndSwap(false, true):
 		c.UI.Flash(ErrResending.Error())
@@ -136,14 +153,18 @@ func (c *Controller) Hotkey() {
 
 // hotkeyResend is the hotkey's paste of the take id into what has focus.
 func (c *Controller) hotkeyResend(id string) {
-	if _, err := c.Resend(Resend{ID: id, To: c.Deliver.Capture(), Via: "hotkey", Where: "当前光标"}); err != nil {
+	to := c.Deliver.Capture
+	if cc, ok := c.Deliver.(CursorCapturer); ok { // never a locked target: the hotkey pastes at the cursor
+		to = cc.CaptureCursor
+	}
+	if _, err := c.Resend(Resend{ID: id, To: to(), Via: "hotkey", Where: l10n.T("当前光标", "the cursor")}); err != nil {
 		log.Printf("session: hotkey: %s: %v", id, err)
 		msg := err.Error()
 		switch {
 		case errors.Is(err, ErrDeliveryBusy):
-			msg = "另一条正在送达"
+			msg = l10n.T("另一条正在送达", "Another take is being delivered")
 		case !errors.Is(err, ErrRecording) && !errors.Is(err, ErrTranscribing) && !errors.Is(err, ErrResending):
-			msg = "没能重贴 · " + msg
+			msg = l10n.T("没能重贴 · ", "Couldn't paste again · ") + msg
 		}
 		c.UI.Flash(msg)
 	}
@@ -153,7 +174,7 @@ func (c *Controller) hotkeyResend(id string) {
 // configured tap key with Esc, or the default tap key's (右Option+Esc 重贴)
 // when HotkeyKey is empty.
 func (c *Controller) hint() string {
-	return cmp.Or(c.HotkeyKey, "右Option") + "+Esc 重贴"
+	return l10n.F("%s+Esc 重贴", "%s+Esc pastes again", cmp.Or(c.HotkeyKey, l10n.T("右Option", "Right Option")))
 }
 
 // becomesUndelivered reports whether appending e to the record at base

@@ -1,0 +1,23 @@
+{
+  "about": "S6: requests under a paired watch's key whose signatures fail are 404 however many come, never 429, and spend none of the key's bucket or nonces; only verified requests spend it (burst 10, 2 per second).",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"close": {"as": "mac", "code": 1000}},
+    {"repeat": {"times": 30, "steps": [
+      {"post": {"as": "f{i}", "room": "main", "request": {"key": "watch1", "signer": "stranger", "nonce": "f{i}"}}},
+      {"expect": {"as": "f{i}", "status": 404}}
+    ]}},
+    {"repeat": {"times": 10, "steps": [
+      {"post": {"as": "v{i}", "room": "main", "request": {"key": "watch1", "nonce": "v{i}"}}},
+      {"expect": {"as": "v{i}", "status": 503}}
+    ]}},
+    {"post": {"as": "over", "room": "main", "request": {"key": "watch1", "nonce": "over"}}},
+    {"expect": {"as": "over", "status": 429}},
+    {"advance_ms": 500},
+    {"post": {"as": "f0again", "room": "main", "request": {"key": "watch1", "nonce": "f0"}}},
+    {"expect": {"as": "f0again", "status": 503}},
+    {"post": {"as": "replay", "room": "main", "request": {"key": "watch1", "nonce": "v0"}}},
+    {"expect": {"as": "replay", "status": 404}}
+  ]
+}

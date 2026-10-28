@@ -10,6 +10,36 @@
 (function () {
   "use strict";
 
+  // The page's language, fixed at load: Chinese when the html's lang (which
+  // lang.js sets from megavoice's language) is zh, English otherwise. tr is
+  // every word the page shows, in both: tr(zh, en).
+  var ZH = /^zh/i.test(document.documentElement.lang || "");
+  function tr(zh, en) {
+    return ZH ? zh : en;
+  }
+  // takesN and charsN are counts in English: 1 take, 3 takes.
+  function takesN(n) {
+    return n + (n === 1 ? " take" : " takes");
+  }
+  function charsN(n) {
+    return n + (n === 1 ? " character" : " characters");
+  }
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  // the title, which megavoice knows the page's window by; the title
+  // element precedes this script
+  document.title = tr("录音历史 · megavoice", "Recordings · megavoice");
+  // localize puts the English of the html's own text in place: data-en is
+  // an element's text, data-en-<attr> one of its attributes.
+  function localize() {
+    if (ZH) return;
+    document.querySelectorAll("*").forEach(function (el) {
+      Array.prototype.slice.call(el.attributes).forEach(function (a) {
+        if (a.name === "data-en") el.textContent = a.value;
+        else if (a.name.slice(0, 8) === "data-en-") el.setAttribute(a.name.slice(8), a.value);
+      });
+    });
+  }
+
   // The theme before the first paint: this file loads in <head>.
   try {
     var saved = localStorage.getItem("takes.theme");
@@ -131,14 +161,14 @@
   function hm(d) {
     return p2(d.getHours()) + ":" + p2(d.getMinutes());
   }
-  var WD = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  var WD = tr(["周日", "周一", "周二", "周三", "周四", "周五", "周六"], ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]);
   function dayKey(d) {
     return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate());
   }
   // dayLabel is a day key (YYYY-MM-DD) as the day heads read it.
   function dayLabel(key) {
     var d = new Date(+key.slice(0, 4), +key.slice(5, 7) - 1, +key.slice(8, 10));
-    return (key === dayKey(new Date()) ? "今天 · " : "") + WD[d.getDay()] + " " + (d.getMonth() + 1) + "/" + d.getDate();
+    return (key === dayKey(new Date()) ? tr("今天 · ", "Today · ") : "") + WD[d.getDay()] + " " + (d.getMonth() + 1) + "/" + d.getDate();
   }
   // newer orders take ids newest first, as the server does: by the stamp,
   // then by the -N of a second take in the same second.
@@ -150,8 +180,14 @@
     return seq(b) - seq(a);
   }
 
-  var WORD = { sent: "已发送", pasted: "已粘贴", cancelled: "已取消", empty: "无语音", undelivered: "未送达", dismissed: "已忽略", recording: "录音中", transcribing: "识别中", unknown: "早期录音" };
-  var WHY = { deliver_failed: "送达失败", asr_failed: "识别失败", interrupted: "被打断", delivery_cut: "粘贴时被打断", incomplete: "不完整" };
+  var WORD = tr(
+    { sent: "已发送", pasted: "已粘贴", cancelled: "已取消", empty: "无语音", undelivered: "未送达", dismissed: "已忽略", recording: "录音中", transcribing: "识别中", unknown: "早期录音" },
+    { sent: "Sent", pasted: "Pasted", cancelled: "Cancelled", empty: "No speech", undelivered: "Not delivered", dismissed: "Dismissed", recording: "Recording", transcribing: "Transcribing", unknown: "Early take" },
+  );
+  var WHY = tr(
+    { deliver_failed: "送达失败", asr_failed: "识别失败", interrupted: "被打断", delivery_cut: "粘贴时被打断", incomplete: "不完整" },
+    { deliver_failed: "Delivery failed", asr_failed: "Transcription failed", interrupted: "Interrupted", delivery_cut: "Cut off while pasting", incomplete: "Incomplete" },
+  );
   var MARK = { unknown: "legacy" }; // the state whose mark has another name
   var GLYPH = {
     sent: '<circle cx="5" cy="5" r="4" fill="currentColor"/>',
@@ -216,7 +252,7 @@
   // target is a take's target: its short name for the row and its full name.
   function target(t) {
     if (!t) return { short: "", full: "" };
-    if (t.kind === "clipboard") return { short: "剪贴板", full: "剪贴板" };
+    if (t.kind === "clipboard") return { short: tr("剪贴板", "Clipboard"), full: tr("剪贴板", "Clipboard") };
     if (t.pane) {
       var s = (t.workspace ? t.workspace + " › " : "") + t.pane;
       return { short: s, full: s + (t.title ? " · " + t.title : "") };
@@ -407,8 +443,8 @@
     qInput = h("input", {
       id: "q",
       type: "search",
-      placeholder: "搜索文字，中文英文都可以…",
-      "aria-label": "搜索录音文字",
+      placeholder: tr("搜索文字，中文英文都可以…", "Search text, Chinese or English…"),
+      "aria-label": tr("搜索录音文字", "Search recordings"),
       autocomplete: "off",
       spellcheck: "false",
       oninput: function (e) {
@@ -427,27 +463,27 @@
       }, 150);
     }
     freshEl = h("span", { class: "fresh", role: "status" });
-    keysBtn = h("button", { class: "icon-btn", type: "button", "aria-label": "快捷键", "aria-expanded": "false", onclick: toggleKeys, text: "?" });
+    keysBtn = h("button", { class: "icon-btn", type: "button", "aria-label": tr("快捷键", "Keyboard shortcuts"), "aria-expanded": "false", onclick: toggleKeys, text: "?" });
     return h(
       "header",
       { class: "topbar" },
       h(
         "div",
         { class: "topbar-in" },
-        h("a", { class: "brand", href: "./", translate: "no" }, brandMark(), h("span", null, "录音历史")),
+        h("a", { class: "brand", href: "./", translate: "no" }, brandMark(), h("span", null, tr("录音历史", "Recordings"))),
         h("div", { class: "search", role: "search" }, icon("search", 15), qInput, h("kbd", null, "/")),
         freshEl,
-        h("div", { class: "tools" }, keysBtn, h("button", { class: "icon-btn", type: "button", "aria-label": "切换深浅色", onclick: toggleTheme }, icon("theme"))),
+        h("div", { class: "tools" }, keysBtn, h("button", { class: "icon-btn", type: "button", "aria-label": tr("切换深浅色", "Toggle light or dark"), onclick: toggleTheme }, icon("theme"))),
       ),
     );
   }
   function fresh() {
     if (!freshEl) return;
     if (D.down && D.lastOK) {
-      freshEl.textContent = hm(D.lastOK) + " 之后没有更新";
+      freshEl.textContent = tr(hm(D.lastOK) + " 之后没有更新", "No updates since " + hm(D.lastOK));
       freshEl.dataset.kind = "stale";
     } else {
-      freshEl.textContent = D.lastOK ? "刚刚更新" : "";
+      freshEl.textContent = D.lastOK ? tr("刚刚更新", "Updated just now") : "";
       delete freshEl.dataset.kind;
     }
   }
@@ -464,27 +500,27 @@
     render();
   }
   var KEYS = [
-    ["/", "搜索"],
-    ["j / k", "下一条 / 上一条"],
-    ["Enter", "打开这一条"],
-    ["u", "只看未送达"],
-    ["c", "复制这一条的文字"],
-    ["r", "重发…"],
-    ["i", "忽略这一条未送达 / 取消忽略"],
-    ["t", "重新识别…"],
-    ["1–9", "标第几版对（Shift 也标它）"],
-    ["e", "改待确认的正确文字"],
-    ["⌘↩", "确认为正确文字（在标注框里）"],
-    ["空格", "播放 / 暂停"],
-    ["← / →", "跳 1 秒（60 秒以上 5 秒），Shift 10 秒 / 60 秒"],
-    [", / .", "慢一档 / 快一档"],
-    ["Esc", "清除搜索，收起，或回到列表"],
+    ["/", tr("搜索", "Search")],
+    ["j / k", tr("下一条 / 上一条", "Next / previous take")],
+    ["Enter", tr("打开这一条", "Open this take")],
+    ["u", tr("只看未送达", "Show only not delivered")],
+    ["c", tr("复制这一条的文字", "Copy this take's text")],
+    ["r", tr("重发…", "Resend…")],
+    ["i", tr("忽略这一条未送达 / 取消忽略", "Dismiss this undelivered take / undo")],
+    ["t", tr("重新识别…", "Re-transcribe…")],
+    ["1–9", tr("标第几版对（Shift 也标它）", "Mark version N correct (Shift adds it)")],
+    ["e", tr("改待确认的正确文字", "Edit the pending correct text")],
+    ["⌘↩", tr("确认为正确文字（在标注框里）", "Confirm as correct text (in the label box)")],
+    [tr("空格", "Space"), tr("播放 / 暂停", "Play / pause")],
+    ["← / →", tr("跳 1 秒（60 秒以上 5 秒），Shift 10 秒 / 60 秒", "Skip 1 s (5 s past 60 s), Shift 10 s / 60 s")],
+    [", / .", tr("慢一档 / 快一档", "Slower / faster")],
+    ["Esc", tr("清除搜索，收起，或回到列表", "Clear search, close, or back to the list")],
   ];
   function keysPanel() {
     return h(
       "div",
-      { class: "keys", role: "dialog", "aria-label": "快捷键" },
-      h("h2", null, "快捷键"),
+      { class: "keys", role: "dialog", "aria-label": tr("快捷键", "Keyboard shortcuts") },
+      h("h2", null, tr("快捷键", "Keyboard shortcuts")),
       h(
         "dl",
         null,
@@ -507,8 +543,8 @@
       "div",
       { class: "notice", "data-kind": "err", role: "status" },
       h("span", { class: "state" }, offMark()),
-      h("b", null, "megavoice 未运行"),
-      h("span", null, D.lastOK ? "下面是 " + hm(D.lastOK) + " 的列表，它回来后会自动刷新" : "它回来后会自动刷新"),
+      h("b", null, tr("megavoice 未运行", "megavoice is not running")),
+      h("span", null, D.lastOK ? tr("下面是 " + hm(D.lastOK) + " 的列表，它回来后会自动刷新", "The list below is from " + hm(D.lastOK) + "; it refreshes when megavoice is back") : tr("它回来后会自动刷新", "It refreshes when megavoice is back")),
     );
   }
 
@@ -526,10 +562,10 @@
             "button",
             { class: "notice strip", type: "button", "data-k": "strip", "aria-pressed": S.f === "undelivered" ? "true" : "false", onclick: toggleUndelivered },
             glyph("undelivered"),
-            h("b", null, u + " 条未送达"),
-            h("span", { class: "go" }, S.f === "undelivered" ? "显示全部" : "只看这些"),
+            h("b", null, tr(u + " 条未送达", u + " not delivered")),
+            h("span", { class: "go" }, S.f === "undelivered" ? tr("显示全部", "Show all") : tr("只看这些", "Show only these")),
           ),
-          u ? h("button", { class: "btn", type: "button", "data-k": "dismiss-all", disabled: !!dismissing, onclick: dismissAll }, "全部忽略") : null,
+          u ? h("button", { class: "btn", type: "button", "data-k": "dismiss-all", disabled: !!dismissing, onclick: dismissAll }, tr("全部忽略", "Dismiss all")) : null,
         ),
       );
     if (S.undo)
@@ -538,21 +574,21 @@
           "div",
           { class: "notice", "data-kind": "done", role: "status" },
           h("span", { class: "state", "data-s": "dismissed" }, glyph("dismissed")),
-          h("b", null, "已忽略 " + S.undo.length + " 条"),
-          h("span", null, "录音和文字都还在，不再算作未送达"),
+          h("b", null, tr("已忽略 " + S.undo.length + " 条", "Dismissed " + takesN(S.undo.length))),
+          h("span", null, tr("录音和文字都还在，不再算作未送达", "Audio and text are kept; they no longer count as not delivered")),
           h("span", { class: "notice-acts" },
-            h("button", { class: "btn", type: "button", "data-k": "undo-all", disabled: !!dismissing, onclick: undoAll }, "撤销"),
-            h("button", { class: "btn", type: "button", "data-k": "undo-close", onclick: function () { S.undo = null; render(); } }, "收起"),
+            h("button", { class: "btn", type: "button", "data-k": "undo-all", disabled: !!dismissing, onclick: undoAll }, tr("撤销", "Undo")),
+            h("button", { class: "btn", type: "button", "data-k": "undo-close", onclick: function () { S.undo = null; render(); } }, tr("收起", "Close")),
           ),
         ),
       );
     var all = total();
     out.push(
       S.q.trim()
-        ? h("h1", { class: "count-line" }, "找到 " + D.matched + " 条", h("span", { class: "of" }, "共 " + all))
-        : h("h1", { class: "count-line" }, D.matched + " 条录音", D.matched !== all ? h("span", { class: "of" }, "共 " + all) : null),
+        ? h("h1", { class: "count-line" }, tr("找到 " + D.matched + " 条", "Found " + D.matched), h("span", { class: "of" }, tr("共 " + all, "of " + all)))
+        : h("h1", { class: "count-line" }, tr(D.matched + " 条录音", takesN(D.matched)), D.matched !== all ? h("span", { class: "of" }, tr("共 " + all, "of " + all)) : null),
     );
-    var pills = [["", "全部", all]].concat(
+    var pills = [["", tr("全部", "All"), all]].concat(
       ["undelivered", "sent", "pasted", "cancelled", "empty", "dismissed"]
         .filter(function (s) {
           return s !== "dismissed" || st.dismissed || S.f === s;
@@ -564,8 +600,8 @@
     function sel(label, key, values) {
       return h(
         "select",
-        { "aria-label": "按" + label + "筛选", "data-k": "sel:" + key, onchange: function (e) { setFilter(key, e.target.value); } },
-        h("option", { value: "" }, "全部" + label),
+        { "aria-label": tr("按" + label + "筛选", "Filter by " + label), "data-k": "sel:" + key, onchange: function (e) { setFilter(key, e.target.value); } },
+        h("option", { value: "" }, tr("全部" + label, "All " + label + "s")),
         values.map(function (v) {
           return h("option", { value: v[0], selected: S[key] === v[0] }, v[1]);
         }),
@@ -578,7 +614,7 @@
         { class: "filters" },
         h(
           "div",
-          { class: "pills", role: "group", "aria-label": "按状态筛选" },
+          { class: "pills", role: "group", "aria-label": tr("按状态筛选", "Filter by status") },
           pills.map(function (p) {
             return h(
               "button",
@@ -591,9 +627,9 @@
         h(
           "div",
           { class: "selects" },
-          sel("目标", "target", f.targets.map(function (x) { return [x.key, x.label || x.key]; })),
-          sel("设备", "device", f.devices.map(function (x) { return [x.key, x.key]; })),
-          sel("日期", "day", f.days.map(function (x) { return [x.key, dayLabel(x.key)]; })),
+          sel(tr("目标", "target"), "target", f.targets.map(function (x) { return [x.key, x.label || x.key]; })),
+          sel(tr("设备", "device"), "device", f.devices.map(function (x) { return [x.key, x.key]; })),
+          sel(tr("日期", "date"), "day", f.days.map(function (x) { return [x.key, dayLabel(x.key)]; })),
         ),
       ),
     );
@@ -646,8 +682,8 @@
     var undo = !!t.dismissed;
     dismiss({ ids: [t.id] }, undo).then(function (ids) {
       if (ids === undefined || DT.id !== t.id) return;
-      if (!ids) say("main", "err", undo ? "没能取消忽略" : "没能忽略");
-      else if (ids.length) say("main", "ok", undo ? "已取消忽略 · 又算作未送达" : "已忽略 · 不再算作未送达");
+      if (!ids) say("main", "err", undo ? tr("没能取消忽略", "Couldn't undo the dismiss") : tr("没能忽略", "Couldn't dismiss"));
+      else if (ids.length) say("main", "ok", undo ? tr("已取消忽略 · 又算作未送达", "Undismissed · counts as not delivered again") : tr("已忽略 · 不再算作未送达", "Dismissed · no longer counts as not delivered"));
       drawDetail();
     });
   }
@@ -657,9 +693,9 @@
   function snippet(m) {
     var src = m.source;
     var tag = null;
-    if (src === "raw") tag = h("span", { class: "src" }, "原始");
-    else if (/^retranscription \d+$/.test(src)) tag = h("span", { class: "src" }, "重新识别 #" + src.split(" ")[1]);
-    else if (/^deliver \d+$/.test(src)) tag = h("span", { class: "src" }, "重发 #" + src.split(" ")[1]);
+    if (src === "raw") tag = h("span", { class: "src" }, tr("原始", "Raw"));
+    else if (/^retranscription \d+$/.test(src)) tag = h("span", { class: "src" }, tr("重新识别 #", "Re-transcription #") + src.split(" ")[1]);
+    else if (/^deliver \d+$/.test(src)) tag = h("span", { class: "src" }, tr("重发 #", "Resend #") + src.split(" ")[1]);
     else if (src !== "delivered") tag = h("span", { class: "src mono" }, src);
     // the lead is clipped from its left and the rest from its right, so the
     // match itself always shows (styles.css .txt.hit)
@@ -670,9 +706,9 @@
     var tg = target(t.target);
     var at = new Date(t.at);
     var txt;
-    if (t.state === "recording") txt = h("span", { class: "txt muted" }, "结束后显示文字");
-    else if (t.state === "empty") txt = h("span", { class: "txt" }, "（无语音）");
-    else txt = h("span", { class: t.match ? "txt hit" : "txt" }, t.why && WHY[t.why] ? h("span", { class: "why" }, WHY[t.why]) : null, t.match ? snippet(t.match) : t.line || (t.state === "transcribing" ? "正在识别…" : "（没有文字）"));
+    if (t.state === "recording") txt = h("span", { class: "txt muted" }, tr("结束后显示文字", "Text shows when it ends"));
+    else if (t.state === "empty") txt = h("span", { class: "txt" }, tr("（无语音）", "(no speech)"));
+    else txt = h("span", { class: t.match ? "txt hit" : "txt" }, t.why && WHY[t.why] ? h("span", { class: "why" }, WHY[t.why]) : null, t.match ? snippet(t.match) : t.line || (t.state === "transcribing" ? tr("正在识别…", "Transcribing…") : tr("（没有文字）", "(no text)")));
     var s = shown(t);
     var long = !t.match && t.dur_s > 60 && (t.state === "sent" || t.state === "pasted" || t.state === "undelivered");
     var playable = t.audio && t.state !== "recording";
@@ -701,7 +737,7 @@
             {
               class: "row-play",
               type: "button",
-              "aria-label": "播放 " + hms(at),
+              "aria-label": tr("播放 ", "Play ") + hms(at),
               "data-k": "rowplay:" + t.id,
               onclick: function () {
                 if (P && P.id === t.id) return togglePlay();
@@ -712,15 +748,15 @@
             icon("play", 12),
           )
         : null,
-      t.state === "recording" ? h("span", { class: "state", "data-s": "recording" }, glyph("recording"), "录音中 " + dur(t.dur_s)) : badge(s),
+      t.state === "recording" ? h("span", { class: "state", "data-s": "recording" }, glyph("recording"), tr("录音中 ", "Recording ") + dur(t.dur_s)) : badge(s),
       h("span", { class: "tgt", title: tg.full || null }, tg.short),
       txt,
-      t.labeled ? h("span", { class: "lb", role: "img", title: "已标注", "aria-label": "已标注" }, svg(10, 10, ICON.check)) : h("span", { class: "lb" }),
+      t.labeled ? h("span", { class: "lb", role: "img", title: tr("已标注", "Labeled"), "aria-label": tr("已标注", "Labeled") }, svg(10, 10, ICON.check)) : h("span", { class: "lb" }),
     );
   }
 
   function list() {
-    var col = h("section", { class: "list-col", id: "list", "aria-label": "录音列表", tabindex: "-1" });
+    var col = h("section", { class: "list-col", id: "list", "aria-label": tr("录音列表", "Recordings"), tabindex: "-1" });
     add(col, listHead());
     if (!D.rows.length) {
       add(
@@ -728,8 +764,8 @@
         h(
           "div",
           { class: "empty" },
-          h("h2", null, S.q.trim() ? "没有匹配「" + S.q.trim() + "」" : "这个筛选下没有录音"),
-          h("button", { class: "link", type: "button", "data-k": "clear", onclick: clearFilters }, "清除筛选"),
+          h("h2", null, S.q.trim() ? tr("没有匹配「" + S.q.trim() + "」", "Nothing matches “" + S.q.trim() + "”") : tr("这个筛选下没有录音", "No takes match these filters")),
+          h("button", { class: "link", type: "button", "data-k": "clear", onclick: clearFilters }, tr("清除筛选", "Clear filters")),
         ),
       );
       return col;
@@ -751,12 +787,12 @@
         h(
           "section",
           { class: "day", "aria-label": dayLabel(g.k) },
-          h("div", { class: "day-head" }, h("h2", null, dayLabel(g.k)), h("span", { class: "day-meta" }, d.n + " 条", d.undelivered ? [" · ", h("span", { class: "warn" }, d.undelivered + " 未送达")] : null)),
+          h("div", { class: "day-head" }, h("h2", null, dayLabel(g.k)), h("span", { class: "day-meta" }, tr(d.n + " 条", takesN(d.n)), d.undelivered ? [" · ", h("span", { class: "warn" }, tr(d.undelivered + " 未送达", d.undelivered + " not delivered"))] : null)),
           h("ul", { class: "rows" }, g.rows.map(row)),
         ),
       );
     });
-    add(col, h("p", { class: "more", id: "more" }, D.more ? "已显示 " + D.rows.length + " 条 · 更早的录音随滚动载入" : "已显示全部 " + D.rows.length + " 条"));
+    add(col, h("p", { class: "more", id: "more" }, D.more ? tr("已显示 " + D.rows.length + " 条 · 更早的录音随滚动载入", "Showing " + takesN(D.rows.length) + " · older ones load as you scroll") : tr("已显示全部 " + D.rows.length + " 条", D.rows.length === 1 ? "Showing the only take" : "Showing all " + D.rows.length + " takes")));
     return col;
   }
   function clearFilters() {
@@ -777,8 +813,8 @@
       detailEl = h("div", { id: "detail" });
       detailCol = h(
         "section",
-        { class: "detail-col", "aria-label": "这一条录音" },
-        h("nav", { class: "back" }, h("a", { href: "./", onclick: function (e) { e.preventDefault(); select(""); } }, icon("back", 14), "录音列表")),
+        { class: "detail-col", "aria-label": tr("这一条录音", "This take") },
+        h("nav", { class: "back" }, h("a", { href: "./", onclick: function (e) { e.preventDefault(); select(""); } }, icon("back", 14), tr("录音列表", "Recordings"))),
         detailEl,
       );
     }
@@ -855,7 +891,7 @@
       function (err) {
         if (err === Refused) return failed(err);
         if (DT.id !== id) return;
-        DT.err = err.status === 404 ? "这一条录音已经不在存储里了。" : "读不到这一条：" + err.message;
+        DT.err = err.status === 404 ? tr("这一条录音已经不在存储里了。", "This take is no longer in the store.") : tr("读不到这一条：", "Couldn't read this take: ") + err.message;
         drawDetail();
       },
     );
@@ -896,11 +932,11 @@
   function copyText(text, where) {
     return navigator.clipboard.writeText(text).then(
       function () {
-        say(where, "ok", "已复制 " + Array.from(text).length + " 字");
+        say(where, "ok", tr("已复制 " + Array.from(text).length + " 字", "Copied " + charsN(Array.from(text).length)));
         drawDetail();
       },
       function (err) {
-        say(where, "err", "没能复制：" + err.message);
+        say(where, "err", tr("没能复制：", "Couldn't copy: ") + err.message);
         drawDetail();
       },
     );
@@ -917,15 +953,15 @@
     return h(
       "header",
       { class: "d-head" },
-      h("h1", null, h("span", null, d.getMonth() + 1 + "月" + d.getDate() + "日 " + WD[d.getDay()] + " "), h("span", { class: "mono" }, hms(d)), badge(shown(t)), t.why && WHY[t.why] ? h("span", { class: "d-why" }, WHY[t.why]) : null),
+      h("h1", null, h("span", null, tr(d.getMonth() + 1 + "月" + d.getDate() + "日 " + WD[d.getDay()] + " ", WD[d.getDay()] + ", " + MON[d.getMonth()] + " " + d.getDate() + " ")), h("span", { class: "mono" }, hms(d)), badge(shown(t)), t.why && WHY[t.why] ? h("span", { class: "d-why" }, WHY[t.why]) : null),
       h(
         "div",
         { class: "d-meta" },
-        h("span", null, "时长 ", h("b", { class: "num" }, dur(t.dur_s))),
-        tg.short ? h("span", null, "原目标 ", h("b", { title: tg.full }, tg.short)) : null,
-        t.device ? h("span", null, "设备 ", h("b", null, t.device)) : null,
-        eng ? h("span", null, "引擎 ", h("b", { class: "mono" }, eng)) : null,
-        t.track === "backup" ? h("span", null, "声音 ", h("b", null, "备用输入"), "（主输入没有声音，播放的是备用输入）") : null,
+        h("span", null, tr("时长 ", "Length "), h("b", { class: "num" }, dur(t.dur_s))),
+        tg.short ? h("span", null, tr("原目标 ", "Target "), h("b", { title: tg.full }, tg.short)) : null,
+        t.device ? h("span", null, tr("设备 ", "Device "), h("b", null, t.device)) : null,
+        eng ? h("span", null, tr("引擎 ", "Engine "), h("b", { class: "mono" }, eng)) : null,
+        t.track === "backup" ? h("span", null, tr("声音 ", "Audio "), h("b", null, tr("备用输入", "backup input")), tr("（主输入没有声音，播放的是备用输入）", " (the main input was silent; this plays the backup)")) : null,
       ),
     );
   }
@@ -1077,7 +1113,7 @@
       var a0 = cmp.filter(function (a) { return a.engine === by; })[0];
       var name = by || evEng;
       out.push({
-        id: "main", main: true, name: name, label: m.src === "raw" ? "原始" : "", text: m.text, src: m.src,
+        id: "main", main: true, name: name, label: m.src === "raw" ? tr("原始", "Raw") : "", text: m.text, src: m.src,
         mark: m.src !== "delivered" ? "" : !cmp.length ? "delivered" : a0 && !a0.err && a0.text ? by : "",
         adopted: m.src === "delivered", primary: !!prim && prim === name, lat: a0 ? a0.latency_ms : 0, cloud: isCloud(name),
       });
@@ -1087,9 +1123,9 @@
       out.push({ id: "c:" + a.engine, name: a.engine, text: a.text, err: a.err, src: a.engine, mark: !a.err && a.text ? a.engine : "", primary: !!a.primary, lat: a.latency_ms, cloud: isCloud(a.engine), by: by });
     });
     t.answers.forEach(function (a) {
-      if (a.source === "retranscription") out.push({ id: "r" + a.n, label: "重新识别 #" + a.n, name: a.engine, text: a.text, err: a.err, src: "retranscription " + a.n, lat: a.latency_ms, cloud: isCloud(a.engine), retr: true });
+      if (a.source === "retranscription") out.push({ id: "r" + a.n, label: tr("重新识别 #", "Re-transcription #") + a.n, name: a.engine, text: a.text, err: a.err, src: "retranscription " + a.n, lat: a.latency_ms, cloud: isCloud(a.engine), retr: true });
     });
-    if (t.raw && m && m.src !== "raw") out.push({ id: "raw", label: "原始", text: t.raw, src: "raw", aside: true });
+    if (t.raw && m && m.src !== "raw") out.push({ id: "raw", label: tr("原始", "Raw"), text: t.raw, src: "raw", aside: true });
     return out;
   }
   function markNames(t) {
@@ -1106,7 +1142,7 @@
   function texts(t) {
     var open = DT.picker && DT.picker.kind === "retr";
     var inFlight = busy.retr[t.id];
-    var sec = h("section", { class: "block texts", "aria-labelledby": "h-txt" }, h("h2", { id: "h-txt", class: "sr-only" }, "文字"));
+    var sec = h("section", { class: "block texts", "aria-labelledby": "h-txt" }, h("h2", { id: "h-txt", class: "sr-only" }, tr("文字", "Text")));
     // 重新识别… under the stack: its answer joins the stack as a new row
     var foot =
       t.audio && t.state !== "recording"
@@ -1117,7 +1153,7 @@
               h(
                 "button",
                 { class: "btn", type: "button", "data-k": "retr", disabled: !!inFlight, "aria-expanded": open ? "true" : "false", onclick: toggleEngines },
-                inFlight ? "正在用 " + inFlight + " 识别…" : t.track === "backup" ? "重新识别备用输入…" : "重新识别…",
+                inFlight ? tr("正在用 " + inFlight + " 识别…", "Transcribing with " + inFlight + "…") : t.track === "backup" ? tr("重新识别备用输入…", "Re-transcribe the backup input…") : tr("重新识别…", "Re-transcribe…"),
               ),
               note("retr"),
             ),
@@ -1125,7 +1161,7 @@
           ]
         : null;
     var m = mainText(t);
-    if (!m) add(sec, h("p", { class: "d-text none" }, t.state === "recording" ? "录音中，结束后在这里显示文字。" : t.state === "transcribing" ? "正在识别，完成后在这里显示文字。" : "（无语音）"));
+    if (!m) add(sec, h("p", { class: "d-text none" }, t.state === "recording" ? tr("录音中，结束后在这里显示文字。", "Recording. The text shows here when it ends.") : t.state === "transcribing" ? tr("正在识别，完成后在这里显示文字。", "Transcribing. The text shows here when it's done.") : tr("（无语音）", "(no speech)")));
     if (t.state === "recording") return sec;
     var vs = versionsOf(t);
     var base = m ? tokens(m.text) : null;
@@ -1164,10 +1200,10 @@
       { class: "ver-head" },
       v.label ? h("span", { class: "who" }, v.label) : null,
       v.name ? h("span", { class: "who mono", translate: "no" }, v.name) : null,
-      v.adopted ? h("span", { class: "tag", title: "这一条的文字用的是这一版" }, "采用") : null,
-      v.primary ? h("span", { class: "tag", title: "录这一条时的 asr.engine" }, "主引擎") : null,
-      v.cloud ? h("span", { class: "cloud" }, svg(10, 10, ICON.out), "云端") : null,
-      v.lat ? h("span", { class: "lat" }, "用时 ", h("span", { class: "num" }, (v.lat / 1000).toFixed(2)), " 秒") : null,
+      v.adopted ? h("span", { class: "tag", title: tr("这一条的文字用的是这一版", "This take's text is this version") }, tr("采用", "Used")) : null,
+      v.primary ? h("span", { class: "tag", title: tr("录这一条时的 asr.engine", "The asr.engine this take was recorded with") }, tr("主引擎", "Primary")) : null,
+      v.cloud ? h("span", { class: "cloud" }, svg(10, 10, ICON.out), tr("云端", "Cloud")) : null,
+      v.lat ? h("span", { class: "lat" }, tr("用时 ", "Took "), h("span", { class: "num" }, (v.lat / 1000).toFixed(2)), tr(" 秒", " s")) : null,
       h("span", { class: "grow" }),
       v.mark
         ? h(
@@ -1179,13 +1215,13 @@
               "aria-pressed": on ? "true" : "false",
               "aria-keyshortcuts": key && key < 10 ? String(key) : null,
               disabled: !!busy.label[t.id],
-              title: on ? "已标这一版对 · 再点清除标注 · ⇧ 点只去掉这一版" : "这一版对：只标它，马上存 · ⇧ 点也标它",
+              title: on ? tr("已标这一版对 · 再点清除标注 · ⇧ 点只去掉这一版", "Marked correct · click again to clear the label · ⇧-click to unmark only this one") : tr("这一版对：只标它，马上存 · ⇧ 点也标它", "This version is correct: marks it alone, saved at once · ⇧-click to add it"),
               onclick: function (e) {
                 markClick(t, v.mark, e.shiftKey || e.metaKey || e.ctrlKey);
               },
             },
             on ? svg(10, 10, ICON.check) : null,
-            "这版对",
+            tr("这版对", "Correct"),
           )
         : null,
     );
@@ -1194,18 +1230,18 @@
       body = h(
         "div",
         { class: "alert", role: "alert" },
-        h("h3", null, svg(10, 10, ICON.x), "识别失败 · ", h("span", { class: "mono" }, v.name)),
+        h("h3", null, svg(10, 10, ICON.x), tr("识别失败 · ", "Transcription failed · "), h("span", { class: "mono" }, v.name)),
         h("p", null, h("code", null, v.err)),
-        h("p", { class: "muted" }, v.retr ? "存下的文字都没有改动。换一个引擎再试。" : v.primary && v.by ? "主引擎没有给出文字，这一条用了 " + v.by + " 的。" : "这个引擎这次没有给出文字，不能标它对。"),
+        h("p", { class: "muted" }, v.retr ? tr("存下的文字都没有改动。换一个引擎再试。", "No saved text changed. Try another engine.") : v.primary && v.by ? tr("主引擎没有给出文字，这一条用了 " + v.by + " 的。", "The primary engine gave no text; this take uses " + v.by + "'s.") : tr("这个引擎这次没有给出文字，不能标它对。", "This engine gave no text this time, so it can't be marked correct.")),
       );
-    else if (!v.text) body = h("p", { class: "d-text none" }, "（这个版本没有文字）");
+    else if (!v.text) body = h("p", { class: "d-text none" }, tr("（这个版本没有文字）", "(this version has no text)"));
     else {
       var times = v.toks ? timesOf(t, v.toks) : null;
       body = h("p", { class: "d-text", lang: "zh-CN", "data-timed": times ? "" : null, onclick: times ? wordClick : null }, v.toks ? marked(v.toks, times) : v.text);
     }
     var row = h("div", { class: "ver", "data-v": v.id, "data-aside": v.aside ? "" : null }, head, body);
     if (v.err || !v.text) return row;
-    if (v.main && v.src === "raw") add(row, h("p", { class: "muted" }, "没有整理过的文字，这是原始识别结果。"));
+    if (v.main && v.src === "raw") add(row, h("p", { class: "muted" }, tr("没有整理过的文字，这是原始识别结果。", "No cleaned-up text; this is the raw transcription.")));
     var popen = DT.picker && DT.picker.kind === "resend" && DT.picker.where === v.id;
     // one primary per view: 重发… on a 未送达 take, 复制 otherwise, while no
     // picker is open and no ground truth is being composed
@@ -1216,9 +1252,9 @@
       h(
         "div",
         { class: "actions" },
-        h("button", { class: "btn" + (lead && !undel ? " primary" : ""), type: "button", "data-k": v.main ? "copy" : "copy:" + v.id, onclick: function () { copyText(v.text, v.id); } }, "复制"),
-        h("button", { class: "btn" + (lead && undel ? " primary" : ""), type: "button", "data-k": v.main ? "resend" : "resend:" + v.id, "aria-expanded": popen ? "true" : "false", onclick: function () { togglePicker(v.id, v); } }, "重发…"),
-        v.main && t.state === "undelivered" ? h("button", { class: "btn", type: "button", "data-k": "dismiss", disabled: !!dismissing, onclick: function () { dismissOne(t); } }, t.dismissed ? "取消忽略" : "忽略") : null,
+        h("button", { class: "btn" + (lead && !undel ? " primary" : ""), type: "button", "data-k": v.main ? "copy" : "copy:" + v.id, onclick: function () { copyText(v.text, v.id); } }, tr("复制", "Copy")),
+        h("button", { class: "btn" + (lead && undel ? " primary" : ""), type: "button", "data-k": v.main ? "resend" : "resend:" + v.id, "aria-expanded": popen ? "true" : "false", onclick: function () { togglePicker(v.id, v); } }, tr("重发…", "Resend…")),
+        v.main && t.state === "undelivered" ? h("button", { class: "btn", type: "button", "data-k": "dismiss", disabled: !!dismissing, onclick: function () { dismissOne(t); } }, t.dismissed ? tr("取消忽略", "Undismiss") : tr("忽略", "Dismiss")) : null,
         note(v.id),
       ),
       popen ? resendPicker(t) : null,
@@ -1228,14 +1264,14 @@
 
   function labelWhen(at) {
     var d = new Date(at);
-    return d.getMonth() + 1 + "月" + d.getDate() + "日 " + hm(d);
+    return tr(d.getMonth() + 1 + "月" + d.getDate() + "日 " + hm(d), MON[d.getMonth()] + " " + d.getDate() + " " + hm(d));
   }
   function labelWords(lab) {
     var c = lab.correct || [];
-    var who = c.map(function (n) { return n === "delivered" ? "送达的文字" : n; }).join("、");
-    if (lab.label_source === "click") return who + (c.length > 1 ? " 都对" : " 这版对");
-    if (lab.ref) return "确认过的正确文字" + (c.length ? "，和 " + who + " 一样" : "");
-    return "只有备注";
+    var who = c.map(function (n) { return n === "delivered" ? tr("送达的文字", "the delivered text") : n; }).join(tr("、", ", "));
+    if (lab.label_source === "click") return who + (c.length > 1 ? tr(" 都对", " are correct") : tr(" 这版对", " is correct"));
+    if (lab.ref) return tr("确认过的正确文字", "Confirmed correct text") + (c.length ? tr("，和 " + who + " 一样", ", same as " + who) : "");
+    return tr("只有备注", "Note only");
   }
 
   // ------------------------------------------------------------ ground truth
@@ -1263,7 +1299,7 @@
   function gtVersions(t) {
     var vs = versionsOf(t).filter(function (v) { return v.text && !v.err; });
     var lab = t.label;
-    if (lab && lab.ref) vs.unshift({ id: "label", label: "当前", text: lab.ref });
+    if (lab && lab.ref) vs.unshift({ id: "label", label: tr("当前", "Current"), text: lab.ref });
     return vs;
   }
   function vname(v) {
@@ -1405,14 +1441,14 @@
     var open = !!(d && d.open);
     var marks = markNames(t);
     var state;
-    if (!lab && noteOnly) state = [h("span", { class: "lab-word" }, "未标注"), h("span", { class: "muted" }, "这一条的文字来自备用输入，录音文件里没有这段声音，文字和它对不上：只能写备注")];
-    else if (!lab) state = [h("span", { class: "lab-word" }, "未标注"), h("span", { class: "muted" }, marks.length ? "哪一版全对，点它的「这版对」；都不全对，就在下面拼出正确的文字，再确认" : "写下正确的文字，或者只写备注，再确认")];
-    else state = [h("span", { class: "lab-word", "data-on": "" }, svg(10, 10, ICON.check), "已标注"), h("span", null, labelWords(lab)), h("span", { class: "muted num" }, labelWhen(lab.labeled_at))];
-    var keys = noteOnly ? "e 写备注 · ⌘↩ 存" : (marks.length ? (marks.length > 1 ? "1–" + Math.min(9, marks.length) : "1") + " 这版对 · " : "") + "e 改文字 · ⌘↩ 确认";
+    if (!lab && noteOnly) state = [h("span", { class: "lab-word" }, tr("未标注", "Not labeled")), h("span", { class: "muted" }, tr("这一条的文字来自备用输入，录音文件里没有这段声音，文字和它对不上：只能写备注", "This take's text came from the backup input, which the audio file doesn't hold, so the text can't match it: a note only"))];
+    else if (!lab) state = [h("span", { class: "lab-word" }, tr("未标注", "Not labeled")), h("span", { class: "muted" }, marks.length ? tr("哪一版全对，点它的「这版对」；都不全对，就在下面拼出正确的文字，再确认", "If one version is fully right, click its “Correct”; if none is, build the correct text below and confirm") : tr("写下正确的文字，或者只写备注，再确认", "Write the correct text, or just a note, then confirm"))];
+    else state = [h("span", { class: "lab-word", "data-on": "" }, svg(10, 10, ICON.check), tr("已标注", "Labeled")), h("span", null, labelWords(lab)), h("span", { class: "muted num" }, labelWhen(lab.labeled_at))];
+    var keys = noteOnly ? tr("e 写备注 · ⌘↩ 存", "e note · ⌘↩ save") : (marks.length ? (marks.length > 1 ? "1–" + Math.min(9, marks.length) : "1") + tr(" 这版对 · ", " correct · ") : "") + tr("e 改文字 · ⌘↩ 确认", "e edit · ⌘↩ confirm");
     var sec = h(
       "section",
       { class: "block lab", "aria-labelledby": "h-lab" },
-      h("div", { class: "tab-head" }, h("h2", { id: "h-lab" }, "标注"), h("span", { class: "up-keys" }, keys)),
+      h("div", { class: "tab-head" }, h("h2", { id: "h-lab" }, tr("标注", "Label")), h("span", { class: "up-keys" }, keys)),
       h("p", { class: "lab-state", role: "status" }, state),
     );
     if (open) {
@@ -1423,17 +1459,17 @@
       var m = mainText(t);
       var rt = tokens(lab.ref);
       if (m) diff(tokens(m.text), rt);
-      add(sec, h("div", { class: "lab-ref" }, h("h3", null, "正确文字"), h("p", { class: "d-text", lang: "zh-CN" }, marked(rt))));
+      add(sec, h("div", { class: "lab-ref" }, h("h3", null, tr("正确文字", "Correct text")), h("p", { class: "d-text", lang: "zh-CN" }, marked(rt))));
     }
-    if (lab && lab.note) add(sec, h("p", { class: "lab-note" }, h("span", { class: "k" }, "备注"), h("span", null, lab.note)));
+    if (lab && lab.note) add(sec, h("p", { class: "lab-note" }, h("span", { class: "k" }, tr("备注", "Note")), h("span", null, lab.note)));
     var busyL = busy.label[t.id];
     add(
       sec,
       h(
         "div",
         { class: "actions" },
-        h("button", { class: "btn", type: "button", "data-k": "relabel", "aria-expanded": "false", onclick: function () { gtOpen(t, true); } }, noteOnly ? "写备注…" : lab ? "改正确文字…" : "拼出正确文字…"),
-        lab ? h("button", { class: "btn", type: "button", "data-k": "unlabel", disabled: !!busyL, onclick: function () { postLabel(t, { clear: true }, "clear"); } }, busyL === "clear" ? "正在清除…" : "清除标注") : null,
+        h("button", { class: "btn", type: "button", "data-k": "relabel", "aria-expanded": "false", onclick: function () { gtOpen(t, true); } }, noteOnly ? tr("写备注…", "Write a note…") : lab ? tr("改正确文字…", "Edit the correct text…") : tr("拼出正确文字…", "Build the correct text…")),
+        lab ? h("button", { class: "btn", type: "button", "data-k": "unlabel", disabled: !!busyL, onclick: function () { postLabel(t, { clear: true }, "clear"); } }, busyL === "clear" ? tr("正在清除…", "Clearing…") : tr("清除标注", "Clear label")) : null,
         note("label"),
       ),
     );
@@ -1447,10 +1483,10 @@
   function gtForm(t, d, lab) {
     var busyL = busy.label[t.id];
     var vs = gtVersions(t);
-    var save = h("button", { class: "btn" + (d.dirty ? " primary" : ""), type: "button", "data-k": "lab-save", disabled: !!busyL, onclick: function () { gtSave(t); } }, busyL === "save" ? "正在存…" : d.noteOnly ? "存备注" : "确认为正确文字");
-    var status = h("span", { class: "act-note", "data-kind": d.err ? "err" : d.dirty ? "warn" : null, role: "status" }, d.err || (d.dirty ? "未存" : ""));
+    var save = h("button", { class: "btn" + (d.dirty ? " primary" : ""), type: "button", "data-k": "lab-save", disabled: !!busyL, onclick: function () { gtSave(t); } }, busyL === "save" ? tr("正在存…", "Saving…") : d.noteOnly ? tr("存备注", "Save note") : tr("确认为正确文字", "Confirm as correct text"));
+    var status = h("span", { class: "act-note", "data-kind": d.err ? "err" : d.dirty ? "warn" : null, role: "status" }, d.err || (d.dirty ? tr("未存", "Unsaved") : ""));
     var mirror = h("div", { class: "gt-mirror", "aria-hidden": "true" });
-    var list = h("ol", { class: "gt-places", id: "gt-places", "aria-label": "不同的地方" });
+    var list = h("ol", { class: "gt-places", id: "gt-places", "aria-label": tr("不同的地方", "Differences") });
     var head = h("h3", { class: "gt-head" });
     function paintMirror() {
       mirror.replaceChildren();
@@ -1468,7 +1504,7 @@
     }
     function touched() {
       status.dataset.kind = "warn";
-      status.textContent = "未存";
+      status.textContent = tr("未存", "Unsaved");
       save.classList.add("primary");
       lead(t);
     }
@@ -1483,7 +1519,7 @@
     function paintList() {
       var places = [];
       d.parts.forEach(function (x, i) { if (x.opts) places.push(i); });
-      head.textContent = places.length ? "不同的地方 · " + places.length + " 处" : vs.length > 1 ? "各版本说的字都一样" : "";
+      head.textContent = places.length ? tr("不同的地方 · " + places.length + " 处", "Differences · " + places.length) : vs.length > 1 ? tr("各版本说的字都一样", "Every version has the same words") : "";
       list.replaceChildren();
       places.forEach(function (i, n) {
         var x = d.parts[i], r = gtRange(d, i), when = gtWhen(t, d, x);
@@ -1496,24 +1532,24 @@
             h("span", { class: "ctx" }, before(r[0])),
             h(
               "span",
-              { class: "picks", role: "group", "aria-label": "第 " + (n + 1) + " 处用哪一版" },
+              { class: "picks", role: "group", "aria-label": tr("第 " + (n + 1) + " 处用哪一版", "Which version for difference " + (n + 1)) },
               x.opts.map(function (o, k) {
                 var word = o.text.trim();
                 return h(
                   "button",
                   { class: "pill", type: "button", "aria-pressed": x.pick === k ? "true" : "false", "data-k": "pick:" + n + ":" + k, onclick: function () { gtPick(d, i, k); redraw(); } },
-                  h("span", { class: "who", translate: "no" }, o.names.join("、")),
-                  word ? word : h("span", { class: "none" }, "（没有字）"),
+                  h("span", { class: "who", translate: "no" }, o.names.join(tr("、", ", "))),
+                  word ? word : h("span", { class: "none" }, tr("（没有字）", "(nothing)")),
                 );
               }),
               h(
                 "button",
-                { class: "pill", type: "button", "aria-pressed": x.pick === "hand" ? "true" : "false", "data-k": "hand:" + n, title: "在上面的文字里选中这一处，直接改", onclick: function () { var g = gtRange(d, i); ta.focus(); ta.setSelectionRange(g[0], g[1]); } },
-                "手改",
+                { class: "pill", type: "button", "aria-pressed": x.pick === "hand" ? "true" : "false", "data-k": "hand:" + n, title: tr("在上面的文字里选中这一处，直接改", "Select this spot in the text above to edit it"), onclick: function () { var g = gtRange(d, i); ta.focus(); ta.setSelectionRange(g[0], g[1]); } },
+                tr("手改", "By hand"),
               ),
             ),
             h("span", { class: "ctx" }, after(r[1])),
-            when ? h("button", { class: "icon-btn", type: "button", "aria-label": "听第 " + (n + 1) + " 处", title: "听这一处", "data-k": "hear:" + n, onclick: function () { playSpan(when.s, when.e, true); } }, icon("play", 12)) : null,
+            when ? h("button", { class: "icon-btn", type: "button", "aria-label": tr("听第 " + (n + 1) + " 处", "Play difference " + (n + 1)), title: tr("听这一处", "Play this spot"), "data-k": "hear:" + n, onclick: function () { playSpan(when.s, when.e, true); } }, icon("play", 12)) : null,
           ),
         );
       });
@@ -1554,41 +1590,41 @@
     paintMirror();
     paintList();
     requestAnimationFrame(grow);
-    var ni = h("input", { type: "text", id: "lab-note", "data-k": "lab-note", autocomplete: "off", placeholder: "哪里听错了，比如 yolk 听成了 yoke…", oninput: function (e) { d.note = e.target.value; d.dirty = true; touched(); }, onkeydown: keys });
+    var ni = h("input", { type: "text", id: "lab-note", "data-k": "lab-note", autocomplete: "off", placeholder: tr("哪里听错了，比如 yolk 听成了 yoke…", "What was misheard, e.g. yolk heard as yoke…"), oninput: function (e) { d.note = e.target.value; d.dirty = true; touched(); }, onkeydown: keys });
     ni.value = d.note;
     if (d.noteOnly)
       return h(
         "div",
-        { class: "picker lab-form", role: "group", "aria-label": "备注" },
-        h("label", { class: "field", for: "lab-note" }, "备注"),
+        { class: "picker lab-form", role: "group", "aria-label": tr("备注", "Note") },
+        h("label", { class: "field", for: "lab-note" }, tr("备注", "Note")),
         ni,
-        h("div", { class: "confirm-row" }, save, h("button", { class: "btn", type: "button", "data-k": "lab-fold", onclick: function () { gtFold(t); } }, "收起"), status),
+        h("div", { class: "confirm-row" }, save, h("button", { class: "btn", type: "button", "data-k": "lab-fold", onclick: function () { gtFold(t); } }, tr("收起", "Close")), status),
       );
     return h(
       "div",
-      { class: "picker lab-form", role: "group", "aria-label": "待确认的正确文字" },
+      { class: "picker lab-form", role: "group", "aria-label": tr("待确认的正确文字", "Pending correct text") },
       vs.length > 1
         ? h(
             "div",
             { class: "starts" },
-            h("span", { class: "muted" }, "从这版开始"),
+            h("span", { class: "muted" }, tr("从这版开始", "Start from")),
             vs.map(function (v) {
               return h("button", { class: "pill", type: "button", "aria-pressed": d.base === v.id ? "true" : "false", "data-k": "base:" + v.id, onclick: function () { gtBase(t, v.id); } }, v.label && v.name ? [v.label, " ", h("span", { class: "mono", translate: "no" }, v.name)] : v.label || h("span", { class: "mono", translate: "no" }, v.name));
             }),
-            d.prev ? h("button", { class: "link", type: "button", "data-k": "base-undo", onclick: function () { GT[t.id] = d.prev; drawDetail(); } }, "撤销换底") : null,
+            d.prev ? h("button", { class: "link", type: "button", "data-k": "base-undo", onclick: function () { GT[t.id] = d.prev; drawDetail(); } }, tr("撤销换底", "Undo the switch")) : null,
           )
         : null,
-      h("label", { class: "field", for: "lab-ref" }, "待确认的正确文字"),
+      h("label", { class: "field", for: "lab-ref" }, tr("待确认的正确文字", "Pending correct text")),
       h("div", { class: "gt-box" }, mirror, ta),
       head,
       list,
-      h("label", { class: "field", for: "lab-note" }, "备注"),
+      h("label", { class: "field", for: "lab-note" }, tr("备注", "Note")),
       ni,
       h(
         "div",
         { class: "confirm-row" },
         save,
-        h("button", { class: "btn", type: "button", "data-k": "lab-fold", onclick: function () { gtFold(t); } }, "收起"),
+        h("button", { class: "btn", type: "button", "data-k": "lab-fold", onclick: function () { gtFold(t); } }, tr("收起", "Close")),
         status,
       ),
     );
@@ -1642,7 +1678,7 @@
     if (!d) return;
     var text = gtText(d);
     if (!text.trim() && !d.note.trim()) {
-      d.err = d.noteOnly ? "写下备注，再存。" : "写下正确的文字或者备注，再确认。";
+      d.err = d.noteOnly ? tr("写下备注，再存。", "Write a note, then save.") : tr("写下正确的文字或者备注，再确认。", "Write the correct text or a note, then confirm.");
       drawDetail();
       return;
     }
@@ -1667,7 +1703,7 @@
   // took away, as it was made — the engines clicked, or the typed text.
   function undoClear(t, was) {
     var body = was.label_source === "click" ? { correct: was.correct || [], note: was.note || "" } : { ref: was.ref || "", note: was.note || "" };
-    return h("button", { class: "link", type: "button", "data-k": "label-undo", onclick: function () { postLabel(t, body, "undo"); } }, "撤销");
+    return h("button", { class: "link", type: "button", "data-k": "label-undo", onclick: function () { postLabel(t, body, "undo"); } }, tr("撤销", "Undo"));
   }
 
   // postLabel appends the take's label: POST /takes/api/label, {id, ref,
@@ -1691,12 +1727,12 @@
           if (DT.take && DT.take.id === id) DT.take = Object.assign({}, DT.take, { label: lab, labeled: !!lab });
           patchRow({ id: id, labeled: !!lab });
           delete GT[id];
-          if (DT.id === id) say("label", "ok", lab ? (kind === "undo" ? "已恢复标注" : kind === "save" ? (lab.ref ? "已存为正确文字" : "已存备注") : "已存标注") : was ? ["已清除标注 ", undoClear(t, was)] : "已清除标注");
+          if (DT.id === id) say("label", "ok", lab ? (kind === "undo" ? tr("已恢复标注", "Label restored") : kind === "save" ? (lab.ref ? tr("已存为正确文字", "Saved as correct text") : tr("已存备注", "Note saved")) : tr("已存标注", "Label saved")) : was ? [tr("已清除标注 ", "Label cleared "), undoClear(t, was)] : tr("已清除标注", "Label cleared"));
           render();
         },
         function (err) {
           if (err === Refused) return failed(err);
-          var msg = ["没存上：", refusal(err), "。标注没有改动，再试一次。"];
+          var msg = [tr("没存上：", "Not saved: "), refusal(err), tr("。标注没有改动，再试一次。", ". The label is unchanged; try again.")];
           if (GT[id] && kind === "save") GT[id].err = msg;
           else if (DT.id === id) say("label", "err", msg);
         },
@@ -1751,13 +1787,13 @@
   function resendPicker(t) {
     var pk = DT.picker;
     var T = DT.targets;
-    var box = h("div", { class: "picker", role: "group", "aria-label": "重发到" });
+    var box = h("div", { class: "picker", role: "group", "aria-label": tr("重发到", "Resend to") });
     if (!T) {
-      add(box, h("p", { class: "muted" }, "正在读取可以发到的地方…"));
+      add(box, h("p", { class: "muted" }, tr("正在读取可以发到的地方…", "Loading places to send to…")));
       return box;
     }
     if (T.err) {
-      add(box, h("p", { class: "act-note", "data-kind": "err" }, "读不到目标：" + T.err));
+      add(box, h("p", { class: "act-note", "data-kind": "err" }, tr("读不到目标：", "Couldn't load targets: ") + T.err));
       return box;
     }
     // Only the take's own target is picked for the user; anything else is
@@ -1781,19 +1817,19 @@
     });
     var own = g.own[0];
     if (own) {
-      add(box, h("h3", null, "原目标"));
+      add(box, h("h3", null, tr("原目标", "Original target")));
       if (own.to) add(box, h("div", { class: "opts" }, o(own)));
-      else add(box, h("p", { class: "gone" }, (own.front ? "原目标正显示着这个页面，发过去会贴进本页 · " : "原目标已关闭 · ") + own.label));
+      else add(box, h("p", { class: "gone" }, (own.front ? tr("原目标正显示着这个页面，发过去会贴进本页 · ", "The original target is showing this page; sending would paste into it · ") : tr("原目标已关闭 · ", "The original target is closed · ")) + own.label));
     }
     // a recent target that cannot be reached now shows greyed, not offered
     function recent(x) {
       if (x.to) return o(x);
-      return opt("dest", "", x.label, h("span", { class: "sub" }, x.pane && !T.herdr ? "herdr 没有运行" : "已关闭"), true, false, null);
+      return opt("dest", "", x.label, h("span", { class: "sub" }, x.pane && !T.herdr ? tr("herdr 没有运行", "herdr isn't running") : tr("已关闭", "Closed")), true, false, null);
     }
-    if (g.recent.length) add(box, h("h3", null, "最近发过"), h("div", { class: "opts" }, g.recent.map(recent)));
-    add(box, h("h3", null, "面板"));
-    if (!T.herdr) add(box, h("p", { class: "gone" }, "herdr 没有运行"));
-    else if (!g.pane.length) add(box, h("p", { class: "gone" }, "herdr 里没有面板"));
+    if (g.recent.length) add(box, h("h3", null, tr("最近发过", "Recent")), h("div", { class: "opts" }, g.recent.map(recent)));
+    add(box, h("h3", null, tr("面板", "Panes")));
+    if (!T.herdr) add(box, h("p", { class: "gone" }, tr("herdr 没有运行", "herdr isn't running")));
+    else if (!g.pane.length) add(box, h("p", { class: "gone" }, tr("herdr 里没有面板", "No panes in herdr")));
     else {
       var byWs = {};
       var order = [];
@@ -1810,10 +1846,10 @@
         add(box, h("div", { class: "opts" }, byWs[ws].map(function (p) { return o(p, ws ? p.label.slice(ws.length + 3) : p.label); })));
       });
     }
-    if (g.app.length) add(box, h("h3", null, "应用"), h("div", { class: "opts" }, g.app.map(function (x) { return o(x); })));
-    add(box, h("h3", null, "剪贴板"), h("div", { class: "opts" }, opt("dest", "clipboard", "只放进剪贴板", null, false, DT.dest === "clipboard", pick({ to: "clipboard" }))));
+    if (g.app.length) add(box, h("h3", null, tr("应用", "Apps")), h("div", { class: "opts" }, g.app.map(function (x) { return o(x); })));
+    add(box, h("h3", null, tr("剪贴板", "Clipboard")), h("div", { class: "opts" }, opt("dest", "clipboard", tr("只放进剪贴板", "Clipboard only"), null, false, DT.dest === "clipboard", pick({ to: "clipboard" }))));
     if (!chosen) {
-      add(box, h("div", { class: "confirm" }, h("p", { class: "muted" }, "选一个目标，这里会写明发到哪里、怎么发。")));
+      add(box, h("div", { class: "confirm" }, h("p", { class: "muted" }, tr("选一个目标，这里会写明发到哪里、怎么发。", "Pick a target; this then says where and how it is sent."))));
       return box;
     }
     var clip = chosen.to === "clipboard";
@@ -1824,15 +1860,15 @@
       h(
         "div",
         { class: "confirm" },
-        h("p", null, clip ? "放进剪贴板，不粘贴" : "发到 " + chosen.label + "，粘贴 · " + (DT.enter ? "按 Enter" : "不回车")),
-        h("p", { class: "quote" }, "「" + q.slice(0, 40).join("") + (q.length > 40 ? "…" : "") + "」"),
+        h("p", null, clip ? tr("放进剪贴板，不粘贴", "Copy to the clipboard, no paste") : tr("发到 " + chosen.label + "，粘贴 · ", "Send to " + chosen.label + ", paste · ") + (DT.enter ? tr("按 Enter", "press Enter") : tr("不回车", "no Enter"))),
+        h("p", { class: "quote" }, tr("「", "“") + q.slice(0, 40).join("") + (q.length > 40 ? "…" : "") + tr("」", "”")),
         h(
           "div",
           { class: "confirm-row" },
           h(
             "button",
             { class: "btn primary", type: "button", "data-k": "send", disabled: !!inFlight, onclick: function () { doResend(t, pk, chosen); } },
-            inFlight ? "发送中…" : clip ? "放进剪贴板" : DT.enter ? "粘贴并按 Enter" : "粘贴",
+            inFlight ? tr("发送中…", "Sending…") : clip ? tr("放进剪贴板", "Copy to clipboard") : DT.enter ? tr("粘贴并按 Enter", "Paste and press Enter") : tr("粘贴", "Paste"),
           ),
           clip
             ? null
@@ -1840,9 +1876,9 @@
                 "label",
                 { class: "check" },
                 h("input", { type: "checkbox", "data-k": "enter", checked: DT.enter, onchange: function (e) { DT.enter = e.target.checked; drawDetail(); } }),
-                "粘贴后按 Enter",
+                tr("粘贴后按 Enter", "Press Enter after pasting"),
               ),
-          h("button", { class: "btn", type: "button", "data-k": "fold", onclick: function () { DT.picker = null; drawDetail(); } }, "收起"),
+          h("button", { class: "btn", type: "button", "data-k": "fold", onclick: function () { DT.picker = null; drawDetail(); } }, tr("收起", "Close")),
         ),
       ),
     );
@@ -1863,20 +1899,20 @@
       .then(
         function (line) {
           if (DT.id !== id) return;
-          var name = chosen.to === "clipboard" ? "剪贴板" : chosen.label;
+          var name = chosen.to === "clipboard" ? tr("剪贴板", "Clipboard") : chosen.label;
           // not_recorded: the text went out and the record lacks its line;
           // the picker closes as after a delivery, so it is not pasted twice
           if (line.ok && line.not_recorded) {
             DT.picker = null;
-            say(where, "err", ["已发出，记录未写入 → " + name + "：", reason(line.not_recorded)]);
+            say(where, "err", [tr("已发出，记录未写入 → " + name + "：", "Sent, but not recorded → " + name + ": "), reason(line.not_recorded)]);
           } else if (line.ok) {
             DT.picker = null;
-            say(where, "ok", (chosen.to === "clipboard" ? "已放进剪贴板" : (line.submit === "ok" ? "已发送到 " : "已粘贴到 ") + name) + " · " + dur(t.dur_s));
-          } else say(where, "err", ["送达失败 → " + name + "：", reason(line.err), line.not_recorded ? "；记录未写入" : null]);
+            say(where, "ok", (chosen.to === "clipboard" ? tr("已放进剪贴板", "Copied to the clipboard") : (line.submit === "ok" ? tr("已发送到 ", "Sent to ") : tr("已粘贴到 ", "Pasted into ")) + name) + " · " + dur(t.dur_s));
+          } else say(where, "err", [tr("送达失败 → " + name + "：", "Delivery failed → " + name + ": "), reason(line.err), line.not_recorded ? tr("；记录未写入", "; not recorded") : null]);
         },
         function (err) {
           if (err === Refused) return failed(err);
-          if (DT.id === id) say(where, "err", ["没有发出去：", refusal(err, { v: pk.v })]);
+          if (DT.id === id) say(where, "err", [tr("没有发出去：", "Not sent: "), refusal(err, { v: pk.v })]);
         },
       )
       .then(function () {
@@ -1904,7 +1940,7 @@
     function ready(pk, err) {
       if (DT.id !== id) return;
       P = makePlayer(t, pk);
-      if (err) say("player", "err", "读不到波形：" + err.message + "。仍然可以播放。");
+      if (err) say("player", "err", tr("读不到波形：" + err.message + "。仍然可以播放。", "Couldn't load the waveform: " + err.message + ". It still plays."));
       drawDetail();
       if (playWhenReady === id) {
         playWhenReady = "";
@@ -1956,7 +1992,7 @@
         role: "slider",
         tabindex: "0",
         "data-k": "wave",
-        "aria-label": "播放位置",
+        "aria-label": tr("播放位置", "Playback position"),
         "aria-valuemin": "0",
         "aria-valuemax": String(Math.round(p.dur)),
         onpointerdown: function (e) {
@@ -1985,9 +2021,9 @@
       p.tip,
     );
     p.now = h("span", { class: "up-now" }, "0:00");
-    p.playBtn = h("button", { class: "up-play", type: "button", "data-k": "play", "aria-label": "播放", onclick: togglePlay }, icon("play"));
+    p.playBtn = h("button", { class: "up-play", type: "button", "data-k": "play", "aria-label": tr("播放", "Play"), onclick: togglePlay }, icon("play"));
     p.rateBtn = h("button", { class: "up-ctl", type: "button", "data-k": "rate", onclick: function () { rate(1, true); } }, "1×");
-    p.muteBtn = h("button", { class: "up-ctl", type: "button", "data-k": "mute", "aria-pressed": "false", onclick: toggleMute }, "静音");
+    p.muteBtn = h("button", { class: "up-ctl", type: "button", "data-k": "mute", "aria-pressed": "false", onclick: toggleMute }, tr("静音", "Mute"));
     p.root = h(
       "div",
       { class: "up" },
@@ -1999,7 +2035,7 @@
         h("span", { class: "up-grow" }),
         p.rateBtn,
         p.muteBtn,
-        h("span", { class: "up-keys" }, "空格 播放 · ← → 跳"),
+        h("span", { class: "up-keys" }, tr("空格 播放 · ← → 跳", "Space play · ← → skip")),
       ),
       p.wave,
       h("div", { class: "wave-ticks", "aria-hidden": "true" }, h("span", null, "0:00"), h("span", null, dur(p.dur / 2)), h("span", null, dur(p.dur))),
@@ -2020,12 +2056,12 @@
     P.wave.setAttribute("aria-valuetext", dur(P.pos) + " / " + dur(P.dur));
     if (P.playing) P.root.setAttribute("data-playing", "");
     else P.root.removeAttribute("data-playing");
-    P.playBtn.setAttribute("aria-label", P.playing ? "暂停" : "播放");
+    P.playBtn.setAttribute("aria-label", P.playing ? tr("暂停", "Pause") : tr("播放", "Play"));
     P.playBtn.replaceChildren(icon(P.playing ? "pause" : "play"));
     P.rateBtn.textContent = P.rate + "×";
-    P.rateBtn.setAttribute("aria-label", "播放速度 " + P.rate + " 倍");
+    P.rateBtn.setAttribute("aria-label", tr("播放速度 " + P.rate + " 倍", "Playback speed " + P.rate + "×"));
     P.muteBtn.setAttribute("aria-pressed", P.muted ? "true" : "false");
-    P.muteBtn.textContent = P.muted ? "已静音" : "静音";
+    P.muteBtn.textContent = P.muted ? tr("已静音", "Muted") : tr("静音", "Mute");
   }
 
   function seek(s) {
@@ -2117,7 +2153,7 @@
         p.playing = false;
         if (P === p) {
           paint();
-          say("player", "err", "放不出来：" + err.message);
+          say("player", "err", tr("放不出来：", "Can't play: ") + err.message);
           drawDetail();
         }
       });
@@ -2137,9 +2173,9 @@
   }
 
   function playerBlock(t) {
-    if (t.state === "recording") return h("div", { class: "up" }, h("p", { class: "up-none" }, badge("recording"), h("span", { class: "mono" }, dur(t.dur_s)), h("span", { class: "muted" }, "结束后可以播放")));
-    if (!t.audio) return h("div", { class: "up" }, h("p", { class: "up-none" }, h("span", { class: "muted" }, "这一条没有录音文件：不到 0.3 秒的录音不保存声音。")));
-    if (!P || P.id !== t.id) return h("div", { class: "up" }, h("p", { class: "up-none" }, h("span", { class: "muted" }, "正在读取波形…")));
+    if (t.state === "recording") return h("div", { class: "up" }, h("p", { class: "up-none" }, badge("recording"), h("span", { class: "mono" }, dur(t.dur_s)), h("span", { class: "muted" }, tr("结束后可以播放", "Plays when it ends"))));
+    if (!t.audio) return h("div", { class: "up" }, h("p", { class: "up-none" }, h("span", { class: "muted" }, tr("这一条没有录音文件：不到 0.3 秒的录音不保存声音。", "This take has no audio file: a take under 0.3 s keeps no audio."))));
+    if (!P || P.id !== t.id) return h("div", { class: "up" }, h("p", { class: "up-none" }, h("span", { class: "muted" }, tr("正在读取波形…", "Loading the waveform…"))));
     paint();
     return [P.root, note("player") ? h("div", { class: "actions" }, note("player")) : null];
   }
@@ -2164,23 +2200,23 @@
     }, failedAction);
   }
 
-  var NOT_NAMED = "配置没有启用它（asr.engine，或 compare.on 和 compare.engines）";
+  var NOT_NAMED = tr("配置没有启用它（asr.engine，或 compare.on 和 compare.engines）", "the config doesn't enable it (asr.engine, or compare.on and compare.engines)");
 
   // reason is why a delivery failed, in the page's words: a deliver line's
   // err, written by herdr or the system as the record keeps it. The English
   // stays in the record (原始事件) and the log; words the page does not know
   // show as they were written, in mono.
   var REASONS = [
-    [/pane_not_found|no such pane/, function () { return "面板已关闭"; }],
-    [/^herdr (socket|status server)|^herdr .*(executable file not found|connection refused|no such file)/, function () { return "herdr 没有运行"; }],
-    [/^no app was frontmost/, function () { return "当时没有前台应用"; }],
-    [/^no running application with pid/, function () { return "应用已经退出"; }],
-    [/^(.+) \(pid \d+\) has quit/, function (m) { return m[1] + " 已经退出"; }],
-    [/^(.+) did not take focus within/, function (m) { return m[1] + " 没有切到前台"; }],
-    [/^(.+) lost focus before Enter/, function (m) { return "粘贴后 " + m[1] + " 失去了焦点"; }],
-    [/^another delivery is under way/, function () { return "另一条正在送达，等它完成再发"; }],
-    [/no space left on device/, function () { return "磁盘满了"; }],
-    [/permission denied/, function () { return "没有写入的权限"; }],
+    [/pane_not_found|no such pane/, function () { return tr("面板已关闭", "The pane is closed"); }],
+    [/^herdr (socket|status server)|^herdr .*(executable file not found|connection refused|no such file)/, function () { return tr("herdr 没有运行", "herdr isn't running"); }],
+    [/^no app was frontmost/, function () { return tr("当时没有前台应用", "No app was in front"); }],
+    [/^no running application with pid/, function () { return tr("应用已经退出", "The app has quit"); }],
+    [/^(.+) \(pid \d+\) has quit/, function (m) { return tr(m[1] + " 已经退出", m[1] + " has quit"); }],
+    [/^(.+) did not take focus within/, function (m) { return tr(m[1] + " 没能回到原来的窗口和输入框", m[1] + " didn't return to the original window and input field"); }],
+    [/^(.+) lost focus before Enter/, function (m) { return tr("粘贴后 " + m[1] + " 失去了焦点", m[1] + " lost focus after the paste"); }],
+    [/^another delivery is under way/, function () { return tr("另一条正在送达，等它完成再发", "Another take is being delivered; send once it's done"); }],
+    [/no space left on device/, function () { return tr("磁盘满了", "The disk is full"); }],
+    [/permission denied/, function () { return tr("没有写入的权限", "No permission to write"); }],
   ];
   // CODES word a request the server refused, by the code of its answer. A
   // function takes what the page asked for: {v} the version a resend sent,
@@ -2188,28 +2224,28 @@
   // read apart: a resend of a version with no text, a cloud engine the
   // config does not name.
   var CODES = {
-    no_take: "这一条录音已经不在存储里了",
-    recording: "还在录音",
-    transcribing: "还在识别",
-    resending: "这条正在重发",
-    retranscribing: "这条正在重新识别",
-    delivery_busy: "另一条正在送达，等它完成再发",
-    target_gone: "目标已关闭",
-    no_herdr: "herdr 没有运行",
-    front_app: "不能发到最前面的应用：会贴进本页",
-    page_window: "这个应用正显示着本页：发过去会贴进本页",
-    label_empty: "写下正确的文字或者备注",
-    no_answer: "这个引擎没有给出这一条的文字，不能标它对",
-    backup_text: "这一条的文字来自备用输入，录音文件里没有这段声音：只能存备注",
-    disk_full: "磁盘满了",
-    no_permission: "没有写入的权限",
+    no_take: tr("这一条录音已经不在存储里了", "This take is no longer in the store"),
+    recording: tr("还在录音", "Still recording"),
+    transcribing: tr("还在识别", "Still transcribing"),
+    resending: tr("这条正在重发", "This take is being resent"),
+    retranscribing: tr("这条正在重新识别", "This take is being re-transcribed"),
+    delivery_busy: tr("另一条正在送达，等它完成再发", "Another take is being delivered; send once it's done"),
+    target_gone: tr("目标已关闭", "The target is closed"),
+    no_herdr: tr("herdr 没有运行", "herdr isn't running"),
+    front_app: tr("不能发到最前面的应用：会贴进本页", "Can't send to the frontmost app: it would paste into this page"),
+    page_window: tr("这个应用正显示着本页：发过去会贴进本页", "This app is showing this page: sending would paste into it"),
+    label_empty: tr("写下正确的文字或者备注", "Write the correct text or a note"),
+    no_answer: tr("这个引擎没有给出这一条的文字，不能标它对", "This engine gave no text for this take, so it can't be marked correct"),
+    backup_text: tr("这一条的文字来自备用输入，录音文件里没有这段声音：只能存备注", "This take's text came from the backup input, which the audio file doesn't hold: a note only"),
+    disk_full: tr("磁盘满了", "The disk is full"),
+    no_permission: tr("没有写入的权限", "No permission to write"),
     no_text: function (x) {
       var v = x && x.v;
-      var why = !v ? "" : v.retr ? (v.err ? "重新识别 #" + v.id.slice(1) + " 失败了" : "没有重新识别 #" + v.id.slice(1)) : v.src === "raw" ? "原始文字是空的" : v.src === "delivered" ? "送达的文字是空的" : v.err ? v.name + " 这次识别失败了" : "对比记录里没有 " + v.name + " 的结果";
-      return "这一版没有文字可发" + (why ? "：" + why : "");
+      var why = !v ? "" : v.retr ? (v.err ? tr("重新识别 #" + v.id.slice(1) + " 失败了", "re-transcription #" + v.id.slice(1) + " failed") : tr("没有重新识别 #" + v.id.slice(1), "there is no re-transcription #" + v.id.slice(1))) : v.src === "raw" ? tr("原始文字是空的", "the raw text is empty") : v.src === "delivered" ? tr("送达的文字是空的", "the delivered text is empty") : v.err ? tr(v.name + " 这次识别失败了", v.name + " failed this time") : tr("对比记录里没有 " + v.name + " 的结果", "the compare record has no result from " + v.name);
+      return tr("这一版没有文字可发", "This version has no text to send") + (why ? tr("：", ": ") + why : "");
     },
     not_named: function (x) {
-      return ((x && x.engine) || "这个引擎") + " 是云端引擎，" + NOT_NAMED;
+      return ((x && x.engine) || tr("这个引擎", "This engine")) + tr(" 是云端引擎，", " is a cloud engine; ") + NOT_NAMED;
     },
   };
   // refusal is a refused request in the page's words, by its code; a code
@@ -2222,7 +2258,7 @@
   }
   function reason(msg) {
     msg = String(msg || "").trim();
-    if (!msg) return "没有说原因";
+    if (!msg) return tr("没有说原因", "No reason given");
     for (var i = 0; i < REASONS.length; i++) {
       var m = REASONS[i][0].exec(msg);
       if (m) return REASONS[i][1](m);
@@ -2236,9 +2272,9 @@
   // would run it.
   function enginePicker(t) {
     var es = ENG || [];
-    var box = h("div", { class: "picker", role: "group", "aria-label": "用哪个引擎重新识别" });
+    var box = h("div", { class: "picker", role: "group", "aria-label": tr("用哪个引擎重新识别", "Engine to re-transcribe with") });
     if (!ENG) {
-      add(box, h("p", { class: "muted" }, "正在读取引擎…"));
+      add(box, h("p", { class: "muted" }, tr("正在读取引擎…", "Loading engines…")));
       return box;
     }
     var named = es.filter(function (e) { return e.named; });
@@ -2250,10 +2286,10 @@
         { class: "opts" },
         es.map(function (e) {
           var sub = e.local
-            ? h("span", { class: "sub" }, e.primary ? "本机 · 当前引擎" : "本机")
+            ? h("span", { class: "sub" }, e.primary ? tr("本机 · 当前引擎", "On this Mac · current engine") : tr("本机", "On this Mac"))
             : e.named
-              ? h("span", { class: "cloud" }, svg(10, 10, ICON.out), "云端 · 音频会发到" + (e.service || "云端"))
-              : h("span", { class: "sub" }, "云端 · " + NOT_NAMED);
+              ? h("span", { class: "cloud" }, svg(10, 10, ICON.out), tr("云端 · 音频会发到" + (e.service || "云端"), "Cloud · the audio goes to " + (e.service || "the cloud")))
+              : h("span", { class: "sub" }, tr("云端 · ", "Cloud · ") + NOT_NAMED);
           return h(
             "label",
             { class: "opt", "aria-disabled": e.named ? null : "true" },
@@ -2273,9 +2309,9 @@
         h(
           "button",
           { class: "btn primary", type: "button", "data-k": "retr-go", disabled: !chosen || !!busy.retr[t.id], onclick: function () { doRetranscribe(t, chosen); } },
-          chosen && !chosen.local ? "发到云端识别" : "开始识别",
+          chosen && !chosen.local ? tr("发到云端识别", "Transcribe in the cloud") : tr("开始识别", "Transcribe"),
         ),
-        h("button", { class: "btn", type: "button", "data-k": "fold", onclick: function () { DT.picker = null; drawDetail(); } }, "收起"),
+        h("button", { class: "btn", type: "button", "data-k": "fold", onclick: function () { DT.picker = null; drawDetail(); } }, tr("收起", "Close")),
       ),
     );
     return box;
@@ -2295,12 +2331,12 @@
       .then(
         function (line) {
           if (DT.id !== id) return;
-          if (line.err) say("retr", "err", "重新识别 #" + line.n + " 失败 · " + e.name);
-          else say("retr", "ok", "重新识别 #" + line.n + " · " + e.name + " · " + ((line.latency_ms || 0) / 1000).toFixed(1) + " 秒");
+          if (line.err) say("retr", "err", tr("重新识别 #" + line.n + " 失败 · ", "Re-transcription #" + line.n + " failed · ") + e.name);
+          else say("retr", "ok", tr("重新识别 #", "Re-transcription #") + line.n + " · " + e.name + " · " + ((line.latency_ms || 0) / 1000).toFixed(1) + tr(" 秒", " s"));
         },
         function (err) {
           if (err === Refused) return failed(err);
-          if (DT.id === id) say("retr", "err", ["没有识别：", refusal(err, { engine: e.name })]);
+          if (DT.id === id) say("retr", "err", [tr("没有识别：", "Not transcribed: "), refusal(err, { engine: e.name })]);
         },
       )
       .then(function () {
@@ -2312,43 +2348,49 @@
 
   // ------------------------------------------------------------ timeline
 
-  var STOP = { tap: "按右 Option 结束", enter: "按 Enter 结束并发送", cancel: "按 Esc 取消", auto: "自动结束", stream_end: "输入结束", write_error: "写文件出错，停下", shutdown: "被重启打断" };
-  var HOLD = { cancelled: "已取消，文字已存下", empty: "没有听到话", deliver_failed: "未送达 · 送达失败", asr_failed: "未送达 · 识别失败", interrupted: "未送达 · 被打断", delivery_cut: "可能已粘贴 · 被打断" };
-  var VIA = { hotkey: "快捷键重贴 · ", page: "从历史页重发 · ", cli: "命令重发 · " };
+  var STOP = tr(
+    { tap: "按右 Option 结束", enter: "按 Enter 结束并发送", cancel: "按 Esc 取消", auto: "自动结束", stream_end: "输入结束", write_error: "写文件出错，停下", shutdown: "被重启打断" },
+    { tap: "Stopped with right Option", enter: "Stopped with Enter, to send", cancel: "Cancelled with Esc", auto: "Stopped automatically", stream_end: "Input ended", write_error: "Stopped: a file write failed", shutdown: "Cut off by a restart" },
+  );
+  var HOLD = tr(
+    { cancelled: "已取消，文字已存下", empty: "没有听到话", deliver_failed: "未送达 · 送达失败", asr_failed: "未送达 · 识别失败", interrupted: "未送达 · 被打断", delivery_cut: "可能已粘贴 · 被打断" },
+    { cancelled: "Cancelled, text kept", empty: "No speech heard", deliver_failed: "Not delivered · delivery failed", asr_failed: "Not delivered · transcription failed", interrupted: "Not delivered · interrupted", delivery_cut: "May have pasted · interrupted" },
+  );
+  var VIA = tr({ hotkey: "快捷键重贴 · ", page: "从历史页重发 · ", cli: "命令重发 · " }, { hotkey: "Re-pasted by hotkey · ", page: "Resent from Recordings · ", cli: "Resent by command · " });
   function evWords(e) {
-    var tg = target(e.target).full || "当前光标";
+    var tg = target(e.target).full || tr("当前光标", "the cursor");
     switch (e.ev) {
       case "start":
-        return "开始 → " + tg;
+        return tr("开始 → ", "Started → ") + tg;
       case "mic_live":
-        return "麦克风有声音";
+        return tr("麦克风有声音", "Mic picked up sound");
       case "no_signal":
-        return "没信号";
+        return tr("没信号", "No signal");
       case "backup_on":
-        return "打开备用输入";
+        return tr("打开备用输入", "Backup input on");
       case "stop":
-        return STOP[e.kind] || "结束";
+        return STOP[e.kind] || tr("结束", "Stopped");
       case "send_on":
-        return "识别时按了 Enter：识别完就发送";
+        return tr("识别时按了 Enter：识别完就发送", "Enter pressed while transcribing: sends when done");
       case "text":
-        return "识别完成 · " + (e.engine || "") + " · " + (e.chars || 0) + " 字" + (e.latency_ms ? " · " + (e.latency_ms / 1000).toFixed(1) + " 秒" : "") + (e.failed_chunks ? " · " + e.failed_chunks + " 段失败" : "") + (e.audio === "backup" ? " · 用备用输入" : "");
+        return tr("识别完成 · ", "Transcribed · ") + (e.engine || "") + " · " + tr((e.chars || 0) + " 字", charsN(e.chars || 0)) + (e.latency_ms ? " · " + (e.latency_ms / 1000).toFixed(1) + tr(" 秒", " s") : "") + (e.failed_chunks ? " · " + e.failed_chunks + tr(" 段失败", e.failed_chunks === 1 ? " chunk failed" : " chunks failed") : "") + (e.audio === "backup" ? tr(" · 用备用输入", " · from the backup input") : "");
       case "hold":
-        return HOLD[e.why] || "未送达";
+        return HOLD[e.why] || tr("未送达", "Not delivered");
       case "deliver":
-        if (!e.ok) return [(VIA[e.via] || "") + "送达失败 → " + tg + "：", reason(e.err)];
-        return [(VIA[e.via] || "") + (e.submit === "ok" ? "已发送 → " : "已粘贴 → ") + tg + (e.received === "whole" ? " · 完整" : e.received === "short" ? " · 不完整" : ""), e.submit === "err" ? [" · 没有按 Enter：", reason(e.err)] : null];
+        if (!e.ok) return [(VIA[e.via] || "") + tr("送达失败 → ", "Delivery failed → ") + tg + tr("：", ": "), reason(e.err)];
+        return [(VIA[e.via] || "") + (e.submit === "ok" ? tr("已发送 → ", "Sent → ") : tr("已粘贴 → ", "Pasted → ")) + tg + (e.received === "whole" ? tr(" · 完整", " · complete") : e.received === "short" ? tr(" · 不完整", " · incomplete") : ""), e.submit === "err" ? [tr(" · 没有按 Enter：", " · Enter not pressed: "), reason(e.err)] : null];
       case "received":
-        return "读回 #" + e.n + " · " + (e.received === "whole" ? "完整" : e.received === "short" ? "不完整" : "看不出");
+        return tr("读回 #", "Read back #") + e.n + " · " + (e.received === "whole" ? tr("完整", "complete") : e.received === "short" ? tr("不完整", "incomplete") : tr("看不出", "unclear"));
       case "recover":
-        return "重启后找回";
+        return tr("重启后找回", "Recovered after a restart");
       case "retranscribe":
-        return "重新识别 #" + e.n + " · " + e.engine + (e.err ? " · 失败：" + e.err : " · " + Array.from(e.text || "").length + " 字");
+        return tr("重新识别 #", "Re-transcription #") + e.n + " · " + e.engine + (e.err ? tr(" · 失败：", " · failed: ") + e.err : " · " + tr(Array.from(e.text || "").length + " 字", charsN(Array.from(e.text || "").length)));
       case "seen":
-        return "在历史页打开过";
+        return tr("在历史页打开过", "Opened in Recordings");
       case "dismiss":
-        return "忽略：不再算作未送达";
+        return tr("忽略：不再算作未送达", "Dismissed: no longer counts as not delivered");
       case "undismiss":
-        return "取消忽略";
+        return tr("取消忽略", "Undismissed");
     }
     return e.ev;
   }
@@ -2361,12 +2403,12 @@
     return at.getMonth() + 1 + "/" + at.getDate() + " " + hm(at);
   }
   function timeline(t) {
-    if (!t.events.length) return h("section", { class: "block" }, h("h2", null, "经过"), h("p", { class: "muted" }, "早期录音：这一条在行为记录出现之前，没有经过。"));
+    if (!t.events.length) return h("section", { class: "block" }, h("h2", null, tr("经过", "Timeline")), h("p", { class: "muted" }, tr("早期录音：这一条在行为记录出现之前，没有经过。", "Early take: recorded before megavoice logged events, so it has no timeline.")));
     var t0 = new Date(t.events[0].at).getTime();
     return h(
       "section",
       { class: "block", "aria-labelledby": "h-tl" },
-      h("h2", { id: "h-tl" }, "经过"),
+      h("h2", { id: "h-tl" }, tr("经过", "Timeline")),
       h(
         "ol",
         { class: "tl" },
@@ -2379,7 +2421,7 @@
       h(
         "details",
         { class: "more-box" },
-        h("summary", null, "原始事件"),
+        h("summary", null, tr("原始事件", "Raw events")),
         h("pre", null, t.events.map(function (e) { return JSON.stringify(e); }).join("\n")),
       ),
     );
@@ -2394,9 +2436,9 @@
     detailEl.dataset.take = S.sel || "";
     var t = DT.take;
     var parts;
-    if (!S.sel) parts = h("p", { class: "d-empty" }, "选一条录音，在这里看文字、标注、播放和重发。");
+    if (!S.sel) parts = h("p", { class: "d-empty" }, tr("选一条录音，在这里看文字、标注、播放和重发。", "Pick a take to see its text, label it, play it or resend it here."));
     else if (DT.err) parts = h("p", { class: "d-empty" }, DT.err);
-    else if (!t) parts = h("p", { class: "d-empty" }, "正在载入…");
+    else if (!t) parts = h("p", { class: "d-empty" }, tr("正在载入…", "Loading…"));
     else
       parts = [
         dheader(t),
@@ -2404,7 +2446,7 @@
         labelBlock(t),
         playerBlock(t),
         timeline(t),
-        h("details", { class: "more-box" }, h("summary", null, "文件"), h("div", { class: "paths" }, t.files.map(function (p) { return h("span", { translate: "no" }, p); }))),
+        h("details", { class: "more-box" }, h("summary", null, tr("文件", "Files")), h("div", { class: "paths" }, t.files.map(function (p) { return h("span", { translate: "no" }, p); }))),
       ];
     detailEl.replaceChildren();
     add(detailEl, parts);
@@ -2430,8 +2472,8 @@
       next = h(
         "main",
         { class: "page-msg" },
-        h("h1", null, "从菜单栏重新打开录音历史"),
-        h("p", null, "这个标签页没有 megavoice 给的钥匙，或者钥匙已经换过。点菜单栏的 megavoice 图标，选「打开录音历史」。"),
+        h("h1", null, tr("从菜单栏重新打开录音历史", "Reopen Recordings from the menu bar")),
+        h("p", null, tr("这个标签页没有 megavoice 给的钥匙，或者钥匙已经换过。点菜单栏的 megavoice 图标，选「打开录音历史」。", "This tab doesn't have megavoice's key, or the key has changed. Click the megavoice icon in the menu bar and open the recordings from there.")),
       );
     } else if (!D.loaded) {
       // the list's column, where the list will be: the skeleton has the
@@ -2443,8 +2485,8 @@
           next,
           h(
             "section",
-            { class: "list-col", "aria-busy": "true", "aria-label": "录音列表" },
-            h("p", { class: "count-line muted" }, "正在载入…"),
+            { class: "list-col", "aria-busy": "true", "aria-label": tr("录音列表", "Recordings") },
+            h("p", { class: "count-line muted" }, tr("正在载入…", "Loading…")),
             h("ul", { class: "skel", "aria-hidden": "true" }, [0, 1, 2, 3, 4, 5, 6, 7].map(function () {
               return h("li", null, h("span"), h("span"), h("span"), h("span"), h("span"));
             })),
@@ -2454,7 +2496,7 @@
       next = h(
         "main",
         { class: "page", "data-empty": "" },
-        h("section", { class: "list-col", id: "list" }, D.down ? notice() : null, h("div", { class: "empty" }, h("h2", null, "还没有录音"), h("p", null, "按右 Option 开始录音，再按一次结束。每一条都会出现在这里，取消的也在。"))),
+        h("section", { class: "list-col", id: "list" }, D.down ? notice() : null, h("div", { class: "empty" }, h("h2", null, tr("还没有录音", "No recordings yet")), h("p", null, tr("按右 Option 开始录音，再按一次结束。每一条都会出现在这里，取消的也在。", "Press right Option to start recording and again to stop. Every take shows up here, cancelled ones too.")))),
       );
     } else {
       if (!S.sel && WIDE.matches && D.rows.length) {
@@ -2620,6 +2662,7 @@
 
   function start() {
     app = document.getElementById("app");
+    localize();
     add(app, topbar());
     observer = new IntersectionObserver(
       function (es) {

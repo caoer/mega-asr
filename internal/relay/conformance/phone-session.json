@@ -1,0 +1,24 @@
+{
+  "about": "A phone session: the room asks the Mac, the Mac acknowledges, the phone gets ok with peer true; binary frames pass both ways with the sid; a phone's text frame closes it with 1003 and the Mac hears it went.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"expect": {"as": "p1", "nothing": true}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": true}}},
+    {"send": {"as": "p1", "binary": {"hex": "01020304"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s1", "hex": "01020304"}}},
+    {"send": {"as": "mac", "binary": {"sid": "$s1", "hex": "a0a1"}}},
+    {"expect": {"as": "p1", "binary": {"hex": "a0a1"}}},
+    {"send": {"as": "mac", "binary": {"hex": "00000000000000ffee"}}},
+    {"expect": {"as": "p1", "nothing": true}},
+    {"expect": {"as": "mac", "nothing": true}},
+    {"send": {"as": "p1", "text": {"t": "hello"}}},
+    {"expect": {"as": "p1", "close": 1003}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "phone", "key": "@phone1", "up": false, "oneshot": false}}}
+  ]
+}

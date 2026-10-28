@@ -13,8 +13,11 @@ import (
 	"github.com/caoer/mega-asr/internal/asr"
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/compare"
+	"github.com/caoer/mega-asr/internal/l10n"
+	"github.com/caoer/mega-asr/internal/names"
 	"github.com/caoer/mega-asr/internal/post"
 	"github.com/caoer/mega-asr/internal/session"
+	"github.com/caoer/mega-asr/internal/store"
 	"github.com/caoer/mega-asr/internal/takes"
 )
 
@@ -26,34 +29,39 @@ func (c Config) Chunker() session.Chunker {
 // Transcriber is what a controller transcribes chunks with: the resident
 // process with the CLI as fallback, or, in exec mode, the CLI alone. The
 // hotword list is read at every chunk, so edits take effect at the next one.
+// The rechecks (rechecks.tsv and rechecks.d/*.tsv, asr.Recheck) are read at
+// every chunk too.
 func (c Config) Transcriber() asr.Transcriber {
 	if c.ASR.FunASR.Mode == "exec" {
-		return c.Exec()
+		return asr.Rechecking{Transcriber: c.Exec(), Rechecks: rechecks}
 	}
 	return c.Resident()
 }
 
-// PlainTranscriber is Transcriber without the hotwords.
+// PlainTranscriber is Transcriber without the hotwords and rechecks.
 func (c Config) PlainTranscriber() asr.Transcriber {
 	if c.ASR.FunASR.Mode == "exec" {
 		return c.exec(nil)
 	}
-	return c.resident(nil)
+	return c.resident(nil, nil)
 }
 
-func (c Config) Resident() *Fallback { return c.resident(hotwords) }
+func (c Config) Resident() *Fallback { return c.resident(hotwords, rechecks) }
 
-func (c Config) resident(hw func() []string) *Fallback {
+func (c Config) resident(hw func() []string, rc func() []asr.Recheck) *Fallback {
 	f := c.ASR.FunASR
 	return &Fallback{
 		new: func() *asr.Resident {
 			return &asr.Resident{Root: f.Root, LLM: f.LLM, Hotwords: hw, GPU: f.GPULayers, EncGPU: f.Encoder == "gpu", VADGPU: f.VAD == "gpu", Threads: f.Threads, LLMThreads: f.LLMThreads}
 		},
-		exec: c.exec(hw),
+		exec:     c.exec(hw),
+		rechecks: rc,
 	}
 }
 
-func hotwords() []string { return asr.ReadHotwords(HotwordsPath()) }
+func hotwords() []string { return asr.ReadHotwords(HotwordsFiles()...) }
+
+func rechecks() []asr.Recheck { return asr.ReadRechecks(RechecksFiles()...) }
 
 // Exec runs the CLI once per clip, with the resident process's engine flags.
 func (c Config) Exec() asr.FunASR { return c.exec(hotwords) }
@@ -63,10 +71,41 @@ func (c Config) exec(hw func() []string) asr.FunASR {
 	return asr.FunASR{Root: f.Root, LLM: f.LLM, Hotwords: hw, GPU: f.GPULayers, EncGPU: f.Encoder == "gpu", VADGPU: f.VAD == "gpu", Threads: f.Threads, LLMThreads: f.LLMThreads}
 }
 
-// Post is the chain applied after ASR: the correction table, then filler
+// Post is the chain applied after ASR: the correction tables, then filler
 // removal with post.join_words.
 func (c Config) Post() post.Chain {
-	return post.Chain{post.CorrectionsFile(CorrectionsPath()), post.Filler(c.Postprocess.JoinWords)}
+	return post.Chain{post.CorrectionsFiles(CorrectionsFiles), post.Filler(c.Postprocess.JoinWords)}
+}
+
+// NamesGate is the dictation names gate of [names] (NamesConfig).
+func (c Config) NamesGate() names.Gate {
+	n := c.Names
+	return names.Gate{People: n.People, Key: n.Key, Jev: names.Jev{URL: names.URL, Model: names.Model},
+		Threshold: n.Threshold, Timeout: time.Duration(n.Timeout)}
+}
+
+// NamesStage is session.Controller.Names for this config: nil while
+// names.on is off. A take the gate fires on gets a names line.
+func (c Config) NamesStage() func(ctx context.Context, text string) (string, *store.Event) {
+	if !c.Names.On {
+		return nil
+	}
+	g := c.NamesGate()
+	return func(ctx context.Context, text string) (string, *store.Event) {
+		r := g.Correct(ctx, text)
+		if !r.Fired {
+			return text, nil
+		}
+		ev := &store.Event{Ev: "names", N: r.Questions, LatencyMS: r.Wall.Milliseconds()}
+		for _, e := range r.Edits {
+			ev.Names = append(ev.Names, store.NameEdit{From: e.From, To: e.To, Person: e.Person, P: e.P})
+		}
+		if r.Err != nil {
+			ev.Err = r.Err.Error()
+			log.Printf("names: %v; delivering the text as decoded", r.Err)
+		}
+		return r.Text, ev
+	}
 }
 
 // Doubao is the Doubao ASR 2.0 client; its key is read from key_file at
@@ -75,7 +114,7 @@ func (c Config) Doubao() *asr.Doubao {
 	d := c.ASR.Doubao
 	a := &asr.Doubao{URL: d.URL, ResourceID: d.ResourceID, Key: d.Key, TwoPass: d.TwoPass, DDC: d.DDC}
 	if d.Hotwords {
-		a.Hotwords = hotwords
+		a.Hotwords = func() []string { return asr.ReadHotwordsMax(asr.DoubaoMaxHotwords, HotwordsFiles()...) }
 	}
 	return a
 }
@@ -163,7 +202,7 @@ func (c Config) Fanout(o LoadOpts, local asr.Transcriber) *compare.Fanout {
 }
 
 // cloud names the service a cloud engine's audio goes to.
-var cloud = map[string]string{"doubao": "火山引擎"}
+var cloud = map[string]l10n.Pair{"doubao": l10n.Pair{"火山引擎", "Volcengine"}}
 
 // current is the config file (o) as it reads now, c when it no longer
 // loads. Retranscriber and TakesEngines read it alike, so the page offers an
@@ -199,7 +238,7 @@ func (c Config) TakesEngines(o LoadOpts) func() []takes.Engine {
 		cur := c.current(o)
 		var out []takes.Engine
 		for _, e := range cur.Retranscribers() {
-			out = append(out, takes.Engine{Name: e.Name, Local: !e.Cloud, Service: cloud[e.Name],
+			out = append(out, takes.Engine{Name: e.Name, Local: !e.Cloud, Service: cloudName(e.Name),
 				Primary: cur.ASR.Engine == e.Name, Named: !e.Cloud || e.Named})
 		}
 		return out
@@ -209,3 +248,13 @@ func (c Config) TakesEngines(o LoadOpts) func() []takes.Engine {
 // Labels is the label file, store.labels, which the Takes page reads and
 // writes.
 func (c Config) Labels() *compare.Labels { return &compare.Labels{Path: c.Store.Labels} }
+
+// cloudName is the service a cloud engine's audio goes to, in the user's
+// language; "" for a local engine.
+func cloudName(engine string) string {
+	c, ok := cloud[engine]
+	if !ok {
+		return ""
+	}
+	return c.String()
+}

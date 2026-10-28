@@ -26,16 +26,16 @@ Without `--cdp` the listing is the search union. That misses the occasional shar
 
 For each new minute, the script:
 
-1. `minutes minutes get` → `meta.json`. A minute younger than 3 h may still be transcribing, so it stays `pending` for the next run.
+1. `minutes minutes get` → `meta.json`. A minute younger than 3 h is fetched once it is ready (the recording ended over 5 min ago and Feishu's transcript reaches within 2 min of its end); until then it stays `pending` for the next run. Past 3 h it is fetched as it is. `--only TOKEN --ready` is the event path: Feishu announced the minute generated (`minutes.minute.generated_v1`), so the 5-minute wait is skipped (the transcript check stays), and a minute still unready is tried again every 20 s for up to 3 min before it is recorded `pending` or `error` for the next run.
 2. `minutes +detail --transcript --summary` → Feishu's summary (markdown, as Feishu wrote it; `""` when the minute has none) into `state.json`, and `transcript.txt` (Feishu's text: `<speaker> HH:MM:SS.mmm` then the sentence), parsed into `transcript.json` segments `{speaker, start_s, text}`.
 3. `minutes +download --url-only`, then an HTTP download with `Range` resume (`media.part` → `media.m4a` for recordings, `media.mp4` for video meetings). The script downloads the URL itself because lark-cli refuses it when a fake-IP proxy (Surge, Clash) resolves Feishu's stream host to `198.18.x.x`. A viewer of someone else's minute gets `2091005 permission deny` on the media and keeps the transcript only (`media_error: export_denied`).
 
-`state.json` records each minute's state (`done`, `pending`, `error`) after every item. An interrupted run resumes where it stopped, a re-run fetches only minutes not yet `done`, and an `error` is retried on the next run. Every run (and `summaries` alone) then fetches the summary of each `done` minute without a `summary` key, 20 minutes a call. A summary that fails is logged and retried on the next run; it does not change the run's exit code (`summaries` alone still exits 1 on a failure). To refetch a minute, delete its entry from `state.json`.
+`state.json` records each minute's state (`done`, `pending`, `error`) after every item. An interrupted run resumes where it stopped, a re-run fetches only minutes not yet `done`, and an `error` is retried on the next run while the listing still holds it. A full run (not `--only`) records its listing as `listed`, the sorted tokens, so a reader can tell a current error from one whose minute has left the listing and is no longer retried; the record itself stays. Every run (and `summaries` alone) then fetches the summary of each `done` minute without a `summary` key, 20 minutes a call. A summary that fails is logged and retried on the next run; it does not change the run's exit code (`summaries` alone still exits 1 on a failure). To refetch a minute, delete its entry from `state.json`.
 
 ## Layout
 
 ```
-state.json                      per-minute record: title, owner, relation (owner|shared), source (recording|meeting), created, duration, media, summary
+state.json                      per-minute record: title, owner, relation (owner|shared), source (recording|meeting), created, duration, media, summary; `listed`: the last full run's tokens
 minutes/<token>/                meta.json, transcript.txt, transcript.json, media.{m4a,mp4}
 segments/<token>/NNNN.wav       16 kHz mono calibration clips
 segments.jsonl                  every transcript segment of every minute with media, with usable/reason

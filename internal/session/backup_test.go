@@ -599,3 +599,79 @@ func TestSplice(t *testing.T) {
 		t.Fatalf("open span: %d samples, %d used", len(out), used)
 	}
 }
+
+func TestBackupRescueCompletenessControlsSubmit(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		seconds     int
+		backupFails bool
+		complete    bool
+	}{
+		{"complete healthy backup", 3, false, true},
+		{"partial backup", 1, false, false},
+		{"backup also fails during Stop", 3, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			main := &fakeSource{blocks: [][]int16{make([]int16, 3*audio.Rate)}}
+			r, base := backupRig(t, main, func() audio.Source {
+				bk := &fakeSource{blocks: [][]int16{speech(tc.seconds*audio.Rate, 2000)}}
+				if tc.backupFails {
+					return &tailFailureSource{fakeSource: bk}
+				}
+				return bk
+			})
+			r.c.NewSource = func() audio.Source { return &tailFailureSource{fakeSource: main} }
+			r.c.Toggle()
+			r.backupRecording(t)
+			r.c.Enter()
+			r.wait(t)
+			want := "telegram|backup"
+			if tc.complete {
+				want += ";telegram|⏎"
+			}
+			if got := r.del.got(); got != want {
+				t.Fatalf("delivered %q, want %q", got, want)
+			}
+			if e := line(base, "capture_error"); !strings.Contains(e.Why, "255") {
+				t.Fatalf("main failure diagnostic lost: %+v", e)
+			}
+			evs, err := store.Read(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := store.State(evs)
+			if (state.Why == "incomplete") == tc.complete {
+				t.Fatalf("complete=%v state=%+v", tc.complete, state)
+			}
+			if tc.complete && strings.Contains(r.ui.String(), "录音不完整") {
+				t.Fatal(r.ui.String())
+			}
+			t.Logf("backup=%d s healthy=%v delivered=%q state=%+v", tc.seconds, !tc.backupFails, r.del.got(), state)
+		})
+	}
+}
+
+func TestSpliceCoverageRequiresEveryDeadSpan(t *testing.T) {
+	sec := audio.Rate
+	main := make([]int16, 3*sec)
+	for _, tc := range []struct {
+		name     string
+		bk       []int16
+		off      int
+		dead     []span
+		complete bool
+	}{
+		{"whole healthy track", speech(3*sec, 2000), sec / 100, []span{{0, -1}}, true},
+		{"short whole track", speech(sec, 2000), 0, []span{{0, -1}}, false},
+		{"missing prefix", speech(3*sec, 2000), sec / 2, []span{{sec / 4, sec}}, false},
+		{"missing tail", speech(sec, 2000), 0, []span{{0, sec / 2}, {2 * sec, -1}}, false},
+		{"silent span", slices.Concat(speech(sec, 2000), make([]int16, sec)), 0, []span{{0, sec}, {sec, 2 * sec}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, complete := spliceCoverage(main, tc.bk, tc.off, tc.dead)
+			if complete != tc.complete {
+				t.Fatalf("complete=%v want=%v", complete, tc.complete)
+			}
+		})
+	}
+}

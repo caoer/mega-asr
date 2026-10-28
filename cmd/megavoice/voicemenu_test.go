@@ -24,6 +24,7 @@ func TestVoiceMenu(t *testing.T) {
 	settled := voiceSettings{TapKey: "right_option", WholeMax: time.Minute, Engine: "funasr"} // the shipped defaults
 	base := voiceState{Running: settled, File: settled, Hotwords: "/c/hotwords.txt", Corrections: "/c/corrections.tsv",
 		Compare: compareSettings{Engines: []string{"funasr", "doubao"}}, Takes: "http://127.0.0.1:7865/takes/",
+		Phone:   "http://127.0.0.1:7865/takes/pair.html",
 		Models:  []model{{"lab-build", build}},
 		Logs:    []string{"/L/megavoice.log", "/L/megameet.log"},
 		Capture: app.CaptureConfig{Source: "local", Mic: "default"},
@@ -59,6 +60,7 @@ func TestVoiceMenu(t *testing.T) {
 	localNet.FoundNote = "Local Network access is off for this app (System Settings › Privacy & Security › Local Network)"
 	portHeld := base // another process holds compare.addr: no address, and why
 	portHeld.Takes, portHeld.TakesNote = pageURL("", &net.OpError{Op: "listen", Net: "tcp", Err: os.NewSyscallError("bind", syscall.EADDRINUSE)})
+	portHeld.Phone = phonePageURL("", nil)
 
 	for _, c := range []struct {
 		name string
@@ -133,14 +135,14 @@ func TestVoiceMenu(t *testing.T) {
 			t.Errorf("%s: %+v, want the writes %q", title, got, want)
 		}
 	}
-	for _, title := range []string{"held: 打开录音历史"} {
+	for _, title := range []string{"held: 打开录音历史", "held: iPhone 遥控…"} {
 		if a := acts[title]; a.arg != "" {
 			t.Errorf("%s opens %q with no listener held", title, a.arg)
 		}
 	}
 	for title, a := range acts {
-		if a.kind == actOpen && a.arg != "" && a.arg != "http://127.0.0.1:7865/takes/" {
-			t.Errorf("%s opens %q: the Takes page is the one page the menu opens", title, a.arg)
+		if a.kind == actOpen && a.arg != "" && a.arg != "http://127.0.0.1:7865/takes/" && a.arg != "http://127.0.0.1:7865/takes/pair.html" {
+			t.Errorf("%s opens %q: the Takes page and its iPhone pairing page are the pages the menu opens", title, a.arg)
 		}
 	}
 	if _, ok := acts[in+"Array over ssh (micbox)"]; ok {
@@ -153,8 +155,8 @@ func TestVoiceMenu(t *testing.T) {
 		"Base":                       {kind: actSet, key: "asr.funasr.llm", arg: `""`},
 		"lab-build":                  {kind: actSet, key: "asr.funasr.llm", arg: `"` + build + `"`},
 		"Edit Hotwords…":             {kind: actExec, argv: []string{"open", "-t", "/c/hotwords.txt"}},
-		"Restart MegaVoice":          {kind: actExit, arg: "restart"},
-		"Quit MegaVoice":             {kind: actExit, arg: "quit"},
+		"Restart " + app.Name():      {kind: actExit, arg: "restart"},
+		"Quit " + app.Name():         {kind: actExit, arg: "quit"},
 		"rec: 停止并粘贴":                 {kind: actTake, arg: "stop", key: "20200101-120000"},
 		"rec: 取消录音":                  {kind: actTake, arg: "cancel", key: "20200101-120000"},
 		"Script Check":               {kind: actRun, arg: "Script Check", argv: []string{"megavoice", "script"}},
@@ -244,7 +246,7 @@ func TestPicksLocal(t *testing.T) {
 // recording, the offer's first two choices end it first and the third keeps
 // it recording and exits nothing; with none, the exit goes ahead.
 func TestExitOffer(t *testing.T) {
-	o := exitOffer("restart", 83*time.Second)
+	o := exitOffer("restart", 83*time.Second, false)
 	if o.title != "正在录音 1:23" || o.info != "重启前先结束这条录音。结束后最多再等 30 秒识别和送达，然后重启；没送达的录音留在录音历史里。" {
 		t.Errorf("offer %q / %q", o.title, o.info)
 	}
@@ -255,8 +257,22 @@ func TestExitOffer(t *testing.T) {
 	if want := []string{"停止并粘贴，然后重启", "取消录音，然后重启", "继续录音"}; !slices.Equal(labels, want) {
 		t.Errorf("choices %q, want %q", labels, want)
 	}
-	if q := exitOffer("quit", time.Second); q.choices[0].label != "停止并粘贴，然后退出" || q.choices[1].label != "取消录音，然后退出" {
+	if q := exitOffer("quit", time.Second, false); q.choices[0].label != "停止并粘贴，然后退出" || q.choices[1].label != "取消录音，然后退出" {
 		t.Errorf("quit's choices %+v", q.choices)
+	}
+	// A take an iPhone keyboard streams can only be ended, its text sent back
+	// to the phone, or kept recording.
+	q := exitOffer("quit", time.Second, true)
+	if q.title != "iPhone 键盘正在录音 0:01" || len(q.choices) != 2 ||
+		q.choices[0] != (offerChoice{"结束 iPhone 键盘录音（文字送回手机），然后退出", "paste"}) || q.choices[1] != (offerChoice{"继续录音", ""}) {
+		t.Errorf("stream take offer %+v", q)
+	}
+	stream := voiceTake{ID: "20200101-120000", Recording: true, Stream: true}
+	if args := exitArgs(stream, q, 0); !maps.Equal(args, map[string]string{"end": "paste", "take": "20200101-120000"}) {
+		t.Errorf("stream take: end it: %v", args)
+	}
+	if args := exitArgs(stream, q, 1); args != nil {
+		t.Errorf("stream take: keep recording: %v", args)
 	}
 	rec := voiceTake{ID: "20200101-120000", Recording: true}
 	for _, c := range []struct {
@@ -281,12 +297,20 @@ func TestExitOffer(t *testing.T) {
 // fakeEnder is a controller for endAndExit: stuck blocks StopFrom and
 // CancelFrom forever, as a held mutex would.
 type fakeEnder struct {
-	mu    sync.Mutex
-	calls []string
-	stuck chan struct{}
-	left  []string
-	ok    bool          // what StopFrom and CancelFrom report, when not stuck
-	drain time.Duration // the bound Drain was given
+	mu     sync.Mutex
+	calls  []string
+	stuck  chan struct{}
+	left   []string
+	ok     bool          // what StopFrom and CancelFrom report, when not stuck
+	drain  time.Duration // the bound Drain was given
+	stream bool          // a take an iPhone keyboard streams records (Published)
+}
+
+func (f *fakeEnder) Published() (session.State, string, time.Duration, string) {
+	if f.stream {
+		return session.Recording, "20200101-120000", time.Second, session.OwnerStream
+	}
+	return session.Idle, "", 0, ""
 }
 
 func (f *fakeEnder) note(s string) { f.mu.Lock(); f.calls = append(f.calls, s); f.mu.Unlock() }
@@ -295,6 +319,10 @@ func (f *fakeEnder) StopFrom(via, id string) bool {
 	if f.stuck != nil {
 		<-f.stuck
 	}
+	return f.ok
+}
+func (f *fakeEnder) SendFrom(via, id string) bool {
+	f.note("send " + via + " " + id)
 	return f.ok
 }
 func (f *fakeEnder) CancelFrom(via, id string) bool {
@@ -337,7 +365,7 @@ func TestEndAndExit(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("no exit")
 	}
-	if got := strings.Join(f.calls, ","); got != "cancel menu ,drain" {
+	if got := strings.Join(f.calls, ","); got != "cancel exit ,drain" {
 		t.Fatalf("calls %s", got)
 	}
 	select { // the armed timer fires at 1.1 s: it must not exit again
@@ -379,8 +407,14 @@ func TestTakeRequest(t *testing.T) {
 		{"stop", `{"via":"menu","take":"20200101-120000"}`, false, "stop menu 20200101-120000", "take 20200101-120000 is not recording"},
 		{"cancel", "", false, "cancel ctl ", "no take is recording"},
 		{"stop", `{"via":"page"}`, true, "", `via "page": menu or ctl`},
+		{"stream: stop", `{"via":"menu","take":"20200101-120000"}`, false, "stop menu 20200101-120000", "这段是 iPhone 键盘录音，请从键盘结束"},
+		{"stream: send", "", false, "send ctl ", "这段是 iPhone 键盘录音，请从键盘结束"},
+		{"stream: cancel", "", false, "cancel ctl ", "这段是 iPhone 键盘录音，请从键盘结束"},
+		{"stream: stop", `{"via":"menu","take":"20200101-115900"}`, false, "stop menu 20200101-115900", "take 20200101-115900 is not recording"},
 	} {
-		f := &fakeEnder{ok: c.ok}
+		cmd, stream := strings.CutPrefix(c.cmd, "stream: ")
+		c.cmd = cmd
+		f := &fakeEnder{ok: c.ok, stream: stream}
 		var raw json.RawMessage
 		if c.args != "" {
 			raw = json.RawMessage(c.args)
@@ -414,7 +448,7 @@ func TestMenuExit(t *testing.T) {
 	for _, c := range []struct {
 		cmd, end, call string
 		code           int
-	}{{"restart", "paste", "stop menu ", 75}, {"quit", "cancel", "cancel menu 20200101-120000", 0}} {
+	}{{"restart", "paste", "stop exit ", 75}, {"quit", "cancel", "cancel exit 20200101-120000", 0}} {
 		f := &fakeEnder{ok: true}
 		code := make(chan int, 2)
 		menuExit(f, c.cmd, c.end, "20200101-120000", func(n int) { code <- n })
@@ -443,8 +477,8 @@ func TestExitCancelsTheOfferedTake(t *testing.T) {
 		ok    bool // CancelFrom finds the offered take recording
 		calls string
 	}{
-		{"the offered take records", true, "cancel menu 20200101-120000,drain"},
-		{"another take records", false, "cancel menu 20200101-120000,stop menu ,drain"},
+		{"the offered take records", true, "cancel exit 20200101-120000,drain"},
+		{"another take records", false, "cancel exit 20200101-120000,stop exit ,drain"},
 	} {
 		f := &fakeEnder{ok: c.ok}
 		done := make(chan struct{})
@@ -496,6 +530,7 @@ func TestTakeCommands(t *testing.T) {
 		{"toggle", "", "toggle ctl"},
 		{"stop", `{"via":"menu","take":"20200101-120000"}`, "stop menu 20200101-120000"},
 		{"cancel", "", "cancel ctl "},
+		{"send", "", "send ctl "},
 	} {
 		f.calls = nil
 		resp, ok := k.handle(req(c.cmd, c.args))
@@ -506,6 +541,11 @@ func TestTakeCommands(t *testing.T) {
 	if _, ok := k.handle(req("status", "")); ok {
 		t.Error("status taken by the take commands")
 	}
+	f.stream, f.calls = true, nil // a take an iPhone keyboard streams records
+	if resp, _ := k.handle(req("toggle", "")); resp.OK || resp.Error != "这段是 iPhone 键盘录音，请从键盘结束" || len(f.calls) != 0 {
+		t.Errorf("toggle during a stream take: %+v, calls %q", resp, f.calls)
+	}
+	f.stream = false
 
 	f.busy = true
 	if resp, _ := k.handle(req("quit", "")); resp.OK {
@@ -542,7 +582,7 @@ func TestTakeCommands(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	f.mu.Lock()
-	if got := strings.Join(f.calls, ","); got != "stop menu ,drain" {
+	if got := strings.Join(f.calls, ","); got != "stop exit ,drain" {
 		t.Errorf("calls %q: the second menu exit reached the controller", got)
 	}
 	f.mu.Unlock()
@@ -579,6 +619,10 @@ func (f *fakeTaker) ToggleAt(trigger string, _ time.Time) {
 	f.calls = append(f.calls, "toggle "+trigger)
 }
 
+func (f *fakeTaker) ToggleKeypadAt(_ time.Time, _ func() session.Target, _ string) {
+	f.calls = append(f.calls, "capture keypad")
+}
+
 // A key tap's Result: Esc cancels; the chord is the hotkey, also while a
 // menu exit waits; a Return no take uses goes back to the app; a tap
 // toggles, but starts nothing while a menu exit waits.
@@ -605,9 +649,109 @@ func TestTakeTap(t *testing.T) {
 	} {
 		f := &fakeTaker{used: c.used, why: "after a cancel"}
 		pressed := false
-		takeTap(c.r, time.Now(), f, c.k, func() { pressed = true })
+		takeTap(c.r, time.Now(), "tap", nil, "", f, c.k, func() { pressed = true })
 		if got := strings.Join(f.calls, ","); got != c.calls || pressed != c.pressed {
 			t.Errorf("%s: calls %q pressed %v, want %q %v", c.name, got, pressed, c.calls, c.pressed)
 		}
+	}
+}
+
+func TestTakeTapKeepsKeypadTrigger(t *testing.T) {
+	f := &fakeTaker{}
+	idle := &takeCommands{ctrl: &fakeCtl{}, flash: func(string) {}}
+	takeTap(mac.Result{Tap: true}, time.Now(), "keypad", nil, "", f, idle, func() {})
+	if got := strings.Join(f.calls, ","); got != "toggle keypad" {
+		t.Fatalf("calls %q", got)
+	}
+	f.calls = nil
+	takeTap(mac.Result{Tap: true}, time.Now(), "keypad", func() session.Target { return nil }, "", f, idle, func() {})
+	if got := strings.Join(f.calls, ","); got != "capture keypad" {
+		t.Fatalf("capture calls %q", got)
+	}
+}
+
+// A take an iPhone keyboard streams shows in the menu with no stop or
+// cancel row: only the keyboard ends it.
+func TestMenuOffersNoEndOfAStreamTake(t *testing.T) {
+	settled := voiceSettings{TapKey: "right_option", WholeMax: time.Minute, Engine: "funasr"}
+	v := voiceState{Running: settled, File: settled, Take: voiceTake{ID: "20200101-120000", Recording: true, Elapsed: 5 * time.Second, Stream: true}}
+	rs := v.rows()
+	if len(rs) < 2 || rs[1].title != "● iPhone 键盘录音中 0:05" {
+		t.Fatalf("rows %+v", rs[:min(len(rs), 3)])
+	}
+	for _, r := range rs {
+		if r.act != nil && r.act.kind == actTake {
+			t.Fatalf("a stream take offers %q", r.title)
+		}
+	}
+}
+
+type interruptedEnder struct {
+	*fakeEnder
+	marked chan struct{}
+}
+
+func (f *interruptedEnder) Interrupt() []string { close(f.marked); return f.left }
+
+func TestMenuExitMarksLeftoverTakesBeforeExit(t *testing.T) {
+	f := &interruptedEnder{fakeEnder: &fakeEnder{ok: true, left: []string{"take delivering"}}, marked: make(chan struct{})}
+	exited := make(chan bool, 1)
+	menuExit(f, "restart", "paste", "", func(int) {
+		select {
+		case <-f.marked:
+			exited <- true
+		default:
+			exited <- false
+		}
+	})
+	select {
+	case marked := <-exited:
+		if !marked {
+			t.Fatal("exited before marking uncertain delivery")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("no exit")
+	}
+}
+
+func TestExitMarkerCanRetireDuringRefusal(t *testing.T) {
+	k := &takeCommands{ctrl: &fakeCtl{}}
+	command := "restart"
+	k.exiting.Store(&command)
+	k.flash = func(string) { k.exiting.Store(nil) }
+	response, _ := k.handle(ctl.Request{Cmd: "toggle"})
+	if response.OK || response.Error != "megavoice is exiting (restart)" {
+		t.Fatalf("refusal snapshot %+v", response)
+	}
+}
+
+type stuckInterruptEnder struct {
+	*fakeEnder
+	gate chan struct{}
+	done chan struct{}
+}
+
+func (f *stuckInterruptEnder) Interrupt() []string { <-f.gate; close(f.done); return f.left }
+
+func TestMenuExitBoundSurvivesBlockedInterrupt(t *testing.T) {
+	f := &stuckInterruptEnder{fakeEnder: &fakeEnder{ok: true, left: []string{"take delivering"}}, gate: make(chan struct{}), done: make(chan struct{})}
+	exited := make(chan int, 2)
+	menuExit(f, "quit", "paste", "", func(code int) { exited <- code })
+	select {
+	case code := <-exited:
+		if code != 0 {
+			t.Fatal(code)
+		}
+	case <-time.After(exitGrace + time.Second):
+		close(f.gate)
+		<-f.done
+		t.Fatal("blocked Interrupt removed exit bound")
+	}
+	close(f.gate)
+	<-f.done
+	select {
+	case <-exited:
+		t.Fatal("exit fired twice")
+	case <-time.After(20 * time.Millisecond):
 	}
 }

@@ -1,0 +1,35 @@
+{
+  "about": "Per phone socket: a frame over 16 KiB closes 1009; more than 60 frames at once (20 per second after) closes 4029.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}, {"role": "phone", "key": "phone2"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": true}}},
+    {"send": {"as": "p1", "binary": {"len": 16384}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s1", "len": 16384}}},
+    {"send": {"as": "p1", "binary": {"len": 16385}}},
+    {"expect": {"as": "p1", "close": 1009}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "phone", "key": "@phone1", "up": false, "oneshot": false}}},
+
+    {"connect": {"as": "p2", "room": "main"}},
+    {"expect": {"as": "p2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p2", "auth": {"role": "phone", "key": "phone2"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "phone", "key": "@phone2", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s2"}}},
+    {"expect": {"as": "p2", "frame": {"t": "ok", "sid": "$s2", "peer": true}}},
+    {"repeat": {"times": 60, "steps": [
+      {"send": {"as": "p2", "binary": {"hex": "00"}}},
+      {"expect": {"as": "mac", "binary": {"sid": "$s2", "hex": "00"}}}
+    ]}},
+    {"advance_ms": 50},
+    {"send": {"as": "p2", "binary": {"hex": "01"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s2", "hex": "01"}}},
+    {"send": {"as": "p2", "binary": {"hex": "02"}}},
+    {"expect": {"as": "p2", "close": 4029}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s2", "role": "phone", "key": "@phone2", "up": false, "oneshot": false}}}
+  ]
+}

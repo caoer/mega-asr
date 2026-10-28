@@ -1,0 +1,550 @@
+{
+  "about": "Every refused auth on a provisioned room gets the same frames: a challenge, then close 1008. None of them leaves a trace: the phone's own auth works after them.",
+  "layer": "room",
+  "setup": {
+    "mac": "mac",
+    "room": "main",
+    "key": "mac",
+    "devices": [
+      {
+        "role": "phone",
+        "key": "phone1"
+      },
+      {
+        "role": "watch",
+        "key": "watch1"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "connect": {
+        "as": "old",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "old",
+        "frame": {
+          "t": "challenge",
+          "nonce": {
+            "$capture": "old"
+          }
+        }
+      }
+    },
+    {
+      "close": {
+        "as": "old",
+        "code": 1000
+      }
+    },
+    {
+      "connect": {
+        "as": "a1",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a1",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a1",
+        "auth": {
+          "role": "phone",
+          "key": "stranger"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a1",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a2",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a2",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a2",
+        "auth": {
+          "role": "mac",
+          "key": "phone1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a2",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a3",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a3",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a3",
+        "auth": {
+          "role": "phone",
+          "key": "mac"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a3",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a4",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a4",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a4",
+        "auth": {
+          "role": "watch",
+          "key": "watch1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a4",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a5",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a5",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a5",
+        "auth": {
+          "role": "phone",
+          "key": "watch1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a5",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a6",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a6",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a6",
+        "auth": {
+          "role": "phone",
+          "key": "phone1",
+          "room": "other"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a6",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a7",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a7",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a7",
+        "auth": {
+          "role": "phone",
+          "key": "phone1",
+          "nonce": "$old"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a7",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a8",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a8",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a8",
+        "auth": {
+          "role": "phone",
+          "key": "phone1",
+          "signer": "stranger"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a8",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a9",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a9",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a9",
+        "auth": {
+          "role": "phone",
+          "key": "phone1",
+          "v": 2
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a9",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a10",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a10",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a10",
+        "raw": "{\"t\":\"auth\""
+      }
+    },
+    {
+      "expect": {
+        "as": "a10",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a11",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a11",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a11",
+        "binary": {
+          "hex": "00"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a11",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a12",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a12",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a12",
+        "auth": {
+          "role": "phone",
+          "key": "phone1",
+          "pad": 1025
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a12",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a13",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a13",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "advance_ms": 5001
+    },
+    {
+      "expect": {
+        "as": "a13",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a14",
+        "room": "other"
+      }
+    },
+    {
+      "expect": {
+        "as": "a14",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a14",
+        "auth": {
+          "role": "phone",
+          "key": "phone1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "a14",
+        "close": 1008
+      }
+    },
+    {
+      "connect": {
+        "as": "a15",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "a15",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "a15",
+        "raw": "{\"t\":\"auth\",\"v\":1,\"role\":\"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\",\"key\":\"@phone1\",\"sig\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"}"
+      }
+    },
+    {
+      "expect": {
+        "as": "a15",
+        "close": 1008
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "nothing": true
+      }
+    },
+    {
+      "connect": {
+        "as": "p1",
+        "room": "main"
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "frame": {
+          "t": "challenge",
+          "nonce": "*"
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "p1",
+        "auth": {
+          "role": "phone",
+          "key": "phone1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "mac",
+        "frame": {
+          "t": "peer",
+          "sid": {
+            "$capture": "s1"
+          },
+          "role": "phone",
+          "key": "@phone1",
+          "up": true,
+          "oneshot": false
+        }
+      }
+    },
+    {
+      "send": {
+        "as": "mac",
+        "text": {
+          "t": "peer_ack",
+          "sid": "$s1"
+        }
+      }
+    },
+    {
+      "expect": {
+        "as": "p1",
+        "frame": {
+          "t": "ok",
+          "sid": "$s1",
+          "peer": true
+        }
+      }
+    }
+  ]
+}

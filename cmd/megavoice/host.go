@@ -39,7 +39,7 @@ const hostUsage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <comman
   mic serve                 record [capture] and serve it to paired Macs on
                             mic_server.listen (the service runs this)
   mic pair                  print a single-use PIN for a Mac to pair with:
-                            MegaVoice › Input › Add remote mic…
+                            the Mega Voice menu › Input › Add remote mic…
   mic token NAME            pair the Mac NAME and print its token as one JSON
                             line (a Mac runs this over ssh); re-pairs a NAME
                             already paired
@@ -444,9 +444,9 @@ func printMic(w io.Writer, cmd string, r ctl.Response) error {
 		}
 		fmt.Fprintf(w, "PIN %s — once, until %s (%s)\n", p.Code, p.Expires.Local().Format("15:04:05"), micserver.PINLife)
 		if p.IP != "" {
-			fmt.Fprintf(w, "On the Mac: MegaVoice › Input › Add remote mic… → %s (or %s where that name reaches this box), then the PIN.\n", p.IP, p.Addr)
+			fmt.Fprintf(w, "On the Mac: the Mega Voice menu › Input › Add remote mic… → %s (or %s where that name reaches this box), then the PIN.\n", p.IP, p.Addr)
 		} else {
-			fmt.Fprintf(w, "On the Mac: MegaVoice › Input › Add remote mic… → %s, then the PIN.\n", p.Addr)
+			fmt.Fprintf(w, "On the Mac: the Mega Voice menu › Input › Add remote mic… → %s, then the PIN.\n", p.Addr)
 		}
 	case "status":
 		var st micStatus

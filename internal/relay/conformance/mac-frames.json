@@ -1,0 +1,31 @@
+{
+  "about": "Frames an authenticated Mac may not send close it 1003: an unknown t, text that is not a JSON object, a binary frame shorter than its sid. Its frame bucket allows 200 at once; the 201st closes it 4029.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": []},
+  "steps": [
+    {"send": {"as": "mac", "text": {"t": "hello"}}},
+    {"expect": {"as": "mac", "close": 1003}},
+    {"connect": {"as": "mB", "room": "main"}},
+    {"expect": {"as": "mB", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "mB", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "mB", "frame": {"t": "ok", "peers": []}}},
+    {"send": {"as": "mB", "raw": "{\"t\":\"reset\"}}"}},
+    {"expect": {"as": "mB", "close": 1003}},
+    {"connect": {"as": "mC", "room": "main"}},
+    {"expect": {"as": "mC", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "mC", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "mC", "frame": {"t": "ok", "peers": []}}},
+    {"send": {"as": "mC", "binary": {"hex": "01020304050607"}}},
+    {"expect": {"as": "mC", "close": 1003}},
+    {"connect": {"as": "mD", "room": "main"}},
+    {"expect": {"as": "mD", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "mD", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "mD", "frame": {"t": "ok", "peers": []}}},
+    {"repeat": {"times": 200, "steps": [
+      {"send": {"as": "mD", "text": {"t": "peer_ack", "sid": "AAAAAAAAAAA"}}}
+    ]}},
+    {"expect": {"as": "mD", "nothing": true}},
+    {"send": {"as": "mD", "text": {"t": "peer_ack", "sid": "AAAAAAAAAAA"}}},
+    {"expect": {"as": "mD", "close": 4029}}
+  ]
+}

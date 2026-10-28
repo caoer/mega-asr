@@ -1,0 +1,31 @@
+{
+  "about": "The Mac registers and removes device keys; the room answers with every device sorted by key text; a removed key's sockets close 1008 and it is refused from then on; a malformed devices frame closes the Mac with 1003.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}, {"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [{"role": "phone", "key": "@phone2"}], "remove": []}}},
+    {"expect": {"as": "mac", "frame": {"t": "devices", "keys": [{"role": "phone", "key": "@phone2"}, {"role": "phone", "key": "@phone1"}, {"role": "watch", "key": "@watch1"}]}}},
+    {"connect": {"as": "p2", "room": "main"}},
+    {"expect": {"as": "p2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p2", "auth": {"role": "phone", "key": "phone2"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "phone", "key": "@phone2", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s2"}}},
+    {"expect": {"as": "p2", "frame": {"t": "ok", "sid": "$s2", "peer": true}}},
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [], "remove": ["@phone2", "@watch1"]}}},
+    {"expect": {"as": "p2", "close": 1008}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s2", "role": "phone", "key": "@phone2", "up": false, "oneshot": false}}},
+    {"expect": {"as": "mac", "frame": {"t": "devices", "keys": [{"role": "phone", "key": "@phone1"}]}}},
+    {"connect": {"as": "p2b", "room": "main"}},
+    {"expect": {"as": "p2b", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p2b", "auth": {"role": "phone", "key": "phone2"}}},
+    {"expect": {"as": "p2b", "close": 1008}},
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "w1", "status": 404}},
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [{"role": "phone", "key": "@phone3"}], "remove": []}}},
+    {"expect": {"as": "mac", "frame": {"t": "devices", "keys": [{"role": "phone", "key": "@phone1"}, {"role": "phone", "key": "@phone3"}]}}},
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [{"role": "phone", "key": "@phone1"}, {"role": "watch", "key": "@phone1"}], "remove": []}}},
+    {"expect": {"as": "mac", "frame": {"t": "devices", "keys": [{"role": "watch", "key": "@phone1"}, {"role": "phone", "key": "@phone3"}]}}},
+    {"send": {"as": "mac", "text": {"t": "devices", "add": [{"role": "mac", "key": "@phone4"}], "remove": []}}},
+    {"expect": {"as": "mac", "close": 1003}}
+  ]
+}

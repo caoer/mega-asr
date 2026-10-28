@@ -33,14 +33,12 @@ const (
 
 // When a readback reads. A pane is read twice after the last key it got,
 // the paste or the Enter that sent it, and the deadline leaves room for a
-// read that is slow on a busy host. An app's focused value is read once,
-// while the settle before its Enter runs, since a chat field empties on
-// Enter.
+// read that is slow on a busy host. App delivery confirms the captured
+// composer within fieldDeadline and retains that value before Enter.
 const (
 	paneFirst     = 300 * time.Millisecond
 	paneSecond    = 1500 * time.Millisecond
 	paneDeadline  = 4 * time.Second
-	fieldAfter    = 100 * time.Millisecond
 	fieldDeadline = 1500 * time.Millisecond
 )
 

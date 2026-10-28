@@ -4,20 +4,25 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/caoer/mega-asr/internal/audio"
 )
 
 // FunASR runs Fun-ASR-Nano with FSMN-VAD from a mega-asr checkout, one
 // process per clip: the GGUF weights are mmapped, so the page cache keeps
 // them warm between clips.
 type FunASR struct {
-	Root string // mega-asr checkout holding bin/ and models/
+	timeout time.Duration // tests shorten the audio-length deadline
+	Root    string        // mega-asr checkout holding bin/ and models/
 	// Hotwords returns the terms for this clip (read per clip, so edits take
 	// effect at once); nil means none. They go into the prompt for Chinese
 	// segments only (--hotwords-cjk): on English speech the Chinese hotword
@@ -50,10 +55,12 @@ func (f FunASR) command(ctx context.Context, wav string, whole bool) *exec.Cmd {
 	if !whole {
 		args = append(args, "--vad", p("models/fsmn-vad.gguf"))
 	}
+	var list []string
 	if f.Hotwords != nil {
-		if hw := f.Hotwords(); len(hw) > 0 {
-			args = append(args, "--hotwords", strings.Join(hw, ", "), "--hotwords-cjk")
-		}
+		list = f.Hotwords()
+	}
+	if hw := withExtra(ctx, list); len(hw) > 0 {
+		args = append(args, "--hotwords", strings.Join(hw, ", "), "--hotwords-cjk")
 	}
 	if f.EncGPU {
 		args = append(args, "--enc-gpu")
@@ -74,12 +81,25 @@ func (f FunASR) command(ctx context.Context, wav string, whole bool) *exec.Cmd {
 }
 
 func (f FunASR) Transcribe(ctx context.Context, wav string, whole bool) (string, error) {
+	limit := replyBase
+	if st, err := os.Stat(wav); err == nil {
+		limit += time.Duration(max(st.Size()-44, 0)) * time.Second / audio.Rate
+	}
+	if f.timeout > 0 {
+		limit = f.timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
+	defer cancel()
 	cmd := f.command(ctx, wav, whole)
+	cmd.WaitDelay = time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("llama-funasr-cli: %v: %s", err, lastLine(stderr.String()))
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return "", fmt.Errorf("llama-funasr-cli: %w: %s", err, lastLine(stderr.String()))
 	}
 	return Clean(string(out)), nil
 }

@@ -1,0 +1,33 @@
+{
+  "about": "The Mac's reset empties the room: the Mac socket closes 1000 first and hears nothing more, phone sockets close 1008, pending requests fail 503; the old keys are refused and any Mac with a valid proof can provision again.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "phone", "key": "phone1"}, {"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"connect": {"as": "p1", "room": "main"}},
+    {"expect": {"as": "p1", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "phone", "key": "@phone1", "up": true, "oneshot": false}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "p1", "frame": {"t": "ok", "sid": "$s1", "peer": true}}},
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1"}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s2"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s2"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s2", "body_of": "w1"}}},
+    {"send": {"as": "mac", "text": {"t": "reset"}}},
+    {"expect": {"as": "mac", "close": 1000}},
+    {"expect": {"as": "p1", "close": 1008}},
+    {"expect": {"as": "w1", "status": 503}},
+    {"connect": {"as": "old", "room": "main"}},
+    {"expect": {"as": "old", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "old", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "old", "close": 1008}},
+    {"connect": {"as": "p1b", "room": "main"}},
+    {"expect": {"as": "p1b", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "p1b", "auth": {"role": "phone", "key": "phone1"}}},
+    {"expect": {"as": "p1b", "close": 1008}},
+    {"connect": {"as": "mac2", "room": "main"}},
+    {"expect": {"as": "mac2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "mac2", "auth": {"role": "mac", "key": "mac2", "provision": "valid"}}},
+    {"expect": {"as": "mac2", "frame": {"t": "ok", "peers": []}}}
+  ]
+}

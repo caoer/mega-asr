@@ -43,10 +43,10 @@ func (s Store) Next(t time.Time) (string, error) {
 // SaveText writes the delivered transcript as <base>.txt and the ASR output
 // before corrections as <base>.raw.txt; both are empty when there was no speech.
 func (s Store) SaveText(base, raw, text string) error {
-	if err := os.WriteFile(base+".raw.txt", []byte(raw+"\n"), 0o644); err != nil {
+	if err := saveTextFile(base+".raw.txt", []byte(raw+"\n")); err != nil {
 		return err
 	}
-	return os.WriteFile(base+".txt", []byte(text+"\n"), 0o644)
+	return saveTextFile(base+".txt", []byte(text+"\n"))
 }
 
 // SaveInput writes the device that captured the take as <base>.input.json.
@@ -72,4 +72,34 @@ func LoadInput(base string) (audio.TakeInput, error) {
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+func saveTextFile(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".transcript-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	if err = f.Chmod(0o644); err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

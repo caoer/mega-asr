@@ -3,6 +3,8 @@ package deliver
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"github.com/caoer/mega-asr/internal/session"
 	"net"
 	"os"
 	"path/filepath"
@@ -65,5 +67,30 @@ func TestSendInputError(t *testing.T) {
 	err := sendInput(sock, "w9:p9", "hi")
 	if err == nil || !strings.Contains(err.Error(), "pane_not_found") {
 		t.Fatalf("err = %v, want pane_not_found", err)
+	}
+}
+
+func TestLostReplyIsAnUnknownDelivery(t *testing.T) {
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "s")
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	applied := make(chan struct{})
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		bufio.NewReader(c).ReadBytes('\n')
+		close(applied)
+	}()
+	err = sendInput(sock, "owned-pane", "invented text")
+	<-applied
+	if !errors.Is(err, session.ErrMaybeSent) {
+		t.Fatalf("lost reply classified as certain failure: %v", err)
 	}
 }

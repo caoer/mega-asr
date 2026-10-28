@@ -57,6 +57,7 @@ type Server struct {
 	logf func(format string, a ...any)
 	now  func() time.Time
 
+	capture sync.Mutex // an input is released before another stream opens it
 	mu      sync.Mutex
 	clients []*client
 	pinw    *pinWindow
@@ -98,7 +99,7 @@ func New(cfg Config) (*Server, error) {
 	if err := os.Chmod(cfg.State, 0o700); err != nil {
 		return nil, err
 	}
-	cert, err := loadCert(cfg.State, cfg.Name)
+	cert, err := LoadCert(cfg.State, "megavoice mic "+cfg.Name)
 	if err != nil {
 		return nil, fmt.Errorf("micserver: %w", err)
 	}
@@ -357,6 +358,11 @@ func (s *Server) touch(c *client) {
 // stream would never end.
 func (s *Server) pump(conn *websocket.Conn) string {
 	ctx := conn.CloseRead(context.Background()) // done once the Mac closes or a revoke does
+	s.capture.Lock()
+	defer s.capture.Unlock()
+	if ctx.Err() != nil {
+		return "closed while waiting for input"
+	}
 	sctx, cancel := context.WithCancel(context.Background())
 	defer cancel() // after the source has closed its stream
 	src := s.cfg.Source()

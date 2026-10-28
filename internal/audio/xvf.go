@@ -24,6 +24,8 @@ type XVF struct {
 	Device  string        // ALSA PCM on the host, e.g. hw:Array,0
 	Channel int           // 1..Channels; 0 records the PCM in mono
 	CtlPath string        // ssh ControlPath of the persistent mux master
+	stall   time.Duration // tests shorten the stdout deadline
+	lease   func()
 	Tail    time.Duration // kept streaming after Stop: the last syllable is in flight
 
 	cmd      *exec.Cmd
@@ -90,6 +92,17 @@ func (x *XVF) Start(ctx context.Context) (<-chan []int16, error) {
 	if x.Channel < 0 || x.Channel > Channels {
 		return nil, fmt.Errorf("xvf: channel %d outside 0..%d", x.Channel, Channels)
 	}
+	lease, err := xvfLease(ctx, x.Host+"\x00"+x.Device)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			lease()
+		}
+	}()
+	x.lease = lease
 	name, args := x.command()
 	x.cmd = exec.CommandContext(ctx, name, args...)
 	// A cancelled context ends the stream the way Stop does, through the
@@ -99,7 +112,6 @@ func (x *XVF) Start(ctx context.Context) (<-chan []int16, error) {
 	x.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	x.cmd.Cancel = func() error { x.end(); return nil }
 	x.cmd.Stderr = &x.stderr
-	var err error
 	if x.stdin, err = x.cmd.StdinPipe(); err != nil {
 		return nil, err
 	}
@@ -111,19 +123,29 @@ func (x *XVF) Start(ctx context.Context) (<-chan []int16, error) {
 	if err := x.cmd.Start(); err != nil {
 		return nil, fmt.Errorf("xvf: %s: %w", name, err)
 	}
+	started = true
 	ch := make(chan []int16, 256)
-	go x.pump(out, ch)
+	var last atomic.Int64
+	began := time.Now()
+	go x.watch(out, began, &last)
+	go x.pumpRead(out, ch, func() { last.Store(max(1, int64(time.Since(began)))) })
 	return ch, nil
 }
 
-func (x *XVF) pump(r io.Reader, ch chan<- []int16) {
+func (x *XVF) pump(r io.Reader, ch chan<- []int16) { x.pumpRead(r, ch, func() {}) }
+
+func (x *XVF) pumpRead(r io.Reader, ch chan<- []int16, arrived func()) {
 	defer close(ch)
+	if x.lease != nil {
+		defer x.lease()
+	}
 	d := Deinterleaver{Channels: x.channels(), Channel: max(x.Channel, 1)}
 	buf := make([]byte, Rate*2*x.channels()/50) // 20 ms of frames
 	var total int
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
+			arrived()
 			total += n
 			if s := d.Push(buf[:n]); len(s) > 0 {
 				ch <- s
@@ -139,8 +161,11 @@ func (x *XVF) pump(r io.Reader, ch chan<- []int16) {
 	x.errMu.Lock()
 	defer x.errMu.Unlock()
 	switch {
+	case x.err != nil:
 	case total == 0 && (msg != "" || werr != nil):
 		x.err = x.unavailable(firstNonEmpty(msg, fmt.Sprint(werr)))
+	case sshFailure(werr):
+		x.err = fmt.Errorf("stream cut: %v %s", werr, msg)
 	case x.stopping.Load():
 	case werr != nil:
 		x.err = fmt.Errorf("stream cut: %v %s", werr, msg)
@@ -196,4 +221,51 @@ func firstNonEmpty(s ...string) string {
 		}
 	}
 	return ""
+}
+
+var xvfInputs sync.Map
+
+func xvfLease(ctx context.Context, key string) (func(), error) {
+	v, _ := xvfInputs.LoadOrStore(key, make(chan struct{}, 1))
+	gate := v.(chan struct{})
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (x *XVF) watch(out io.ReadCloser, began time.Time, last *atomic.Int64) {
+	stall := x.stall
+	if stall <= 0 {
+		stall = RemoteStall
+	}
+	tick := time.NewTicker(stall / 4)
+	defer tick.Stop()
+	for {
+		select {
+		case <-x.done:
+			return
+		case <-tick.C:
+			if time.Since(began)-time.Duration(last.Load()) < stall {
+				continue
+			}
+			if !x.stopping.Load() {
+				x.errMu.Lock()
+				if x.err == nil {
+					x.err = fmt.Errorf("array %s: no audio for %v", x.Device, stall)
+				}
+				x.errMu.Unlock()
+			}
+			x.end()
+			out.Close()
+			return
+		}
+	}
+}
+
+func sshFailure(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 255
 }

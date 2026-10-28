@@ -3,6 +3,7 @@
 package mac
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -16,6 +17,7 @@ var (
 	axUIElementSetAttributeValue   func(el, attr, value uintptr) int32
 	axUIElementPerformAction       func(el, action uintptr) int32
 	axUIElementSetMessagingTimeout func(el uintptr, seconds float32) int32
+	axValueGetValue                func(uintptr, uint32, *axTextRange) bool
 	cfBooleanTrue                  uintptr
 )
 
@@ -25,6 +27,7 @@ func init() {
 	purego.RegisterLibFunc(&axUIElementSetAttributeValue, libAS, "AXUIElementSetAttributeValue")
 	purego.RegisterLibFunc(&axUIElementPerformAction, libAS, "AXUIElementPerformAction")
 	purego.RegisterLibFunc(&axUIElementSetMessagingTimeout, libAS, "AXUIElementSetMessagingTimeout")
+	purego.RegisterLibFunc(&axValueGetValue, libAS, "AXValueGetValue")
 	cfBooleanTrue = symbolValue(libCF, "kCFBooleanTrue")
 }
 
@@ -77,7 +80,10 @@ func AppOf(pid int32) (App, error) {
 	if a.PID == 0 {
 		return a, fmt.Errorf("no running application with pid %d", pid)
 	}
-	WithPool(func() { a.Window, a.Title = focusedWindow(a.PID) })
+	WithPool(func() {
+		a.Window, a.Title = focusedWindow(a.PID)
+		a.Element = focusedElement(a.PID)
+	})
 	return a, nil
 }
 
@@ -224,8 +230,7 @@ func Activate(a App, timeout time.Duration) error {
 	})
 	deadline := time.Now().Add(timeout)
 	for {
-		if a.Focused() {
-			a.refocusElement()
+		if a.refocusElement() {
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -237,26 +242,34 @@ func Activate(a App, timeout time.Duration) error {
 
 // refocusElement puts keyboard focus back on the captured element when focus
 // moved to another element of the same window.
-func (a App) refocusElement() {
-	if a.Element == 0 {
-		return
-	}
-	WithPool(func() {
-		cur := focusedElement(a.PID)
-		if cur != 0 {
-			defer cfRelease(cur)
-			if cfEqual(cur, a.Element) {
-				return
+func (a App) refocusElement() bool {
+	return restoreComposer(a.windowFocused, a.composerFocused, func() {
+		WithPool(func() {
+			if a.Element != 0 && axUIElementSetAttributeValue(a.Element, uintptr(nsString("AXFocused")), cfBooleanTrue) == 0 {
+				time.Sleep(50 * time.Millisecond)
 			}
-		}
-		if axUIElementSetAttributeValue(a.Element, uintptr(nsString("AXFocused")), cfBooleanTrue) == 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
+		})
 	})
 }
 
-// Focused reports whether the app is frontmost with the captured window focused.
-func (a App) Focused() bool {
+func (a App) composerFocused() bool {
+	return composerHeld(a.Element != 0, func() bool {
+		var same bool
+		WithPool(func() {
+			cur := focusedElement(a.PID)
+			if cur != 0 {
+				same = cfEqual(cur, a.Element)
+				cfRelease(cur)
+			}
+		})
+		return same
+	})
+}
+
+// Focused reports whether the original window and composer both hold focus.
+func (a App) Focused() bool { return a.windowFocused() && a.composerFocused() }
+
+func (a App) windowFocused() bool {
 	var front int32
 	DoSync(func() {
 		app := send(send(class("NSWorkspace"), "sharedWorkspace"), "frontmostApplication")
@@ -279,4 +292,72 @@ func (a App) Focused() bool {
 		}
 	})
 	return same
+}
+
+// retain keeps a separate ownership of the captured AX references.
+func (a App) retain() App {
+	WithPool(func() {
+		if a.Window != 0 {
+			cfRetain(a.Window)
+		}
+		if a.Element != 0 {
+			cfRetain(a.Element)
+		}
+	})
+	return a
+}
+
+// Text reads the captured composer, not whatever element currently has focus.
+func (a App) Text(ctx context.Context) (text string, ok bool) {
+	if a.Element == 0 || ctx.Err() != nil {
+		return "", false
+	}
+	WithPool(func() {
+		wait := 250 * time.Millisecond
+		if deadline, yes := ctx.Deadline(); yes {
+			wait = min(wait, time.Until(deadline))
+		}
+		if wait <= 0 {
+			return
+		}
+		axUIElementSetMessagingTimeout(a.Element, float32(wait.Seconds()))
+		v := axCopy(a.Element, "AXValue")
+		if v == 0 {
+			return
+		}
+		defer cfRelease(v)
+		if sendBool(objc.ID(v), "isKindOfClass:", class("NSString")) {
+			text, ok = goString(objc.ID(v)), true
+		}
+	})
+	return
+}
+
+type axTextRange struct{ location, length int64 }
+
+// Selection reads the captured composer's UTF-16 selected range.
+func (a App) Selection(ctx context.Context) (start, length int, ok bool) {
+	if a.Element == 0 || ctx.Err() != nil {
+		return
+	}
+	WithPool(func() {
+		wait := 250 * time.Millisecond
+		if deadline, yes := ctx.Deadline(); yes {
+			wait = min(wait, time.Until(deadline))
+		}
+		if wait <= 0 {
+			return
+		}
+		axUIElementSetMessagingTimeout(a.Element, float32(wait.Seconds()))
+		value := axCopy(a.Element, "AXSelectedTextRange")
+		if value == 0 {
+			return
+		}
+		defer cfRelease(value)
+		var r axTextRange
+		if axValueGetValue(value, 4, &r) && r.location >= 0 && r.length >= 0 {
+			start, length, ok = int(r.location), int(r.length), true
+		}
+	})
+	return
 }

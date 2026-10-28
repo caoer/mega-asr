@@ -1,0 +1,21 @@
+{
+  "about": "A watch request: verified, announced to the Mac, acknowledged, forwarded with its sid; a second peer_ack forwards nothing; the Mac's reply is the 200 body; the Mac hears the one-shot session end; the same body again is a replay, 404, and reaches nobody.",
+  "layer": "room",
+  "setup": {"mac": "mac", "room": "main", "key": "mac", "devices": [{"role": "watch", "key": "watch1"}]},
+  "steps": [
+    {"post": {"as": "w1", "room": "main", "request": {"key": "watch1", "nonce": "n1", "ct_len": 200}}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": {"$capture": "s1"}, "role": "watch", "key": "@watch1", "up": true, "oneshot": true}}},
+    {"expect": {"as": "w1", "nothing": true}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "mac", "binary": {"sid": "$s1", "body_of": "w1"}}},
+    {"send": {"as": "mac", "text": {"t": "peer_ack", "sid": "$s1"}}},
+    {"expect": {"as": "mac", "nothing": true}},
+    {"send": {"as": "mac", "binary": {"sid": "$s1", "hex": "00c0ffee"}}},
+    {"expect": {"as": "w1", "status": 200, "hex": "00c0ffee"}},
+    {"expect": {"as": "mac", "frame": {"t": "peer", "sid": "$s1", "role": "watch", "key": "@watch1", "up": false, "oneshot": true}}},
+    {"send": {"as": "mac", "binary": {"sid": "$s1", "hex": "01"}}},
+    {"post": {"as": "w2", "room": "main", "request": {"key": "watch1", "nonce": "n1", "ct_len": 200}}},
+    {"expect": {"as": "w2", "status": 404}},
+    {"expect": {"as": "mac", "nothing": true}}
+  ]
+}

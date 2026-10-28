@@ -1,0 +1,20 @@
+{
+  "about": "After every socket closes, a reconnecting Mac is idle-closed. The 60 s alarm is armed again; past 90 s of silence the Mac is closed 1000.",
+  "layer": "room",
+  "setup": {
+    "mac": "mac",
+    "room": "main",
+    "key": "mac",
+    "devices": []
+  },
+  "steps": [
+    {"close": {"as": "mac", "code": 1000}},
+    {"advance_ms": 1000},
+    {"connect": {"as": "m2", "room": "main"}},
+    {"expect": {"as": "m2", "frame": {"t": "challenge", "nonce": "*"}}},
+    {"send": {"as": "m2", "auth": {"role": "mac", "key": "mac"}}},
+    {"expect": {"as": "m2", "frame": {"t": "ok", "peers": []}}},
+    {"advance_ms": 200000},
+    {"expect": {"as": "m2", "close": 1000}}
+  ]
+}

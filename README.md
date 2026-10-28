@@ -24,6 +24,8 @@ llama.cpp/GGUF runtime — CPU only, no Python at inference time.
 - `bin/download-funasr-model.sh` — upstream's helper that pulls the GGUF
   weights from Hugging Face.
 - `docs/README-upstream.md` — upstream runtime documentation.
+- Evaluated and not adopted: NetEase Youdao's R2T2 streaming ASR —
+  [docs/r2t2-eval.md](docs/r2t2-eval.md).
 
 ## The engine root
 
@@ -297,7 +299,19 @@ drives AppKit/CoreGraphics).
   (`mishearing<TAB>intended`, applied after ASR; a lower-case mishearing
   matches any case, Latin edges match whole words, `zh:` limits a rule to
   Chinese context — the file's header has the rules). Both are seeded on first
-  start, read at every recording, and yours to edit.
+  start, read at every recording, and yours to edit. Files another tool
+  writes go beside them, in `hotwords.d/*.txt` and `corrections.d/*.tsv`:
+  each is read after your file, as one list (a repeated term counted once;
+  FunASR takes the first 50) and one table. Doubao's streaming pass reads the
+  terms up to 100 characters (one more between each pair) and ignores the
+  rest; with `two_pass` the whole list goes and the terms past those 100 still
+  steer the final text, so the first terms are the ones that also shape the
+  live partials. A term that fixes one word but, as a standing hot word,
+  shifts the decode of unrelated speech goes in `rechecks.tsv` (and
+  `rechecks.d/*.tsv`) instead, as `trigger<TAB>term[, term]`: FunASR decodes
+  a chunk whose text holds the trigger (any case) a second time with the
+  terms added and keeps that text; every other chunk is decoded once, as
+  without the file.
 - **Filler cleanup:** after corrections, `internal/post/filler.go` drops
   嗯/呃/um/uh, stutter repeats and VAD-break full stops; it only deletes (or
   turns 。 into ，) and delivers the raw text if that ever fails. Gold set,
@@ -400,7 +414,7 @@ megavoice --set asr.funasr.mode=exec transcribe take.wav   # one-run override
 | `asr.doubao.key_var` | `""` | the `KEY=value` line in `key_file` that holds it; `""` when the file is the key alone |
 | `asr.doubao.two_pass` | `true` | `enable_nonstream`: once a sentence ends, the server decodes it again with its non-streaming model and that text replaces the streamed one |
 | `asr.doubao.ddc` | `false` | `enable_ddc`: the server drops fillers and repeats |
-| `asr.doubao.hotwords` | `true` | `hotwords.txt` sent with each take (`request.corpus.context`) |
+| `asr.doubao.hotwords` | `true` | `hotwords.txt` sent with each take (`request.corpus.context`); without `two_pass`, only the terms within the streaming pass's 100 characters |
 | `post.join_words` | `[]` | words that end a clause, not a sentence: a full stop the VAD put right after one, before more Chinese text, becomes a comma. They add to the built-in list (就是 然后 因为 但是 而且 或者 所以); megameet's transcript chain reads the same key |
 | `deliver.herdr_apps` | `["com.github.wez.wezterm"]` | bundle ids of the terminals herdr runs in |
 | `store.data` | `"~/.local/share/megavoice/utterances"` | every take's WAV and texts |

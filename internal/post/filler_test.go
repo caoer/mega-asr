@@ -144,3 +144,14 @@ func TestFillerJoinWords(t *testing.T) {
 		t.Errorf("join word 这样一来: %q, want %q", got, want)
 	}
 }
+
+func TestFillerPreservesCommandPunctuation(t *testing.T) {
+	for _, text := range []string{"git add .", "cd ..", "echo hello !"} {
+		if got := joinPass(text); got != text {
+			t.Fatalf("%q => %q", text, got)
+		}
+	}
+	if got := joinPass("完成 ."); got != "完成." {
+		t.Fatal(got)
+	}
+}

@@ -104,7 +104,7 @@ func TestGuard(t *testing.T) {
 	}
 	for _, p := range paths {
 		for name, edit := range refusals {
-			if w := request(h, p.method, p.path, edit); w.Code != http.StatusForbidden || w.Body.String() != Denied {
+			if w := request(h, p.method, p.path, edit); w.Code != http.StatusForbidden || w.Body.String() != Denied() {
 				t.Errorf("%s %s, %s: %d %q, want 403", p.method, p.path, name, w.Code, w.Body)
 			}
 		}
@@ -131,7 +131,7 @@ func TestGuard(t *testing.T) {
 func TestPagesWithoutKey(t *testing.T) {
 	h := listener(t, t.TempDir())
 	nokey := func(r *http.Request) { r.Header.Del(Header); r.Header.Set("Sec-Fetch-Site", "none") }
-	for p, want := range map[string]int{"/": http.StatusFound, "/takes/": http.StatusOK} {
+	for p, want := range map[string]int{"/": http.StatusFound, "/takes/": http.StatusOK, "/takes/pair.html": http.StatusOK, "/takes/pair.js": http.StatusOK, "/takes/pair.css": http.StatusOK} {
 		if w := request(h, "GET", p, nokey); w.Code != want {
 			t.Errorf("GET %s without the key: %d, want %d", p, w.Code, want)
 		}
