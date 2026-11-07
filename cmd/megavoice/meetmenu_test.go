@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,19 @@ import (
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/audio"
 )
+
+// rowAct is the action of the enabled row titled title, at any depth.
+func rowAct(rs []row, title string) *act {
+	for _, r := range rs {
+		if r.title == title && r.enabled {
+			return r.act
+		}
+		if a := rowAct(r.sub, title); a != nil {
+			return a
+		}
+	}
+	return nil
+}
 
 func titles(rs []row) string {
 	var b strings.Builder
@@ -143,8 +157,14 @@ func TestStagingMenu(t *testing.T) {
 		}
 	}
 	if strings.Contains(dev, "检查更新") {
-		t.Errorf("dev menu offers 检查更新:\n%s", dev)
+		t.Errorf("dev menu with no update.command offers 检查更新:\n%s", dev)
 	}
+	v.Update = []string{"/bin/megavoice-update"}
+	dv := meetState{Down: "no answer on /s/ctl.sock", Voice: v}
+	if a := rowAct(dv.rows(), "检查更新…"); a == nil || !slices.Equal(a.argv, v.Update) {
+		t.Errorf("dev menu with update.command: 检查更新 runs %+v, want %q", a, v.Update)
+	}
+	v.Update = nil
 	v.Staging = true
 	staging := titles(meetState{Down: "no answer on /s/ctl.sock", Voice: v}.rows())
 	for _, s := range append(devOnly, "Meeting", "megameet") {

@@ -38,6 +38,7 @@ type Config struct {
 	Postprocess PostConfig    `toml:"post"`
 	Deliver     DeliverConfig `toml:"deliver"`
 	Keypad      KeypadConfig  `toml:"keypad"`
+	Update      UpdateConfig  `toml:"update"`
 	Store       StoreConfig   `toml:"store"`
 	Compare     CompareConfig `toml:"compare"`
 	Meeting     MeetingConfig `toml:"meeting"`
@@ -108,7 +109,7 @@ func relayKey(path string) ([]byte, error) {
 }
 
 // VoiceTables are megavoice's own tables, the ones its `config show` prints.
-var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "names", "deliver", "keypad", "store", "compare", "remote"}
+var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "names", "deliver", "keypad", "update", "store", "compare", "remote"}
 
 type TapConfig struct {
 	Key    string   `toml:"key"`    // the modifier whose lone tap starts and stops a take
@@ -270,6 +271,15 @@ type KeypadConfig struct {
 	Send   []string `toml:"send"`
 }
 
+// UpdateConfig is how a build with no release channel updates itself: its
+// installer's command, run by the menu's 检查更新… with no arguments. It
+// checks for a newer build, installs it and says what it found; it outlives
+// the restart an install brings. Unset, the menu offers no 检查更新. A
+// staging build updates from its release feed and ignores it.
+type UpdateConfig struct {
+	Command []string `toml:"command"`
+}
+
 type StoreConfig struct {
 	Data   string `toml:"data"`   // where takes and their texts are kept
 	Labels string `toml:"labels"` // the labels saved from the Takes page, one JSON row each
@@ -407,6 +417,7 @@ func Default() Config {
 			KeyFile: filepath.Join(ConfigDir(), "typesafe.key"), Threshold: 0.5, Timeout: MS(1500)},
 		Deliver: DeliverConfig{HerdrApps: []string{"com.github.wez.wezterm"}},
 		Keypad:  KeypadConfig{Sender: "user", State: filepath.Join(stateHome(), "megavoice", "keypad.json"), Send: []string{}},
+		Update:  UpdateConfig{Command: []string{}},
 		Store:   StoreConfig{Data: DataDir(), Labels: filepath.Join(dataHome(), "megavoice", "labels.jsonl")},
 		Compare: CompareConfig{Engines: []string{"funasr", "doubao"}, Addr: "127.0.0.1:7865"},
 		Meeting: MeetingConfig{

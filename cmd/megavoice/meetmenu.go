@@ -380,6 +380,7 @@ type voiceState struct {
 	Take          voiceTake         // the dictation take recording now
 	Release       string            // a staging build's update or model-download line
 	Staging       bool              // the build friends install: the menu offers 检查更新 and leaves out compare, hotwords, corrections and checks
+	Update        []string          // update.command: a dev build's 检查更新, its installer's command; empty offers none
 }
 
 // voiceTake is the dictation take recording now, if one does.
@@ -589,11 +590,23 @@ func (v voiceState) rows() []row {
 	if v.Note != "" {
 		rs = append(rs, row{title: "⚠︎ " + v.Note, indent: 1, color: "orange"})
 	}
-	if v.Staging {
-		rs = append(rs, row{sep: true}, row{title: l10n.T("检查更新…", "Check for Updates…"), enabled: true, act: &act{kind: actExec, argv: []string{"megavoice", "update"}}})
+	if update := v.updateArgv(); update != nil {
+		rs = append(rs, row{sep: true}, row{title: l10n.T("检查更新…", "Check for Updates…"), enabled: true, act: &act{kind: actExec, argv: update}})
 	}
 	rs = append(rs, row{sep: true}, row{title: l10n.F("Quit %s", "退出 %s", app.Name()), key: "q", enabled: true, act: &act{kind: actExit, arg: "quit"}})
 	return rs
+}
+
+// updateArgv is what 检查更新… runs: a staging build checks its release feed,
+// a dev build runs the update.command its installer set; nil offers no row.
+func (v voiceState) updateArgv() []string {
+	if v.Staging {
+		return []string{"megavoice", "update"}
+	}
+	if len(v.Update) > 0 {
+		return v.Update
+	}
+	return nil
 }
 
 // takesRow opens the Takes page and names the takes undelivered and not

@@ -94,6 +94,9 @@
 # send = []                  # an argv replacing the ssh command: {chat} {topic} {text}, the text also on stdin; exit 0 is sent.
 #                            # {text} only as a whole argv element of a program taking it as data; ssh or sh -c: read the text from stdin
 
+[update]                     # a build with no release channel (not the friends' build, which updates from its feed)
+# command = []               # the installer's argv the menu's 检查更新… runs: it checks, installs a newer build, says what it found; unset: no 检查更新
+
 [store]
 # data = "~/.local/share/megavoice/utterances"   # every take's WAV and texts; default $XDG_DATA_HOME/megavoice/utterances
 # labels = "~/.local/share/megavoice/labels.jsonl"   # labels saved from the Takes page, one asrbench row each

@@ -66,6 +66,7 @@ func meetMenuOf(o app.LoadOpts, running app.Config, take func() voiceTake, count
 	}
 	m.st.Voice.Running, m.st.Voice.Store = voiceOf(running), running.Store.Data
 	m.st.Voice.Staging = app.Channel != ""
+	m.st.Voice.Update = running.Update.Command
 	return m
 }
 
