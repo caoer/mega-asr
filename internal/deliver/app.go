@@ -221,7 +221,7 @@ func (d Deliverer) Received(st session.Target, text string) (verdict, why string
 	case t.receipt != nil:
 		value, ok := t.receipt.Value()
 		if !ok {
-			return Unknown, "original composer did not confirm the paste"
+			return Unknown, "the field's value did not show the paste"
 		}
 		return field(text, value)
 	}

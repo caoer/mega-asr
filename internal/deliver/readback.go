@@ -33,13 +33,15 @@ const (
 
 // When a readback reads. A pane is read twice after the last key it got,
 // the paste or the Enter that sent it, and the deadline leaves room for a
-// read that is slow on a busy host. App delivery confirms the captured
-// composer within fieldDeadline and retains that value before Enter.
+// read that is slow on a busy host. App delivery waits up to fieldDeadline
+// for the captured composer to show the paste and keeps that value; a field
+// that never shows it (a terminal's scrollback, a rich editor) still gets its
+// Enter after the wait.
 const (
 	paneFirst     = 300 * time.Millisecond
 	paneSecond    = 1500 * time.Millisecond
 	paneDeadline  = 4 * time.Second
-	fieldDeadline = 1500 * time.Millisecond
+	fieldDeadline = 600 * time.Millisecond
 )
 
 // Claude Code folds a long paste into a chip; "+N lines" counts the newlines

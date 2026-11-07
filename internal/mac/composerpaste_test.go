@@ -93,7 +93,7 @@ func TestPasteFocusChangesAfterFinalCheckBeforeEvent(t *testing.T) {
 	f.postHook = func() { f.move(2) }
 	b := &clipboardBoard{limit: 80 * time.Millisecond}
 	p, err := pasteComposer(b, f.ops(), "text", 20*time.Millisecond)
-	if !errors.Is(err, ErrPasteUnconfirmed) {
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Submit(); !errors.Is(err, ErrPasteUnconfirmed) {
@@ -166,7 +166,7 @@ func TestUnreadableComposerWaitsForDelayedPasteBeforeEnter(t *testing.T) {
 	elapsed := time.Since(start)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if elapsed < unreadableReturnDelay || f.fields[1] != "draft text[ENTER]" || f.enters != 1 {
+	if elapsed < returnDelay || f.fields[1] != "draft text[ENTER]" || f.enters != 1 {
 		t.Fatalf("Return after %v, fields=%v enters=%d", elapsed, f.fields, f.enters)
 	}
 	t.Logf("unreadable 200 ms consumer received Return after %v", elapsed)
@@ -211,22 +211,27 @@ func TestPasteConfirmsSelectionReplacement(t *testing.T) {
 	}
 }
 
-func TestPasteSelectionContextRejectsUnchangedOrWrongReplacement(t *testing.T) {
-	for _, after := range []string{"old text", "old texttext"} {
+// A terminal's value is its scrollback, where the paste shows wrapped, echoed
+// late or folded into a chip; a rich editor rewrites it. Neither matches the
+// text, and both still get their Return while the window holds focus.
+func TestReadableComposerThatNeverShowsPasteStillSends(t *testing.T) {
+	for _, after := range []string{"$ ssh host\r\n[Pasted #1 +3 lines]", "draft te\nxt"} {
 		f := newComposerFake()
-		f.fields[1] = "old text"
 		ops := f.ops()
-		ops.selection = func(context.Context) (int, int, bool) { return 0, 8, true }
-		ops.post = func() error { f.mu.Lock(); defer f.mu.Unlock(); f.fields[1] = after; return nil }
+		ops.post = func() error { f.mu.Lock(); defer f.mu.Unlock(); f.posts++; f.fields[1] = after; return nil }
 		b := &clipboardBoard{}
 		p, err := pasteComposer(b, ops, "text", 20*time.Millisecond)
-		if !errors.Is(err, ErrPasteUnconfirmed) {
-			t.Fatalf("after=%q err=%v", after, err)
+		if err != nil {
+			t.Fatalf("after=%q paste=%v", after, err)
 		}
-		if err := p.Submit(); !errors.Is(err, ErrPasteUnconfirmed) || f.enters != 0 {
-			t.Fatalf("after=%q submit=%v enters=%d", after, err, f.enters)
+		if err := p.Submit(); err != nil || f.enters != 1 || f.fields[1] != after+"[ENTER]" {
+			t.Fatalf("after=%q submit=%v enters=%d field=%q", after, err, f.enters, f.fields[1])
+		}
+		if _, ok := p.Value(); ok {
+			t.Fatalf("after=%q claimed confirmation", after)
 		}
 		b.clear(p)
+		p.Release()
 	}
 }
 
@@ -234,10 +239,11 @@ func TestPasteTimeoutRetainsClipboardUntilLateConsumption(t *testing.T) {
 	f := newComposerFake()
 	f.delay = 150 * time.Millisecond
 	b := &clipboardBoard{limit: time.Second}
-	_, err := pasteComposer(b, f.ops(), "first", 20*time.Millisecond)
-	if !errors.Is(err, ErrPasteUnconfirmed) {
+	p, err := pasteComposer(b, f.ops(), "first", 20*time.Millisecond)
+	if err != nil {
 		t.Fatal(err)
 	}
+	p.Release() // the delivery's owner is done; the reservation still holds it
 	start := time.Now()
 	if err := b.copy(nil, func() error { f.mu.Lock(); f.clipboard = "second"; f.mu.Unlock(); return nil }); err != nil {
 		t.Fatal(err)
@@ -254,22 +260,18 @@ func TestPasteDoesNotUsePreexistingTextAsAcknowledgement(t *testing.T) {
 	f := newComposerFake()
 	f.fields[1] = "draft text"
 	f.postHook = func() { f.move(2) }
-	_, err := pasteComposer(&clipboardBoard{}, f.ops(), "text", 20*time.Millisecond)
-	if !errors.Is(err, ErrPasteUnconfirmed) || f.enters != 0 {
-		t.Fatalf("err=%v enters=%d", err, f.enters)
-	}
-}
-
-func TestPasteReceiptRechecksOriginalTextBeforeEnter(t *testing.T) {
-	f := newComposerFake()
-	p, err := pasteComposer(&clipboardBoard{}, f.ops(), "text", time.Second)
+	b := &clipboardBoard{}
+	p, err := pasteComposer(b, f.ops(), "text", 20*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer b.clear(p)
 	defer p.Release()
-	f.fields[1] = "a different draft"
+	if _, ok := p.Value(); ok {
+		t.Fatal("preexisting text confirmed the paste")
+	}
 	if err := p.Submit(); !errors.Is(err, ErrPasteUnconfirmed) || f.enters != 0 {
-		t.Fatalf("err=%v enters=%d", err, f.enters)
+		t.Fatalf("submit=%v enters=%d", err, f.enters)
 	}
 }
 

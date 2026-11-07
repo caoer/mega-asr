@@ -10,11 +10,12 @@ import (
 )
 
 var (
-	ErrPasteUnconfirmed = errors.New("original composer did not confirm the paste")
+	ErrPasteUnconfirmed = errors.New("the original window lost focus")
 	ErrClipboardPending = errors.New("previous paste is unconfirmed; its text remains on the clipboard")
 )
 
-// composerOps is the whole app delivery seam. Read always reads the captured
+// composerOps is the whole app delivery seam. Focused reports that the
+// original app and window hold focus. Read always reads the captured
 // composer, regardless of the focused element. Prepare finishes all clipboard
 // and keyboard-layout work before Activate/Focused/Post.
 type composerOps struct {
@@ -92,29 +93,21 @@ func (p *PasteReceipt) Value() (string, bool) {
 	return p.value, p.confirmed
 }
 
-// Submit uses content confirmation when available. An unreadable composer
-// keeps the paste-and-Enter path, with a fresh original-element focus check
-// and no activation that could conceal a focus move after the paste.
+// Submit presses Return after a posted paste while the original window still
+// holds focus, at least returnDelay after the paste. Content confirmation is
+// not required: a terminal's value is its whole scrollback and rich editors
+// rewrite what they receive, so a readback that cannot match is no evidence
+// the paste failed. Submit activates nothing, so a focus move after the
+// paste stops the Return.
 func (p *PasteReceipt) Submit() error {
 	p.mu.Lock()
-	confirmed, readable, posted, postedAt := p.confirmed, p.readable, p.posted, p.postedAt
+	posted, postedAt := p.posted, p.postedAt
 	p.mu.Unlock()
-	if !posted || readable && !confirmed {
+	if !posted {
 		return ErrPasteUnconfirmed
 	}
-	if readable {
-		if err := p.ops.activate(); err != nil {
-			return err
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		defer cancel()
-		if !p.acknowledge(ctx) {
-			return ErrPasteUnconfirmed
-		}
-	} else {
-		if remaining := time.Until(postedAt.Add(unreadableReturnDelay)); remaining > 0 {
-			time.Sleep(remaining)
-		}
+	if remaining := time.Until(postedAt.Add(returnDelay)); remaining > 0 {
+		time.Sleep(remaining)
 	}
 	if !p.ops.focused() {
 		return ErrPasteUnconfirmed
@@ -124,9 +117,9 @@ func (p *PasteReceipt) Submit() error {
 
 const clipboardReservation = 2 * time.Second
 
-// Unreadable composers get at least the app delivery's 100 ms paste wait
+// An unconfirmed paste gets at least the app delivery's 100 ms paste wait
 // plus its 150 ms send settle before Return.
-const unreadableReturnDelay = 250 * time.Millisecond
+const returnDelay = 250 * time.Millisecond
 
 type clipboardBoard struct {
 	mu      sync.Mutex
@@ -197,9 +190,10 @@ func (b *clipboardBoard) clearLocked(p *PasteReceipt) {
 }
 func (b *clipboardBoard) clear(p *PasteReceipt) { b.mu.Lock(); defer b.mu.Unlock(); b.clearLocked(p) }
 
-// pasteComposer holds the delivery turn until the original composer confirms
-// insertion or the readback bound expires. Unreadable fields use focus checks
-// and the bounded clipboard reservation without claiming a consumption ACK.
+// pasteComposer posts ⌘V while the original window holds focus, then holds
+// the delivery turn until the captured composer confirms insertion or the
+// wait expires. An expired wait is not a failure: the paste was posted, and
+// the bounded clipboard reservation covers a slow consumer.
 func pasteComposer(b *clipboardBoard, ops composerOps, text string, wait time.Duration) (p *PasteReceipt, err error) {
 	p = &PasteReceipt{ops: ops, text: text}
 	defer func() {
@@ -222,14 +216,14 @@ func pasteComposer(b *clipboardBoard, ops composerOps, text string, wait time.Du
 	if err = ops.activate(); err != nil {
 		return p, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), wait)
-	defer cancel()
-	before, readable := ops.read(ctx)
+	readCtx, readCancel := context.WithTimeout(context.Background(), wait)
+	defer readCancel()
+	before, readable := ops.read(readCtx)
 	p.mu.Lock()
 	p.before, p.readable = before, readable
 	p.mu.Unlock()
 	if readable && ops.selection != nil {
-		start, length, ok := ops.selection(ctx)
+		start, length, ok := ops.selection(readCtx)
 		if ok {
 			expected, known := selectedReplacement(before, text, start, length)
 			p.mu.Lock()
@@ -257,6 +251,8 @@ func pasteComposer(b *clipboardBoard, ops composerOps, text string, wait time.Du
 	if !readable {
 		return p, nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
 	for {
 		if p.acknowledge(ctx) {
 			b.clear(p)
@@ -264,7 +260,7 @@ func pasteComposer(b *clipboardBoard, ops composerOps, text string, wait time.Du
 		}
 		select {
 		case <-ctx.Done():
-			return p, ErrPasteUnconfirmed
+			return p, nil
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

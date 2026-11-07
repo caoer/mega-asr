@@ -200,9 +200,11 @@ func FocusedText(pid int32) (text string, ok bool) {
 
 // Activate brings a captured app forward and its captured window to focus,
 // waits up to timeout for both to hold, then gives the captured element focus
-// again if it lost it inside the window. macOS 14+ may refuse a background
-// app's activation request, so the AX raise and frontmost attributes back it
-// up.
+// again if it lost it inside the window. The element is restored best-effort:
+// Electron, web views and WeChat hand out a new AX element for the same
+// composer, so its identity cannot gate the paste. macOS 14+ may refuse a
+// background app's activation request, so the AX raise and frontmost
+// attributes back it up.
 func Activate(a App, timeout time.Duration) error {
 	var gone bool
 	DoSync(func() {
@@ -230,7 +232,8 @@ func Activate(a App, timeout time.Duration) error {
 	})
 	deadline := time.Now().Add(timeout)
 	for {
-		if a.refocusElement() {
+		if a.windowFocused() {
+			a.refocusElement()
 			return nil
 		}
 		if time.Now().After(deadline) {
@@ -266,8 +269,8 @@ func (a App) composerFocused() bool {
 	})
 }
 
-// Focused reports whether the original window and composer both hold focus.
-func (a App) Focused() bool { return a.windowFocused() && a.composerFocused() }
+// Focused reports whether the original app and window hold focus.
+func (a App) Focused() bool { return a.windowFocused() }
 
 func (a App) windowFocused() bool {
 	var front int32

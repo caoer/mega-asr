@@ -149,9 +149,9 @@ func postKeyFocused(code uint16, flags uint64, focused func() bool) error {
 
 var appPasteboard = clipboardBoard{onMain: onMain}
 
-// PasteInto prepares the clipboard first, then restores the captured composer
-// and posts immediately after the final focus check. Readback confirms the
-// original composer before the delivery turn or Enter can proceed.
+// PasteInto prepares the clipboard first, then restores the captured window
+// and composer and posts immediately after the final focus check. A readable
+// composer's readback is waited for up to wait and recorded; it gates nothing.
 func PasteInto(a App, text string, focusWait, wait time.Duration) (*PasteReceipt, error) {
 	owned := a.retain()
 	var key uint16
