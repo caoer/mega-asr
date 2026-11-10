@@ -1,7 +1,8 @@
 #!/bin/sh
 # A stand-in for `llama-funasr-cli --serve` (runtime/funasr-cli-serve.patch)
 # for resident_test.go: the same stdin/stdout/stderr protocol, a reply that
-# echoes the request. Each start appends a line to $FAKE_DIR/starts.
+# echoes the request; a hot word "loopy" makes its hot-word pass end at the
+# loop guard. Each start appends a line to $FAKE_DIR/starts.
 # FAKE_MODE: ok (default) | noready | die-once | hang-once — a *-once mode
 # misbehaves on the first request it ever sees ($FAKE_DIR/tripped marks it).
 echo start >> "$FAKE_DIR/starts"
@@ -32,6 +33,7 @@ while IFS= read -r line; do
 		continue
 	fi
 	echo "[hotwords] 1 of 1 terms, prefix 9 tokens, Chinese segments only" >&2
+	case $hw in *loopy*) echo "[hotwords] pass ended at the loop guard" >&2 ;; esac
 	echo "[stage] vad 0.01s enc 0.01s llm 0.01s audio 1.0s" >&2
 	echo "  $(basename "$wav") /sil hw=[$hw] opt=$opt; args=[$*]"
 	echo "[done] 0.03s $wav" >&2

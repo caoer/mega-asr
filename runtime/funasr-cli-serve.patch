@@ -153,7 +153,7 @@ index 26f60d5..3f848d7 100644
      int vad_maxseg=30000;
      for(int i=1;i<argc;i++){
          if(!strcmp(argv[i],"--enc")&&i+1<argc)enc_path=argv[++i];
-@@ -178,75 +228,234 @@ int main(int argc,char**argv){
+@@ -178,75 +228,238 @@ int main(int argc,char**argv){
          else if(!strcmp(argv[i],"--vad")&&i+1<argc)vad_path=argv[++i];
          else if(!strcmp(argv[i],"--vad-maxseg")&&i+1<argc)vad_maxseg=atoi(argv[++i]);
          else if(!strcmp(argv[i],"--rep")&&i+1<argc)rep=atof(argv[++i]);
@@ -373,6 +373,10 @@ index 26f60d5..3f848d7 100644
 +                    tk=llama_sampler_sample(smpl,ctx,-1);
 +                }
 +                std::string out; for(auto&x:pieces) out+=x;
++                // a hotword pass after the plain one must end at EOG: one cut
++                // by the loop guard or the cap has lost the rest of the window
++                if(hotwords_cjk&&&pre==&pre_hw&&(pieces.size()<toks.size()||(int)toks.size()>=cap)){
++                    fprintf(stderr,"[hotwords] pass ended at the %s\n",pieces.size()<toks.size()?"loop guard":"cap"); return std::string();}
 +                return out;};
 +            std::string text;
 +            if(pre_hw.empty()) text=decode(pre_plain);

@@ -3,6 +3,7 @@ package asr
 import (
 	"bufio"
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -60,7 +61,8 @@ func ReadRechecks(paths ...string) []Recheck {
 // Rechecking decodes each clip with Transcriber and, when the text holds a
 // Recheck's trigger, decodes it again with that Recheck's terms added to the
 // hot words. A clip without a trigger gets the first decode unchanged; a
-// failed second decode keeps the first.
+// failed second decode keeps the first, and so does one whose hot-word pass
+// did not end at EOG (ErrRecheckCut).
 type Rechecking struct {
 	Transcriber
 	Rechecks func() []Recheck // read per clip; nil means none
@@ -97,6 +99,22 @@ func (f TranscribeFunc) Transcribe(ctx context.Context, wav string, whole bool) 
 }
 
 type extraKey struct{}
+
+// ErrRecheckCut is a recheck decode the CLI answered with its plain pass
+// because the hot-word pass did not end at EOG: the loop guard or the token
+// cap cut it (cutMark on stderr). The recheck is not kept; the first decode
+// stands.
+var ErrRecheckCut = errors.New("asr: recheck: the hot-word pass did not end at EOG")
+
+// cutMark is the CLI's stderr line for a hot-word pass dropped at the loop
+// guard or the cap (runtime/funasr-cli-serve.patch).
+const cutMark = "[hotwords] pass ended at"
+
+// recheck reports a decode a Recheck asked for.
+func recheck(ctx context.Context) bool {
+	extra, _ := ctx.Value(extraKey{}).([]string)
+	return len(extra) > 0
+}
 
 // withExtra is the clip's hot words: list, then the terms a Recheck added
 // through ctx that list lacks, at the end; list gives way at its tail so the

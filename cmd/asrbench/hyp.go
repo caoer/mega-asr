@@ -28,7 +28,8 @@ import (
 // (Qwen3 on Metal, encoder and FSMN-VAD on Metal); a clip of 60 s or less is
 // one request for the whole take, trimmed by audio.Trim and decoded as one
 // window (session.Whole decides, as the controller does); a longer one is cut
-// by the live chunker (pause 1.9 s, max 30 s) and the chunk texts joined as
+// by the live chunker (pause 1.9 s, max 30 s), each chunk decoded as one
+// window, and the chunk texts joined as
 // session.Join does; hotwords for Chinese segments only, then corrections and
 // filler cleanup. The flags switch one stage at a time for ablations. latency_ms is
 // the ASR compute of the whole clip in the resident process (all chunks, no
@@ -57,6 +58,7 @@ func hyp(args []string) error {
 	enc := fs.String("enc", "", "encoder GGUF (default models/funasr-encoder-f16.gguf)")
 	work := fs.String("work", "", "scratch for chunk WAVs and converted audio (default OUT.work)")
 	limit := fs.Int("limit", 0, "stop after N clips (0: all)")
+	chunkWhole := fs.Bool("chunk-whole", true, "chunked: each chunk is one window; false: the CLI's VAD segments each chunk (megavoice before 3f4aa64)")
 	trim := fs.Bool("trim", false, "cut leading and trailing silence off each request's audio (energy: 20 ms blocks under the clip's 10th-percentile level + 8 dB, 200 ms kept either side)")
 	if err := fs.Parse(args); err != nil || *manifest == "" || *out == "" {
 		return fmt.Errorf("hyp -manifest M.jsonl -out HYP.jsonl [-raw-out F] [-mode chunked|whole] [-whole-max D] [-pause MS] [-max S] [-hotwords cjk|all|none] [-post=false] [-gpu N] [-enc-gpu=false] [-vad-gpu=false] [-threads N] [-no-vad] [-bin P] [-llm P] [-enc P] [-work DIR] [-limit N] [-trim]")
@@ -179,7 +181,7 @@ func hyp(args []string) error {
 				if err := audio.SaveWAV(cw, part); err != nil {
 					return err
 				}
-				txt, d, err := rp.transcribe(cw, false)
+				txt, d, err := rp.transcribe(cw, *chunkWhole)
 				if err != nil {
 					return fmt.Errorf("%s chunk %d: %w", m.ID, i, err)
 				}

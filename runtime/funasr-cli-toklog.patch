@@ -1,0 +1,85 @@
+diff --git a/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp b/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
+index b639cbf..c607677 100644
+--- a/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
++++ b/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
+@@ -19,6 +19,7 @@
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstring>
++#include <cstdlib>
+ #include <map>
+ #include <string>
+ #include <vector>
+@@ -342,6 +343,32 @@ int main(int argc,char**argv){
+             if(j!=std::string::npos&&j>i+1&&std::all_of(t.begin()+i+1,t.begin()+j,[](char x){return isalpha((unsigned char)x)||x=='_';})){ i=j+1; continue; }
+             return false; }
+         return true; };
++    // FUNASR_TOKLOG=<file> (analysis only; text and decode unchanged): one JSON
++    // line per decode pass with, for every step, the chosen token, its log
++    // probability, P(end of generation), the entropy and the top 5 tokens.
++    // FUNASR_ENCDUMP=<dir>: each window's audio embeddings as raw float32
++    // (n_aud x D) in <dir>/<n>.f32, n counting windows from 0.
++    const char*toklog_path=getenv("FUNASR_TOKLOG"); const char*encdump_dir=getenv("FUNASR_ENCDUMP");
++    const int n_vocab=llama_vocab_n_tokens(vocab); std::vector<llama_token> eog_ids;
++    for(int t=0;t<n_vocab;t++) if(llama_vocab_is_eog(vocab,t)) eog_ids.push_back(t);
++    auto js=[](const std::string&s){ std::string o="\""; for(unsigned char c:s){
++        if(c=='"'||c=='\\'){ o+='\\'; o+=(char)c; } else if(c<0x20){ char b[8]; snprintf(b,sizeof b,"\\u%04x",c); o+=b; } else o+=(char)c; }
++        return o+"\""; };
++    auto piece_of=[&](llama_token t){ char buf[256]; int k=llama_token_to_piece(vocab,t,buf,sizeof(buf),0,true); return std::string(buf,k>0?k:0); };
++    // step: the distribution the token tk was just drawn from, as one JSON object
++    auto step=[&](llama_token tk){
++        const float*lg=llama_get_logits_ith(ctx,-1); float mx=lg[0]; for(int t=1;t<n_vocab;t++) mx=std::max(mx,lg[t]);
++        double z=0; for(int t=0;t<n_vocab;t++) z+=exp((double)lg[t]-mx); double lz=log(z)+mx, h=0, pe=0;
++        int top[5]={-1,-1,-1,-1,-1};
++        for(int t=0;t<n_vocab;t++){ double lp=lg[t]-lz, p=exp(lp); if(p>0) h-=p*lp;
++            int j=5; while(j>0&&(top[j-1]<0||lg[t]>lg[top[j-1]])) j--;
++            if(j<5){ for(int q=4;q>j;q--) top[q]=top[q-1]; top[j]=t; } }
++        for(auto t:eog_ids) pe+=exp(lg[t]-lz);
++        char b[160]; snprintf(b,sizeof b,"{\"t\":%d,\"lp\":%.5f,\"pe\":%.6g,\"h\":%.4f,\"s\":",tk,lg[tk]-lz,pe,h);
++        std::string o=b; o+=js(piece_of(tk)); o+=",\"k\":[";
++        for(int j=0;j<5;j++){ snprintf(b,sizeof b,"%s[%d,%.5f,",j?",":"",top[j],lg[top[j]]-lz); o+=b; o+=js(piece_of(top[j])); o+="]"; }
++        return o+"]}"; };
++    int encdump_n=0;
+     // transcribe one file with the loaded models; ok=false on a read/VAD
+     // failure. whole decodes the file as one window, without the VAD.
+     auto transcribe=[&](const std::string&path,const std::vector<llama_token>&pre_hw,bool whole,bool&ok){
+@@ -374,6 +401,9 @@ int main(int argc,char**argv){
+             int D=0; auto adp=run_encoder(em,fbank,T,560,D);
+             t_enc+=(ggml_time_us()-e0)/1e6; int64_t l0=ggml_time_us();
+             int ol=1+(T-3+2)/2; ol=1+(ol-3+2)/2; int n_aud=(ol-1)/2+1;
++            std::string enc_file;
++            if(encdump_dir){ enc_file=std::string(encdump_dir)+"/"+std::to_string(encdump_n++)+".f32";
++                if(FILE*ef=fopen(enc_file.c_str(),"wb")){ fwrite(adp.data(),sizeof(float),std::min(adp.size(),(size_t)n_aud*D),ef); fclose(ef); } }
+ 
+             // the decode stops at one of three limits: EOG, a cap of 16 + 12
+             // tokens per second of the window, or a loop, which is cut back to
+@@ -388,19 +418,27 @@ int main(int argc,char**argv){
+                 decode_batch(ctx,n_aud,nullptr,adp.data(),D,n_past,false);
+                 decode_batch(ctx,suf.size(),suf.data(),nullptr,0,n_past,true);
+                 llama_token tk=llama_sampler_sample(smpl,ctx,-1);
++                std::string steps; const char*stop="cap";
++                if(toklog_path) steps=step(tk);
+                 for(int i=0;i<cap;i++){
+-                    if(llama_vocab_is_eog(vocab,tk))break;
++                    if(llama_vocab_is_eog(vocab,tk)){ stop="eog"; break; }
+                     char buf[256]; int k=llama_token_to_piece(vocab,tk,buf,sizeof(buf),0,true);
+                     toks.push_back(tk); pieces.emplace_back(buf,k>0?k:0);
+                     if(int p=cycle(toks)){
+                         size_t s=toks.size()-p;
+                         while(s>=(size_t)p&&std::equal(toks.begin()+s-p,toks.begin()+s,toks.begin()+s)) s-=p;
+                         fprintf(stderr,"[loop] period %d at token %zu; cut to %zu tokens\n",p,toks.size(),s+p);
+-                        pieces.resize(s+p); break;
++                        pieces.resize(s+p); stop="loop"; break;
+                     }
+                     decode_batch(ctx,1,&tk,nullptr,0,n_past,true);
+                     tk=llama_sampler_sample(smpl,ctx,-1);
++                    if(toklog_path&&i+1<cap){ steps+=","; steps+=step(tk); }
+                 }
++                if(toklog_path) if(FILE*lf=fopen(toklog_path,"a")){
++                    fprintf(lf,"{\"wav\":%s,\"whole\":%s,\"i\":%zu,\"n\":%zu,\"off_ms\":%d,\"len_ms\":%d,\"n_aud\":%d,\"cap\":%d,\"pass\":\"%s\",\"stop\":\"%s\",\"ntok\":%zu,\"enc\":%s,\"steps\":[%s]}\n",
++                        js(path).c_str(),whole?"true":"false",(size_t)(&w-&wins[0]),wins.size(),(int)((int64_t)off*1000/16000),(int)((int64_t)len*1000/16000),
++                        n_aud,cap,&pre==&pre_hw?"hw":"plain",stop,pieces.size(),js(enc_file).c_str(),steps.c_str());
++                    fclose(lf); }
+                 std::string out; for(auto&x:pieces) out+=x;
+                 // a hotword pass after the plain one must end at EOG: one cut
+                 // by the loop guard or the cap has lost the rest of the window

@@ -525,7 +525,7 @@ func TestChunksStitchedInOrder(t *testing.T) {
 }
 
 // A take within WholeMax is decoded once, whole, at stop; a longer one is
-// cut into chunks as before.
+// cut into chunks, each decoded as one window.
 func TestWholeTakeUpToWholeMax(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -533,7 +533,7 @@ func TestWholeTakeUpToWholeMax(t *testing.T) {
 		wholes  string
 	}{
 		{"at the limit", 2 * audio.Rate, "[true]"},
-		{"past it", 2*audio.Rate + 1, "[false false false]"},
+		{"past it", 2*audio.Rate + 1, "[true true true]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRig(t, &fakeSource{n: c.samples}, "text")
@@ -1273,7 +1273,7 @@ func TestStreamFailureFallsBackToASR(t *testing.T) {
 		name    string
 		samples int
 		wholes  string
-	}{{"whole", 2 * audio.Rate, "[true]"}, {"chunked", 3 * audio.Rate, "[false false false]"}} {
+	}{{"whole", 2 * audio.Rate, "[true]"}, {"chunked", 3 * audio.Rate, "[true true true]"}} {
 		t.Run(c.name, func(t *testing.T) {
 			r := newRig(t, &fakeSource{n: c.samples}, "local")
 			r.c.Stream = &fakeStreamer{err: errors.New("doubao: connect: no route")}

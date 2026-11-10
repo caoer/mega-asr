@@ -310,8 +310,9 @@ drives AppKit/CoreGraphics).
   shifts the decode of unrelated speech goes in `rechecks.tsv` (and
   `rechecks.d/*.tsv`) instead, as `trigger<TAB>term[, term]`: FunASR decodes
   a chunk whose text holds the trigger (any case) a second time with the
-  terms added and keeps that text; every other chunk is decoded once, as
-  without the file.
+  terms added and keeps that text, unless that decode's hot-word pass did not
+  end at EOG (cut by the loop guard or the token cap), when the first text
+  stands; every other chunk is decoded once, as without the file.
 - **Filler cleanup:** after corrections, `internal/post/filler.go` drops
   嗯/呃/um/uh, stutter repeats and VAD-break full stops; it only deletes (or
   turns 。 into ，) and delivers the raw text if that ever fails. Gold set,

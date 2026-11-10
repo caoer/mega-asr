@@ -66,7 +66,7 @@ func (f *Fallback) Transcribe(ctx context.Context, wav string, whole bool) (stri
 
 func (f *Fallback) transcribe(ctx context.Context, wav string, whole bool) (string, error) {
 	text, err := f.transcribeResident(ctx, wav, whole)
-	if err == nil || ctx.Err() != nil { // cancelled: no CLI either
+	if err == nil || ctx.Err() != nil || errors.Is(err, asr.ErrRecheckCut) { // cancelled: no CLI either; a cut recheck is an answer
 		return text, err
 	}
 	if !errors.Is(err, asr.ErrNoServe) {

@@ -24,11 +24,17 @@
 # Every decode stops at 16 + 12 tokens per second of its window, or on a loop
 # (a p-gram repeated max(4, 12/p) times), cut back to one copy ([loop] on
 # stderr); v1.3.30 decodes to 512 tokens. With --hotwords-cjk, a hotword pass
-# that loses the speech (no speech, or under half the plain text) is dropped.
+# that loses the speech (no speech, under half the plain text, or a decode cut
+# by the loop guard or the cap rather than ending at EOG) is dropped.
 # VAD segment texts are joined with one space between two sides that are not
 # CJK (v1.3.30 glues them: "a." + "b" gives "a.b"), nothing next to CJK. Otherwise,
 # without these flags, the output is byte-identical to the v1.3.30 release
 # binary.
+# runtime/funasr-cli-toklog.patch and runtime/funasr-cli-vadgate.patch apply on
+# top; both act only under an environment variable: FUNASR_TOKLOG and
+# FUNASR_ENCDUMP write per-step decode logs and encoder dumps (text unchanged),
+# FUNASR_WHOLE_VADGATE=1 decodes a whole window only when the VAD finds speech
+# in it, so a silent window yields nothing instead of an invented sentence.
 # macOS arm64: needs git, cmake (nix shell nixpkgs#cmake) and Xcode's clang; the
 # binary replaces the repo's bin/llama-funasr-cli.
 # Linux: needs git, cmake and gcc; the binary lands in OUTDIR (default
@@ -47,7 +53,9 @@ else
   out=${2:-$work/bin}
 fi
 git clone -q --depth 1 --branch v1.3.30 https://github.com/modelscope/FunASR.git "$work/FunASR"
-git -C "$work/FunASR" apply "$here/runtime/funasr-cli-serve.patch"
+for patch in serve toklog vadgate; do
+  git -C "$work/FunASR" apply "$here/runtime/funasr-cli-$patch.patch"
+done
 cd "$work/FunASR/runtime/llama.cpp"
 # shellcheck disable=SC2086
 cmake -B build -DCMAKE_BUILD_TYPE=Release $cc

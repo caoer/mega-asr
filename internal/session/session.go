@@ -14,7 +14,10 @@
 // decoded at stop as one window, its silent head and tail trimmed: the model
 // sees the whole context, and no text is stitched across a cut. A longer take
 // streams: once it passes WholeMax, one ASR worker transcribes its chunks in
-// order, in the background, so a stop waits only for the last chunk. A new
+// order, in the background, so a stop waits only for the last chunk. Each
+// chunk is decoded as one window too: the chunker has already cut it at
+// pauses, and a second cut by the engine's VAD loses speech between its
+// segments. A new
 // take can start while earlier ones transcribe; each take keeps its own
 // target and text, and takes deliver in the order they were recorded.
 //
@@ -1741,13 +1744,13 @@ func (c *Controller) ctx() context.Context {
 	return c.Ctx
 }
 
-// decode has the ASR transcribe one chunk under ctx.
+// decode has the ASR transcribe one chunk under ctx, as one window.
 func (c *Controller) decode(ctx context.Context, ck *chunk) (string, error) {
 	if err := ctx.Err(); err != nil { // cancelled: no call, no log line per chunk
 		return "", err
 	}
 	t0 := time.Now()
-	text, err := c.ASR.Transcribe(ctx, ck.wav, ck.whole)
+	text, err := c.ASR.Transcribe(ctx, ck.wav, true)
 	wall := time.Since(t0)
 	secs := time.Duration(ck.samples) * time.Second / audio.Rate
 	switch {

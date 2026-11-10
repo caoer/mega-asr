@@ -53,8 +53,8 @@ func chunkerEdges(s []int16, c audio.Chunker) []edge {
 // replay -chunks writes the chunks the controller decoded. On the fixture
 // take their sample offsets are audio.Chunker's cuts at the config's pause
 // and max, their edges the cuts' kinds, and each WAV the take's samples
-// between them; within take.whole_max it is one chunk at audio.TrimBounds,
-// decoded whole.
+// between them; within take.whole_max it is one chunk at audio.TrimBounds.
+// Every chunk is decoded whole, as one window.
 func TestReplayChunksAreTheChunkersCuts(t *testing.T) {
 	s, err := audio.ReadWAV(fixtureTake)
 	if err != nil {
@@ -98,7 +98,7 @@ func TestReplayChunksAreTheChunkersCuts(t *testing.T) {
 				if got := (edge{start, end, g["start_reason"], g["end_reason"]}); got != w {
 					t.Errorf("chunk %d = %v, want %v", i+1, got, w)
 				}
-				if want := fmt.Sprintf("%03d.wav whole=%v", i+1, w.to == audio.EdgeWhole); g["raw"] != want {
+				if want := fmt.Sprintf("%03d.wav whole=true", i+1); g["raw"] != want {
 					t.Errorf("chunk %d raw %q, want %q", i+1, g["raw"], want)
 				}
 				wav, err := audio.ReadWAV(filepath.Join(dir, "take-30s", g["chunk"]))

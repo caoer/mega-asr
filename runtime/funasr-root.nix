@@ -1,8 +1,9 @@
 # funasr-root — an engine root for megavoice and megameet on Linux, the
 # directory `[asr.funasr] root` names:
 #   bin/llama-funasr-cli   FunASR v1.3.30's llama.cpp runtime with
-#                          runtime/funasr-cli-serve.patch (build-funasr-cli.sh
-#                          documents the flags); CPU, AVX2 on x86_64
+#                          runtime/funasr-cli-serve.patch, -toklog.patch and
+#                          -vadgate.patch (build-funasr-cli.sh documents the
+#                          flags and variables); CPU, AVX2 on x86_64
 #   models/                Fun-ASR-Nano (SAN-M encoder f16, Qwen3-0.6B q8_0) and
 #                          FSMN-VAD, pinned by Hugging Face revision and sha256 —
 #                          the same bytes as the repo's annexed models/
@@ -36,7 +37,11 @@ let
     pname = "llama-funasr-cli";
     version = "1.3.30-serve";
     src = funasr;
-    patches = [ ./funasr-cli-serve.patch ];
+    patches = [
+      ./funasr-cli-serve.patch
+      ./funasr-cli-toklog.patch
+      ./funasr-cli-vadgate.patch
+    ];
     nativeBuildInputs = [ cmake ];
     cmakeDir = "../runtime/llama.cpp";
     cmakeFlags = [

@@ -1,0 +1,20 @@
+diff --git a/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp b/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
+index c607677..169e2d5 100644
+--- a/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
++++ b/runtime/llama.cpp/fun-asr-nano/funasr-cli/funasr-cli.cpp
+@@ -379,6 +379,15 @@ int main(int argc,char**argv){
+         //   --vad : FSMN-VAD speech segments (single-binary front end, replaces fixed chunking)
+         //   --chunk sec : fixed-size chunks ; otherwise, or when whole, the whole file in one window
+         std::vector<std::pair<int,int>> wins;   // {sample offset, sample len}
++        // FUNASR_WHOLE_VADGATE=1 (analysis): a whole window goes to the model
++        // only when the VAD finds speech somewhere in it; else it is empty
++        static const bool vadgate=getenv("FUNASR_WHOLE_VADGATE")&&atoi(getenv("FUNASR_WHOLE_VADGATE"))!=0;
++        if(whole&&vadgate&&!vad_path.empty()){
++            std::vector<std::pair<int,int>> segs;
++            int64_t v0=ggml_time_us();
++            if(!funasr_vad_run(vm,wav,vad_maxseg,segs)){fprintf(stderr,"vad failed\n");return full;}
++            t_vad+=(ggml_time_us()-v0)/1e6;
++            if(segs.empty()){ fprintf(stderr,"[whole] VAD finds no speech; window not decoded\n"); ok=true; return full; } }
+         if(whole) wins.push_back({0,(int)wav.size()});
+         else if(!vad_path.empty()){
+             std::vector<std::pair<int,int>> segs; // ms

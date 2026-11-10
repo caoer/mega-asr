@@ -79,6 +79,29 @@ func TestResidentRequests(t *testing.T) {
 	}
 }
 
+// A hot-word pass that did not end at EOG: the CLI's plain pass answers a
+// first decode, and a recheck decode is refused so the first one stands;
+// the process stays.
+func TestResidentRecheckCut(t *testing.T) {
+	r, dir := fakeResident(t, "ok")
+	r.Hotwords = func() []string { return []string{"loopy", "ibex"} }
+	wav := wavFile(t, dir, "a.wav", 1000)
+	if got, err := r.Transcribe(context.Background(), wav, true); err != nil || !strings.HasPrefix(got, "a.wav hw=[loopy, ibex] ") {
+		t.Errorf("first decode: %q, %v", got, err)
+	}
+	ctx := context.WithValue(context.Background(), extraKey{}, []string{"passkey"})
+	if got, err := r.Transcribe(ctx, wav, true); !errors.Is(err, ErrRecheckCut) {
+		t.Errorf("recheck: %q, %v; want ErrRecheckCut", got, err)
+	}
+	r.Hotwords = func() []string { return []string{"ibex"} }
+	if got, err := r.Transcribe(ctx, wav, true); err != nil || !strings.HasPrefix(got, "a.wav hw=[ibex, passkey] ") {
+		t.Errorf("recheck ending at EOG: %q, %v", got, err)
+	}
+	if s := starts(t, dir); s != 1 {
+		t.Errorf("%d process starts, want 1", s)
+	}
+}
+
 func TestResidentRestart(t *testing.T) {
 	for _, mode := range []string{"die-once", "hang-once"} {
 		t.Run(mode, func(t *testing.T) {

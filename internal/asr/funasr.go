@@ -101,6 +101,9 @@ func (f FunASR) Transcribe(ctx context.Context, wav string, whole bool) (string,
 		}
 		return "", fmt.Errorf("llama-funasr-cli: %w: %s", err, lastLine(stderr.String()))
 	}
+	if recheck(ctx) && strings.Contains(stderr.String(), cutMark) {
+		return "", ErrRecheckCut
+	}
 	return Clean(string(out)), nil
 }
 

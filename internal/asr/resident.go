@@ -95,9 +95,11 @@ func (r *Resident) Transcribe(ctx context.Context, wav string, whole bool) (stri
 			}
 			r.p = p
 		}
-		text, err := r.p.request(ctx, req, deadline)
+		text, cut, err := r.p.request(ctx, req, deadline)
 		var failed cliFailure
 		switch {
+		case err == nil && cut && recheck(ctx):
+			return "", ErrRecheckCut
 		case err == nil:
 			return Clean(text), nil
 		case errors.As(err, &failed): // the CLI could not read or segment this file; the process is fine
@@ -223,43 +225,46 @@ func (e cliFailure) Error() string { return "llama-funasr-cli: " + e.reason }
 
 // request sends one line and waits for its reply on stdout and its [done] on
 // stderr — the two streams arrive in either order. A [stage] line between
-// them marks a transcribed file; without one the reply is a failure.
-func (p *serveProc) request(ctx context.Context, req string, deadline time.Duration) (string, error) {
+// them marks a transcribed file; without one the reply is a failure. cut
+// reports a hot-word pass the CLI dropped for not ending at EOG (cutMark).
+func (p *serveProc) request(ctx context.Context, req string, deadline time.Duration) (reply string, cut bool, err error) {
 	if _, err := io.WriteString(p.in, req); err != nil {
-		return "", fmt.Errorf("asr: resident: write: %w", err)
+		return "", false, fmt.Errorf("asr: resident: write: %w", err)
 	}
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
-	var reply, last string
+	var last string
 	var replied, done, stage bool
 	for !replied || !done {
 		select {
 		case l, ok := <-p.out:
 			if !ok {
-				return "", fmt.Errorf("asr: resident: process exited mid-request: %s", last)
+				return "", false, fmt.Errorf("asr: resident: process exited mid-request: %s", last)
 			}
 			reply, replied = l, true
 		case l, ok := <-p.errs:
 			switch {
 			case !ok:
-				return "", fmt.Errorf("asr: resident: process exited mid-request: %s", last)
+				return "", false, fmt.Errorf("asr: resident: process exited mid-request: %s", last)
 			case strings.HasPrefix(l, "[stage]"):
 				stage = true
 			case strings.HasPrefix(l, "[done]"):
 				done = true
+			case strings.HasPrefix(l, cutMark):
+				cut = true
 			case strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "["):
 				last = l
 			}
 		case <-timer.C:
-			return "", fmt.Errorf("asr: resident: no reply within %v", deadline)
+			return "", false, fmt.Errorf("asr: resident: no reply within %v", deadline)
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", false, ctx.Err()
 		}
 	}
 	if !stage {
-		return "", cliFailure{last}
+		return "", false, cliFailure{last}
 	}
-	return reply, nil
+	return reply, cut, nil
 }
 
 // kill ends the process group and reaps it; the pumps exit on EOF or done.
