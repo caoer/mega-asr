@@ -429,17 +429,23 @@ func (h *Handler) rerefine(w http.ResponseWriter, r *http.Request) {
 	reply(w, notRecorded(ev, err), nil)
 }
 
-// errNoTarget refuses a send of a take whose record names no target.
-var errNoTarget = errors.New("the take's record names no target: pick one with resend")
+// The refusals of a send by the take's own target: none recorded, or a
+// keypad take's destination, which the page cannot reach (keypadTo).
+var (
+	errNoTarget = errors.New("the take's record names no target: pick one with resend")
+	errTelegram = errors.New("the take was going to the keypad's Telegram chat, which the page does not post to: pick a target with resend")
+	errCursor   = errors.New("the take was going to the Mac's cursor as it started, which its record does not keep: pick a target with resend")
+)
 
 // send answers POST /takes/api/send {"id", "text"}: a take held or
 // cancelled sent once to where it would have gone, its own target, with
 // Enter when the take ended with Enter; text is model (the newest run
 // again's answer, settled for an agent by refine.agent_copy as on a live
-// take) or recognised (.txt). A take that has reached a target is refused
-// with 409 delivered, so neither text goes out twice; so is an own target
-// that cannot be reached now, as a resend's is (reachable). The answer is
-// the deliver line, as resend's.
+// take) or recognised (.txt). A take that has reached a target, or whose
+// paste was cut and most likely landed, is refused with 409 delivered, so
+// neither text goes out twice; so is an own target that cannot be reached
+// now, as a resend's is (reachable), and a keypad take's (keypadTo). The
+// answer is the deliver line, as resend's.
 func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID   string `json:"id"`
@@ -464,6 +470,10 @@ func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
 	}
 	if t.Target == nil {
 		refuse(w, errNoTarget)
+		return
+	}
+	if t.Target.Kind == "telegram" {
+		refuse(w, keypadTo(t.Events))
 		return
 	}
 	to, err := h.ownTo(t.Target)
@@ -519,15 +529,58 @@ func (h *Handler) ownTo(own *store.Target) (string, error) {
 	return "", errTargetGone
 }
 
-// endedWithEnter reports whether a take was ended with Enter, or had Enter
-// pressed while it was transcribed: its own delivery would have sent it.
+// endedWithEnter reports whether a take's own delivery would have pressed
+// Enter after its paste: it was ended with Enter, or had Enter pressed while
+// it was transcribed, and its text is whole (wholeText).
 func endedWithEnter(evs []store.Event) bool {
+	enter := false
 	for _, e := range evs {
 		if e.Ev == "stop" && e.Kind == "enter" || e.Ev == "send_on" {
-			return true
+			enter = true
+		}
+	}
+	return enter && wholeText(evs)
+}
+
+// stoppedWithEnter reports whether a take was ended with Enter: the stop
+// that chooses a keypad take's destination.
+func stoppedWithEnter(evs []store.Event) bool {
+	for _, e := range evs {
+		if e.Ev == "stop" {
+			return e.Kind == "enter"
 		}
 	}
 	return false
+}
+
+// wholeText reports whether a take's text is all it said, as its own
+// delivery judges before pressing Enter: no chunk failed (its last text
+// line) and the capture reported no error (no capture_error line). A take
+// whose backup track covered the error was whole to its delivery; the
+// record does not say so, and it is sent without Enter.
+func wholeText(evs []store.Event) bool {
+	whole := true
+	for _, e := range evs {
+		switch e.Ev {
+		case "text":
+			whole = whole && e.FailedChunks == 0
+		case "capture_error":
+			whole = false
+		}
+	}
+	return whole
+}
+
+// keypadTo refuses a send of a keypad take (its start line names the
+// locked chat, kind telegram) by where its own delivery would have gone,
+// which the page cannot reach: the chat when it was ended with Enter and
+// its text is whole (errTelegram), else the Mac's cursor as the take
+// started (errCursor), which its record does not keep.
+func keypadTo(evs []store.Event) error {
+	if stoppedWithEnter(evs) && wholeText(evs) {
+		return errTelegram
+	}
+	return errCursor
 }
 
 // label answers POST /takes/api/label {"id", "ref", "note", "correct",
@@ -584,6 +637,8 @@ var refusals = []struct {
 	{session.ErrDelivered, http.StatusConflict, "delivered"},
 	{session.ErrRefining, http.StatusConflict, "refining"},
 	{errNoTarget, http.StatusConflict, "no_target"},
+	{errTelegram, http.StatusConflict, "telegram"},
+	{errCursor, http.StatusConflict, "cursor"},
 	{errTargetGone, http.StatusConflict, "target_gone"},
 	{errNoHerdr, http.StatusConflict, "no_herdr"},
 	{errFrontApp, http.StatusConflict, "front_app"},

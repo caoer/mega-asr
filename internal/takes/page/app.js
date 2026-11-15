@@ -846,7 +846,7 @@
   var DT = { id: "", take: null, err: null, note: null, picker: null, targets: null, dest: "", enter: false, engine: "" };
   var busy = { resend: {}, retr: {}, label: {}, refine: {}, send: {} };
   var ENG = null; // the engines, re-read when the engine picker opens
-  var MODES = null; // the model step's modes and [refine], re-read as each take opens
+  var MODES = null; // the model step's modes and [refine], re-read as each take that may show the step opens (mayStep)
   var playWhenReady = "";
 
   // openTake reads the take S.sel names when it is not the one shown, and
@@ -860,9 +860,9 @@
     var id = S.sel;
     reloadTake(id).then(function () {
       seen(id);
+      if (DT.id === id && DT.take && mayStep(DT.take)) api("api/modes").then(function (r) { MODES = r; if (DT.take) drawDetail(); }, function () {});
     });
     if (!ENG) api("api/engines").then(function (r) { ENG = r.engines || []; if (DT.take) drawDetail(); }, function () {});
-    api("api/modes").then(function (r) { MODES = r; if (DT.take) drawDetail(); }, function () {});
   }
 
   // seen marks the take shown seen when the user opened it and it counts as
@@ -2250,6 +2250,8 @@
     delivered: tr("这一条已经送达，不再从这里发；要再发一次用 重发…", "This take was delivered, so it isn't sent from here; to send it again use Resend…"),
     refining: tr("这条正在转译", "The model step is running on this take"),
     no_target: tr("这一条没有记下目标：用 重发… 选一个", "This take has no recorded target: pick one with Resend…"),
+    telegram: tr("这一条要发到小键盘锁定的 Telegram 群，本页不往那里发：用 重发… 选一个目标", "This take was going to the keypad's Telegram chat, which this page doesn't post to: pick a target with Resend…"),
+    cursor: tr("这一条要贴到录音开始时 Mac 上的光标处，记录里没有那个位置：用 重发… 选一个目标", "This take was going to the Mac's cursor as it started, which the record doesn't keep: pick a target with Resend…"),
     unknown_mode: tr("没有这个模式", "There's no such mode"),
     unavailable: tr("这里不能转译或发出", "The model step can't run here"),
     no_text: function (x) {
@@ -2393,14 +2395,40 @@
   // recognised, then each call — its mode, the model's text or why it gave
   // none, what it was given beside the dictation — and, on a take held or
   // cancelled that never reached a target, 再转译 in a mode picked here and
-  // the two sends. A take that was delivered shows its stages and offers no
-  // send: a second delivery is 重发…'s, on purpose.
+  // the two sends. A take that was delivered shows no block; one whose paste
+  // was cut shows its stages and offers no send: a second delivery is
+  // 重发…'s, on purpose.
   // stepOpen says whether the take offers 再转译 and the sends: held or
   // cancelled, never delivered, with its text as recognised, and the step
   // on or already run on it.
   function stepOpen(t) {
     var ran = t.events.some(function (e) { return e.ev === "refine"; });
-    return !reached(t) && !!heardText(t) && (t.state === "cancelled" || t.state === "undelivered") && (ran || !!(MODES && MODES.on));
+    return mayStep(t) && !landed(t) && (ran || !!(MODES && MODES.on));
+  }
+  // mayStep says whether the take could show the block: held or cancelled,
+  // never delivered, with its text as recognised. Only such a take reads
+  // the modes.
+  function mayStep(t) {
+    return !reached(t) && !!heardText(t) && (t.state === "cancelled" || t.state === "undelivered");
+  }
+  // landed says whether the take's paste was cut while it ran (hold
+  // delivery_cut): the text most likely landed, so it is not sent from
+  // here; a second delivery is 重发…'s.
+  function landed(t) {
+    return t.events.some(function (e) { return e.ev === "hold" && e.why === "delivery_cut"; });
+  }
+  // sendDest is where a send from the block goes, as the server reckons it:
+  // the take's own target; for a keypad take (its start names the locked
+  // chat) the chat when it was ended with Enter and its text is whole, else
+  // the Mac's cursor as it started, and code then names why the page cannot
+  // send there.
+  function sendDest(t) {
+    var tg = t.target;
+    if (!tg || tg.kind !== "telegram") return { label: target(tg).full, code: "" };
+    var stop = t.events.filter(function (e) { return e.ev === "stop"; })[0];
+    var whole = !t.events.some(function (e) { return (e.ev === "text" && e.failed_chunks) || e.ev === "capture_error"; });
+    if (stop && stop.kind === "enter" && whole) return { label: "Telegram " + target(tg).full, code: "telegram" };
+    return { label: tr("录音开始时 Mac 上的光标处", "the Mac's cursor as the take started"), code: "cursor" };
   }
   // heardText is the take's text as recognised: its .txt, else the text its
   // hold line kept (a take whose chunks failed keeps no .txt).
@@ -2410,6 +2438,7 @@
     return h ? h.text : "";
   }
   function stepBlock(t) {
+    if (!mayStep(t)) return null; // a delivered take shows what it showed before
     var rs = t.events.filter(function (e) { return e.ev === "refine"; });
     var open = stepOpen(t);
     if (!rs.length && !open) return null;
@@ -2422,7 +2451,7 @@
     });
     add(sec, h("div", { class: "vers" }, rows));
     if (open) add(sec, stepActions(t, rs));
-    else if (rs.length && reached(t)) add(sec, h("p", { class: "muted" }, tr("这一条已经送达；要再发一次用上面的 重发…", "This take was delivered; to send it again use Resend… above")), note("step"));
+    else if (landed(t)) add(sec, h("p", { class: "muted" }, tr("这一条粘贴时被打断，多半已经贴进去了；要再发一次用上面的 重发…", "This take's paste was cut off and most likely landed; to send it again use Resend… above")), note("step"));
     return sec;
   }
 
@@ -2479,6 +2508,7 @@
     var run = busy.refine[t.id];
     var sending = busy.send[t.id];
     var model = sendable(rs);
+    var dest = sendDest(t);
     var box = h("div", { class: "picker step-run", role: "group", "aria-label": tr("再转译一次", "Run the model step again") });
     if (!MODES) add(box, h("p", { class: "muted" }, tr("正在读取模式…", "Loading modes…")));
     else
@@ -2506,12 +2536,13 @@
         run
           ? h("button", { class: "btn", type: "button", "data-k": "step-cancel", onclick: function () { run.abort(); } }, tr("取消转译", "Cancel"))
           : h("button", { class: "btn" + (model ? "" : " primary"), type: "button", "data-k": "step-go", disabled: !DT.mode || !!sending, onclick: function () { doRerefine(t, DT.mode); } }, rs.length ? tr("再转译一次", "Run again") : tr("转译", "Run the model step")),
-        model ? h("button", { class: "btn primary", type: "button", "data-k": "send-model", disabled: !!run || !!sending, onclick: function () { doSend(t, "model"); } }, tr("发出模型的字", "Send the model's text")) : null,
-        h("button", { class: "btn", type: "button", "data-k": "send-heard", disabled: !!run || !!sending, onclick: function () { doSend(t, "recognised"); } }, tr("按识别的字发出", "Send as recognised")),
+        model ? h("button", { class: "btn primary", type: "button", "data-k": "send-model", disabled: !!run || !!sending || !!dest.code, onclick: function () { doSend(t, "model"); } }, tr("发出模型的字", "Send the model's text")) : null,
+        h("button", { class: "btn", type: "button", "data-k": "send-heard", disabled: !!run || !!sending || !!dest.code, onclick: function () { doSend(t, "recognised"); } }, tr("按识别的字发出", "Send as recognised")),
         run ? h("span", { class: "act-note", role: "status" }, tr("转译中…", "Running…")) : note("step"),
       ),
     );
-    add(box, h("p", { class: "muted" }, tr("发到录音时的目标：", "Sends to where the take was going: "), target(t.target).full || tr("没有记下", "not recorded")));
+    add(box, h("p", { class: "muted" }, tr("发到录音时的目标：", "Sends to where the take was going: "), dest.label || tr("没有记下", "not recorded")));
+    if (dest.code) add(box, h("p", { class: "muted" }, CODES[dest.code]));
     return box;
   }
 
@@ -2556,7 +2587,7 @@
     busy.send[id] = true;
     DT.note = null;
     drawDetail();
-    var name = target(t.target).full;
+    var name = sendDest(t).label;
     postJSON("api/send", { id: id, text: which })
       .then(
         function (line) {

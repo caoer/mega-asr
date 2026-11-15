@@ -761,3 +761,65 @@ func TestBothLeavesTheTakeTextOnTheClipboard(t *testing.T) {
 		}
 	}
 }
+
+// A send whose paste was cut and most likely landed (ErrMaybeSent: hold
+// delivery_cut) counts as delivered for a send from the page: a second
+// send, and a run again, are refused and nothing goes out again.
+func TestMaybeSentTakeIsNotSentAgain(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	r.c.Toggle()
+	r.c.Cancel()
+	r.wait(t)
+	r.del.mu.Lock()
+	r.del.deliverErr = ErrMaybeSent
+	r.del.mu.Unlock()
+	de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "delivered", Once: true, Via: "page"})
+	if err != nil || de.OK || state(base) != "undelivered/delivery_cut" {
+		t.Fatalf("a cut send: %v, line %+v, state %s", err, de, state(base))
+	}
+	r.del.mu.Lock()
+	r.del.deliverErr = nil
+	r.del.mu.Unlock()
+	lines := lineNames(t, base)
+	if _, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "delivered", Once: true, Via: "page"}); !errors.Is(err, ErrDelivered) {
+		t.Fatalf("a second send after a cut one: %v", err)
+	}
+	var calls atomic.Int32
+	if _, err := r.c.Rerefine(context.Background(), "20200417-104200", fixedStep("tidy", "x", &calls), "page"); !errors.Is(err, ErrDelivered) || calls.Load() != 0 {
+		t.Fatalf("a run again after a cut send: %v, %d calls", err, calls.Load())
+	}
+	if r.del.got() != "" || lineNames(t, base) != lines {
+		t.Fatalf("delivered %q, record %s, was %s", r.del.got(), lineNames(t, base), lines)
+	}
+}
+
+// A run again whose call never answers holds up no exit: the controller is
+// not Busy, Close answers true and cancels the call, and its line says
+// cancelled.
+func TestStalledRunAgainDoesNotBlockClose(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	r.c.Toggle()
+	r.c.Cancel()
+	r.wait(t)
+	u := newUnanswered()
+	done := make(chan store.Event, 1)
+	go func() {
+		line, _ := r.c.Rerefine(context.Background(), "20200417-104200", &RefineStep{Run: u.run}, "page")
+		done <- line
+	}()
+	<-u.asked
+	if r.c.Busy() {
+		t.Fatal("Busy while a run again waits on its call")
+	}
+	if !r.c.Close("quit") {
+		t.Fatal("Close refused while a run again waits on its call")
+	}
+	select {
+	case line := <-done:
+		if line.Why != "cancelled" || state(base) != "cancelled/" || r.del.got() != "" {
+			t.Fatalf("line %+v, state %s, delivered %q", line, state(base), r.del.got())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run again outlived Close")
+	}
+}

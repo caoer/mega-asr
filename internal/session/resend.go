@@ -87,8 +87,9 @@ type Resend struct {
 	// engine's name (its answer in .compare.json), or "retranscription N"
 	// (the answer of the take's Nth retranscribe line).
 	Text string
-	// Once refuses a take that has reached a target (ErrDelivered): a held
-	// or cancelled take is sent once, and a delivered one not by accident.
+	// Once refuses a take that has reached a target or may have, its paste
+	// cut (landedOf; ErrDelivered): a held or cancelled take is sent once,
+	// and a delivered one not by accident.
 	Once bool
 	// Copy is refine.agent_copy for a model text toward an agent's target:
 	// what goes out is settled as on a live take (agentCopy), for the target
@@ -107,8 +108,8 @@ type Resend struct {
 // appends a deliver line with the next n. It returns an error, and appends
 // nothing, when the take is unknown, still records or transcribes, is being
 // resent already, has no text of the kind asked for, the lock stays held
-// for q.Wait, or q.Once and the take has reached a target (read under the
-// lock). Otherwise it returns the line it appended: a delivery that
+// for q.Wait, or q.Once and the take has reached a target or may have (read
+// under the lock). Otherwise it returns the line it appended: a delivery that
 // failed has OK false and its Err, leaves the text on the clipboard, and is
 // followed by hold deliver_failed when the take has never reached a target
 // (one that has keeps its state). The target is read back after the lock
@@ -168,7 +169,7 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 			n++
 		}
 	}
-	if q.Once && reached {
+	if q.Once && landedOf(evs) {
 		return store.Event{}, ErrDelivered
 	}
 	heard, herr := os.ReadFile(base + ".txt")
@@ -263,6 +264,18 @@ func reachedOf(evs []store.Event) bool {
 	return false
 }
 
+// landedOf reports whether a take's text reached a target or most likely
+// did: a deliver line with ok, or a hold delivery_cut, which a paste cut
+// while it ran leaves (the live delivery, Resend, Interrupt).
+func landedOf(evs []store.Event) bool {
+	for _, e := range evs {
+		if e.Ev == "hold" && e.Why == "delivery_cut" {
+			return true
+		}
+	}
+	return reachedOf(evs)
+}
+
 // Rerefine runs the model step again on a kept take that never reached a
 // target — held, cancelled — at a person's ask: one call of step on the
 // take's text as recognised (.txt, else its hold line's), bound for the target its start line
@@ -270,10 +283,11 @@ func reachedOf(evs []store.Event) bool {
 // among the take's refine lines. A line with no why carries the model's
 // text, which Resend's "model" sends. Nothing is delivered and the take's
 // state stays. The call has no time limit: it ends on the answer, a
-// failure or ctx, and a cancel is recorded as the call's why. It returns an
-// error, and appends nothing, when the take is unknown, still records or
-// transcribes, has reached a target, has no text, or the step runs on it
-// already. While it runs the controller is Busy.
+// failure, ctx, the controller's Ctx or a Close that answers true, and a
+// cancel is recorded as the call's why. It returns an error, and appends
+// nothing, when the take is unknown, still records or transcribes, has
+// reached a target or may have (landedOf), has no text, or the step runs on
+// it already. It does not make the controller Busy: no exit waits on it.
 func (c *Controller) Rerefine(ctx context.Context, id string, step *RefineStep, via string) (store.Event, error) {
 	base, err := c.Base(id)
 	if err != nil {
@@ -288,25 +302,27 @@ func (c *Controller) Rerefine(ctx context.Context, id string, step *RefineStep, 
 		c.mu.Unlock()
 		return store.Event{}, err
 	}
-	if c.rerefining[base] {
+	if c.rerefining[base] != nil {
 		c.mu.Unlock()
 		return store.Event{}, ErrRefining
 	}
 	if c.rerefining == nil {
-		c.rerefining = map[string]bool{}
+		c.rerefining = map[string]context.CancelFunc{}
 	}
-	c.rerefining[base] = true
-	c.inflight.Add(1)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(c.ctx(), cancel)
+	defer stop()
+	c.rerefining[base] = cancel
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
 		delete(c.rerefining, base)
-		c.inflight.Add(-1)
 		c.mu.Unlock()
 	}()
 
 	evs, _ := store.Read(base)
-	if reachedOf(evs) {
+	if landedOf(evs) {
 		return store.Event{}, ErrDelivered
 	}
 	heard, _, err := textOf(base, evs, "delivered") // .txt, else the hold line's text

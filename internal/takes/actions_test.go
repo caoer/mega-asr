@@ -824,3 +824,71 @@ func TestRunAgainReadsTheHoldLinesText(t *testing.T) {
 		t.Fatalf("%d %s, calls %v (%v)", w.Code, w.Body, calls, err)
 	}
 }
+
+// writeTake writes a take's record: a start line toward target, then evs.
+func writeTake(t *testing.T, dir, id string, target store.Target, evs ...store.Event) string {
+	t.Helper()
+	base := filepath.Join(dir, id)
+	at := time.Date(2020, 3, 14, 9, 26, 53, 0, time.Local)
+	for i, e := range append([]store.Event{{Ev: "start", Trigger: "tap", Target: &target}}, evs...) {
+		e.At = at.Add(time.Duration(i) * time.Second)
+		if err := store.Append(base, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return base
+}
+
+// A take ended with Enter whose text is not whole — a chunk failed, or the
+// capture reported an error — is sent from the page without Enter, as its
+// own delivery would have pasted it and not submitted it.
+func TestPartialTakeIsSentWithoutEnter(t *testing.T) {
+	pane := store.Target{Kind: "herdr", Pane: "w1:p2"}
+	held := store.Event{Ev: "hold", Why: session.HoldRefineFailed, Text: "用海库跑一下"}
+	for name, evs := range map[string][]store.Event{
+		"failed chunk":  {{Ev: "stop", Kind: "enter", DurS: 1}, {Ev: "text", Engine: "funasr", FailedChunks: 1}, held},
+		"capture error": {{Ev: "stop", Kind: "enter", DurS: 1}, {Ev: "capture_error", Why: "device gone"}, {Ev: "text", Engine: "funasr"}, held},
+		"send_on":       {{Ev: "stop", Kind: "tap", DurS: 1}, {Ev: "send_on"}, {Ev: "text", Engine: "funasr", FailedChunks: 2}, held},
+	} {
+		dir := t.TempDir()
+		base := writeTake(t, dir, "20200314-092653", pane, evs...)
+		del := &fakeDeliverer{}
+		h, _, _ := actionsOf(t, dir, del, []Pane{{ID: "w1:p2"}}, nil)
+		if w := post(h, "/takes/api/send", `{"id":"20200314-092653","text":"recognised"}`, nil); w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body)
+		}
+		evs := mustEvents(t, base)
+		if got, last := del.String(), evs[len(evs)-1]; got != "pane:w1:p2|用海库跑一下" || last.Submit != "none" {
+			t.Errorf("%s: delivered %q, line %+v", name, got, last)
+		}
+	}
+}
+
+// A keypad take's start names the locked chat; its own delivery went to the
+// chat when it was ended with Enter and its text was whole, else to the
+// Mac's cursor. The page reaches neither: the send is refused with where the
+// take was going, and nothing goes out.
+func TestKeypadTakeNamesItsDestination(t *testing.T) {
+	chat := store.Target{Kind: "telegram", App: "agents", Title: "general"}
+	held := store.Event{Ev: "hold", Why: session.HoldRefineFailed, Text: "用海库跑一下"}
+	for _, tc := range []struct {
+		name, code string
+		evs        []store.Event
+	}{
+		{"ended with Enter", "telegram", []store.Event{{Ev: "stop", Kind: "enter", DurS: 1}, {Ev: "text", Engine: "funasr"}, held}},
+		{"ended with a tap", "cursor", []store.Event{{Ev: "stop", Kind: "tap", DurS: 1}, {Ev: "text", Engine: "funasr"}, held}},
+		{"Enter on a partial text", "cursor", []store.Event{{Ev: "stop", Kind: "enter", DurS: 1}, {Ev: "text", Engine: "funasr", FailedChunks: 1}, held}},
+	} {
+		dir := t.TempDir()
+		base := writeTake(t, dir, "20200314-092653", chat, tc.evs...)
+		del := &fakeDeliverer{}
+		h, _, _ := actionsOf(t, dir, del, []Pane{{ID: "w1:p2"}}, []App{{PID: 7, BundleID: "x.agents", Name: "agents"}})
+		before := record(t, base)
+		if code, why := refusal(t, post(h, "/takes/api/send", `{"id":"20200314-092653","text":"recognised"}`, nil)); code != http.StatusConflict || why != tc.code {
+			t.Errorf("%s: %d %s, want %s", tc.name, code, why, tc.code)
+		}
+		if del.String() != "" || record(t, base) != before {
+			t.Errorf("%s: delivered %q, record changed: %v", tc.name, del.String(), record(t, base) != before)
+		}
+	}
+}

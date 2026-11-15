@@ -304,9 +304,11 @@ type Controller struct {
 
 	resending      map[string]bool // takes a resend is delivering, by base
 	retranscribing map[string]bool // takes a re-transcription is decoding, by base
-	rerefining     map[string]bool // takes the model step runs on again, by base
-	hotkeying      atomic.Bool     // a hotkey paste is under way
-	rmu            sync.Mutex      // a re-transcription's count of the record's lines and its append
+	// rerefining: takes the model step runs on again, by base, each with
+	// the cancel of its call; not in flight for Busy, Close cancels them
+	rerefining map[string]context.CancelFunc
+	hotkeying  atomic.Bool // a hotkey paste is under way
+	rmu        sync.Mutex  // a re-transcription's count of the record's lines and its append
 
 	// closing, once set, refuses every take start, resend and
 	// re-transcription, and is the words a refused start flashes (Close)

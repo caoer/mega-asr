@@ -15,17 +15,25 @@ import (
 )
 
 // Close refuses, from now on, every take start (a refused start flashes
-// msg), every resend and every re-transcription, and reports whether
-// nothing was in flight as it did: an exit that follows a true answer cuts
-// no take. It never waits for the controller's mutex; while another call
-// holds it the answer is false. Reopen lifts the refusal.
+// msg), every resend, re-transcription and run again of the model step,
+// and reports whether nothing was in flight as it did: an exit that follows
+// a true answer cuts no take. A run again is not in flight: a true answer
+// cancels each one running. It never waits for the controller's mutex;
+// while another call holds it the answer is false. Reopen lifts the
+// refusal.
 func (c *Controller) Close(msg string) bool {
 	c.closing.Store(&msg)
 	if c.Busy() || !c.mu.TryLock() {
 		return false
 	}
 	defer c.mu.Unlock()
-	return !c.Busy()
+	if c.Busy() {
+		return false
+	}
+	for _, cancel := range c.rerefining { // a run again holds up no exit: its line says cancelled
+		cancel()
+	}
+	return true
 }
 
 // Reopen lifts Close's refusal.
