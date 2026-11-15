@@ -336,8 +336,8 @@ type RefineProviderConfig struct {
 }
 
 // RefineModes are the modes the app comes with, each with a built-in prompt
-// seeded as modes.d/<mode>.md. refine.mode also names any other prompt file
-// there (RefineModeNames).
+// that modes.d/<mode>.md replaces once the user keeps one (SeedPrompt).
+// refine.mode also names any other prompt file there (RefineModeNames).
 var RefineModes = refine.Modes
 
 // RefineModeNames are the modes refine.mode can name now: RefineModes, then
@@ -1221,26 +1221,37 @@ func Template() []byte {
 	return b
 }
 
-// Seed writes the default hotwords and corrections files, and each mode's
-// prompt as modes.d/<mode>.md, when absent; an existing file is the user's
-// and is never touched.
+// Seed writes the default hotwords and corrections files when absent; an
+// existing file is the user's and is never touched.
 func Seed() {
-	files := map[string]string{"hotwords.txt": "hotwords.txt", "corrections.tsv": "corrections.tsv"}
-	for _, m := range RefineModes {
-		files[filepath.Join("modes.d", m+".md")] = "modes/" + m + ".md"
+	for _, name := range []string{"hotwords.txt", "corrections.tsv"} {
+		seed(filepath.Join(ConfigDir(), name), name)
 	}
-	for name, from := range files {
-		path := filepath.Join(ConfigDir(), name)
-		if _, err := os.Stat(path); err == nil {
-			continue
+}
+
+// SeedPrompt writes the built-in prompt of a mode the app comes with as
+// path, when path is that mode's prompt file and nothing is there: the copy
+// the user opens to edit. A mode whose file was never opened reads the
+// built-in, so its prompt is the one the build carries.
+func SeedPrompt(path string) {
+	for _, m := range RefineModes {
+		if path == (RefineConfig{Mode: m}).PromptPath() {
+			seed(path, "modes/"+m+".md")
 		}
-		b, _ := defaults.ReadFile("defaults/" + from)
-		err := os.MkdirAll(filepath.Dir(path), 0o755)
-		if err == nil {
-			err = os.WriteFile(path, b, 0o644)
-		}
-		if err != nil {
-			log.Printf("config: seed %s: %v", path, err)
-		}
+	}
+}
+
+// seed writes the default file from as path when nothing is there.
+func seed(path, from string) {
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	b, _ := defaults.ReadFile("defaults/" + from)
+	err := os.MkdirAll(filepath.Dir(path), 0o755)
+	if err == nil {
+		err = os.WriteFile(path, b, 0o644)
+	}
+	if err != nil {
+		log.Printf("config: seed %s: %v", path, err)
 	}
 }

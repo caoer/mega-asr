@@ -126,32 +126,45 @@ func TestSetRefineKeyKeepsItOnlyAfterTheTest(t *testing.T) {
 	}
 }
 
-// The three modes' prompts are written once as modes.d/<mode>.md: an edit
-// survives the next start, and an upgrade's built-in does not replace it.
-func TestSeedModesOnce(t *testing.T) {
+// A mode's prompt is the build's until the user opens it to edit: a start
+// writes no prompt file, so a take sends the prompt of the build that runs.
+// Opening it writes the built-in once as modes.d/<mode>.md, and from then
+// the file is the user's: an edit survives the next start and a new build.
+func TestPromptIsTheBuildsUntilEdited(t *testing.T) {
 	dir := isolate(t)
-	Seed()
+	prompts := func() int {
+		files, _ := os.ReadDir(filepath.Join(dir, "modes.d"))
+		return len(files)
+	}
+	Seed() // a start
 	for _, m := range RefineModes {
-		b, err := os.ReadFile(filepath.Join(dir, "modes.d", m+".md"))
 		want, _ := defaults.ReadFile("defaults/modes/" + m + ".md")
-		if err != nil || len(b) == 0 || !bytes.Equal(b, want) {
-			t.Errorf("%s: seeded %d bytes, %v", m, len(b), err)
+		if s, err := (RefineConfig{Mode: m}).Prompt(); err != nil || s != strings.TrimSpace(string(want)) {
+			t.Errorf("%s: the prompt is not the built-in: %v", m, err)
 		}
 	}
-	tidy := filepath.Join(dir, "modes.d", "tidy.md")
+	if n := prompts(); n != 0 {
+		t.Errorf("a start wrote %d prompt files", n)
+	}
+	tidy := (RefineConfig{Mode: "tidy"}).PromptPath()
+	SeedPrompt(tidy) // Edit Prompt…
+	want, _ := defaults.ReadFile("defaults/modes/tidy.md")
+	if b, err := os.ReadFile(tidy); err != nil || len(b) == 0 || !bytes.Equal(b, want) {
+		t.Errorf("opened to edit: %d bytes, %v, want the built-in", len(b), err)
+	}
 	if err := os.WriteFile(tidy, []byte("my own tidy prompt\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	os.Remove(filepath.Join(dir, "modes.d", "translate.md"))
-	Seed() // the next start, or a new build's
-	if b, _ := os.ReadFile(tidy); string(b) != "my own tidy prompt\n" {
-		t.Errorf("the edit was replaced: %q", b)
-	}
+	Seed()           // the next start, or a new build's
+	SeedPrompt(tidy) // opened again
 	if s, err := (RefineConfig{Mode: "tidy"}).Prompt(); err != nil || s != "my own tidy prompt" {
 		t.Errorf("tidy's prompt %q, %v", s, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "modes.d", "translate.md")); err != nil {
-		t.Errorf("a removed prompt is not written again: %v", err)
+	// A file that is no built-in mode's prompt is not written.
+	SeedPrompt(GlossaryPath())
+	SeedPrompt(filepath.Join(dir, "modes.d", "meeting-notes.md"))
+	if _, err := os.Stat(GlossaryPath()); err == nil || prompts() != 1 {
+		t.Errorf("opening other files wrote a prompt: %d prompt files, glossary %v", prompts(), err)
 	}
 }
 

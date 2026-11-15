@@ -33,6 +33,10 @@ func main() {
 	if err := gfs.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
+	if helpAsked(gfs.Args()) {
+		fmt.Print(hostUsage)
+		return
+	}
 	c, err := parseHost(gfs.Args())
 	if err == nil {
 		if c.Group == "config" {

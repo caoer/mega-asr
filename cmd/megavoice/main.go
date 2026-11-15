@@ -155,8 +155,49 @@ func main() {
 		}
 		os.Exit(2)
 	}
-	cmd, args := gfs.Arg(0), gfs.Args()[1:]
+	if err := dispatch(o, gfs.Arg(0), gfs.Args()[1:]); err != nil {
+		var ec exitCode
+		if errors.As(err, &ec) {
+			os.Exit(int(ec))
+		}
+		fmt.Fprintln(os.Stderr, "megavoice:", err)
+		os.Exit(1)
+	}
+}
+
+// subUsage is the usage a subcommand prints for --help: its own where it
+// has one, else the whole command's.
+func subUsage(cmd string) string {
+	switch cmd {
+	case "config":
+		return configUsage
+	case "resend":
+		return resendUsage
+	case "retranscribe":
+		return retranscribeUsage
+	case "takes":
+		return takesUsage
+	case "events":
+		return eventsUsage
+	}
+	return usage
+}
+
+// dispatch runs one subcommand. A subcommand asked for its help prints it
+// and runs nothing; one that takes no arguments refuses any.
+func dispatch(o app.LoadOpts, cmd string, args []string) error {
+	if helpAsked(args) {
+		fmt.Print(subUsage(cmd))
+		return nil
+	}
 	var err error
+	switch cmd {
+	case "start", "mics", "version", "status", "toggle", "send", "cancel", "spike", "quit":
+		if len(args) > 0 {
+			fmt.Fprint(os.Stderr, usage)
+			return exitCode(2)
+		}
+	}
 	switch cmd {
 	case "serve":
 		err = serve(o, args)
@@ -216,16 +257,9 @@ func main() {
 		fmt.Print(audio.Version())
 	default:
 		fmt.Fprint(os.Stderr, usage)
-		os.Exit(2)
+		return exitCode(2)
 	}
-	if err != nil {
-		var ec exitCode
-		if errors.As(err, &ec) {
-			os.Exit(int(ec))
-		}
-		fmt.Fprintln(os.Stderr, "megavoice:", err)
-		os.Exit(1)
-	}
+	return err
 }
 
 // remoteCmd is `megavoice remote rotate`: the running agent gives this Mac a
