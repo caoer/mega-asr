@@ -101,6 +101,9 @@ const (
 	actPair      // pair a found box: arg its host:port, key its ssh Host ("" by PIN)
 	actTake      // arg stop or cancel, key the take: the recording dictation take, from the menu
 	actExit      // arg restart or quit, ending a recording take first as offered
+	actEdit      // arg: a file to open in the text editor, written empty (a prompt: the built-in) when absent
+	actModel     // ask for refine.model, arg its value now, then set it
+	actKey       // Set API Key…: ask for the model step's key and keep it once a test call passes
 )
 
 type act struct {
@@ -381,6 +384,128 @@ type voiceState struct {
 	Release       string            // a staging build's update or model-download line
 	Staging       bool              // the build friends install: the menu offers 检查更新 and leaves out compare, hotwords, corrections and checks
 	Update        []string          // update.command: a dev build's 检查更新, its installer's command; empty offers none
+	Refine        refineSettings    // the file's: read at every take
+}
+
+// refineSettings is the model step as the config file reads.
+type refineSettings struct {
+	On       bool
+	Mode     string
+	Model    string
+	Effort   string
+	Keyed    bool // refine.provider names a provider table: the step can be switched on
+	Context  app.RefineContextConfig
+	Prompt   string // the mode's prompt file
+	Glossary string // glossary.txt
+}
+
+// named is a config value and its name in the menu.
+type named struct {
+	key   string
+	label l10n.Pair
+}
+
+// refineModes are refine.mode's values as the menu names them.
+var refineModes = []named{
+	{"fix-words", l10n.Pair{"Fix Mis-heard Words", "纠正听错的词"}},
+	{"tidy", l10n.Pair{"Tidy", "整理口语"}},
+	{"translate", l10n.Pair{"Translate", "按意思翻译"}},
+}
+
+// refineModels are the models the menu offers; Other… takes any id.
+var refineModels = []string{"claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"}
+
+// refineEfforts are refine.effort's values as the menu names them.
+var refineEfforts = []named{
+	{"off", l10n.Pair{"Off (No Thinking)", "关（不思考）"}},
+	{"low", l10n.Pair{"Low", "低"}},
+	{"medium", l10n.Pair{"Medium", "中"}},
+	{"high", l10n.Pair{"High", "高"}},
+}
+
+func pairLabel(ps []named, k string) string {
+	for _, p := range ps {
+		if p.key == k {
+			return p.label.String()
+		}
+	}
+	return k
+}
+
+// refineRow is the model step's submenu: each item writes its key, and the
+// next take reads it.
+func (v voiceState) refineRow() row {
+	r, ok := v.Refine, v.FileErr == ""
+	pick := func(title string, on bool, key, val string) row {
+		return row{title: title, enabled: ok, checked: on, act: &act{kind: actSet, key: key, arg: val}}
+	}
+	toggle := func(title string, on bool, key string) row { return pick(title, on, key, strconv.FormatBool(!on)) }
+	colon := l10n.T(": ", "：")
+
+	var modes []row
+	for _, m := range refineModes {
+		modes = append(modes, pick(m.label.String(), m.key == r.Mode, "refine.mode", strconv.Quote(m.key)))
+	}
+	modes = append(modes, row{sep: true},
+		row{title: l10n.T("Tidy and Translate return the whole text;", "整理和翻译交回整段文字；")},
+		row{title: l10n.T("one that fails its length check delivers what you said", "过不了长度检查的，按你说的原文送出")},
+		row{title: l10n.T("Translate's language is in its prompt", "翻译成哪种语言写在它的提示词里")})
+
+	var models []row
+	for _, m := range refineModels {
+		models = append(models, pick(m, m == r.Model, "refine.model", strconv.Quote(m)))
+	}
+	if r.Model != "" && !slices.Contains(refineModels, r.Model) {
+		models = append(models, row{title: r.Model, checked: true})
+	}
+	models = append(models, row{sep: true}, row{title: l10n.T("Other…", "其他…"), enabled: ok, act: &act{kind: actModel, arg: r.Model}})
+
+	var efforts []row
+	for _, e := range refineEfforts {
+		efforts = append(efforts, pick(e.label.String(), e.key == r.Effort, "refine.effort", strconv.Quote(e.key)))
+	}
+
+	c := r.Context
+	ctx := []row{
+		toggle(l10n.T("App and Window Title", "应用和窗口标题"), c.App, "refine.context.app"),
+		toggle(l10n.T("Text of the Field", "输入框里的文字"), c.Field, "refine.context.field"),
+		toggle(l10n.T("Clipboard", "剪贴板"), c.Clipboard, "refine.context.clipboard"),
+		{sep: true},
+		pick(l10n.T("Screen: Off", "屏幕：不发"), c.Screen == "off", "refine.context.screen", `"off"`),
+		pick(l10n.T("Screen: Its Text (OCR)", "屏幕：识别出的文字"), c.Screen == "ocr", "refine.context.screen", `"ocr"`),
+		pick(l10n.T("Screen: Image", "屏幕：截图"), c.Screen == "image", "refine.context.screen", `"image"`),
+	}
+
+	on := row{title: l10n.T("On", "开启"), enabled: ok && (r.Keyed || r.On), checked: r.On, act: &act{kind: actSet, key: "refine.on", arg: strconv.FormatBool(!r.On)}}
+	sub := []row{on}
+	if !r.Keyed {
+		sub = append(sub, row{title: l10n.T("Set API Key… first", "先设置 API Key…"), indent: 1})
+	}
+	sub = append(sub, row{sep: true},
+		row{title: l10n.T("Mode", "模式") + colon + pairLabel(refineModes, r.Mode), enabled: true, sub: modes},
+		row{title: l10n.T("Model", "模型") + colon + r.Model, enabled: true, sub: models},
+		row{title: l10n.T("Effort", "思考") + colon + pairLabel(refineEfforts, r.Effort), enabled: true, sub: efforts},
+		row{title: l10n.T("Context", "上下文"), enabled: true, sub: ctx},
+		row{sep: true},
+		row{title: l10n.T("Edit Prompt…", "编辑提示词…"), enabled: true, act: &act{kind: actEdit, arg: r.Prompt}},
+		row{title: l10n.T("Edit Glossary…", "编辑词表…"), enabled: true, act: &act{kind: actEdit, arg: r.Glossary}},
+		row{title: l10n.T("Set API Key…", "设置 API Key…"), enabled: ok, act: &act{kind: actKey}},
+		row{sep: true},
+		row{title: l10n.T("Applies at the next take", "下一条录音起生效")},
+	)
+	state := l10n.T("Off", "关")
+	if r.On {
+		state = pairLabel(refineModes, r.Mode)
+	}
+	return row{title: l10n.T("Model Step", "模型纠错") + colon + state, enabled: true, sub: sub}
+}
+
+// refineOf is the menu's view of [refine], the mode's prompt and the
+// glossary beside the config.
+func refineOf(r app.RefineConfig) refineSettings {
+	_, keyed := r.Providers[r.Provider]
+	return refineSettings{On: r.On, Mode: r.Mode, Model: r.Model, Effort: r.Effort, Keyed: keyed, Context: r.Context,
+		Prompt: r.PromptPath(), Glossary: app.GlossaryPath()}
 }
 
 // voiceTake is the dictation take recording now, if one does.
@@ -568,6 +693,7 @@ func (v voiceState) rows() []row {
 	}
 	engs = append(engs, row{sep: true}, row{title: l10n.T("Doubao streams each take as you speak;", "豆包边说边识别；")}, row{title: l10n.T("Fun-ASR stands in when it fails (offline)", "它出错时（离线）由 Fun-ASR 接替")})
 	rs = append(rs, setting(l10n.T("Engine", "引擎"), engineLabel(f.Engine), engineLabel(r.Engine), engs))
+	rs = append(rs, v.refineRow())
 	if !v.Staging {
 		rs = append(rs, v.compareRows(r.Engine)...)
 		rs = append(rs,
@@ -735,6 +861,19 @@ func (v voiceState) checks() row {
 func capital(s string) string {
 	r, n := utf8.DecodeRuneInString(s)
 	return string(unicode.ToUpper(r)) + s[n:]
+}
+
+// touch makes path an empty file when it is absent, for Edit Glossary…
+// to open; an existing file is left as it is.
+func touch(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // lastTake is the newest finished take in dir: a WAV with its text beside

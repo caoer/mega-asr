@@ -2,6 +2,8 @@ package deliver
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -188,5 +190,27 @@ func TestRouterTelegramTimeout(t *testing.T) {
 	}
 	if !slices.Equal(*got, []Outcome{Timeout}) {
 		t.Errorf("outcomes %q, want [timeout]", *got)
+	}
+}
+
+// A keypad take that sends goes to the locked chat, whose record is an
+// agent's target, and a both text reaches it as one message, whole; the same
+// take ending as a paste goes to the Mac's target, which is not.
+func TestRouterAgentTarget(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "got")
+	r, _, lock := newRouter(&fakeMac{}, fakeSend(`cat >/dev/null; printf '%s' "$3" >> `+out+`; echo "Sent → message 5"`))
+	*lock = TelegramTarget{Chat: "-100", Group: "g"}
+	captured := r.CaptureKeypad(lock)
+	end := captured.(session.EndTarget)
+	if st := session.StoreTarget(end.ForEnd(true)); !st.IsAgent() {
+		t.Fatalf("the locked chat's record %+v is not an agent's", st)
+	}
+	if st := session.StoreTarget(end.ForEnd(false)); st.IsAgent() {
+		t.Fatalf("the Mac's target %+v reads as an agent's", st)
+	}
+	text := "用Haiku跑一下\n\n[Mega Voice · heard → corrected] 海库 → Haiku"
+	take(r, captured, text, true)
+	if b, _ := os.ReadFile(out); string(b) != text {
+		t.Fatalf("sent %q, want %q once", b, text)
 	}
 }

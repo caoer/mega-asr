@@ -7,6 +7,7 @@ Key: Right Option > [Right Shift | ✓Right Option | --- | Applies after Restart
 Decode whole: up to 1 min > [None, every take streams | Up to 30 s | ✓Up to 1 min | Up to 2 min | Up to 5 min | --- | A take this long or shorter is decoded whole at stop; | a longer one streams in chunks while you speak | --- | Applies after Restart Mega Voice Dev]
 Model: Base > [✓Base | --- | lab-build | --- | Checks › Transcribe and Script Check use it at once | --- | Applies after Restart Mega Voice Dev]
 Engine: Fun-ASR (local) > [✓Fun-ASR (local) | Doubao 2.0 (cloud) | --- | Doubao streams each take as you speak; | Fun-ASR stands in when it fails (offline) | --- | Applies after Restart Mega Voice Dev]
+Model Step: Off > [On |   Set API Key… first | --- | Mode: Fix Mis-heard Words > [✓Fix Mis-heard Words | Tidy | Translate | --- | Tidy and Translate return the whole text; | one that fails its length check delivers what you said | Translate's language is in its prompt] | Model: claude-haiku-5-5 > [✓claude-haiku-5-5 | claude-sonnet-5-5 | claude-opus-5-5 | --- | Other…] | Effort: Low > [Off (No Thinking) | ✓Low | Medium | High] | Context > [App and Window Title | Text of the Field | Clipboard | --- | ✓Screen: Off | Screen: Its Text (OCR) | Screen: Image] | --- | Edit Prompt… * | Edit Glossary… * | Set API Key… | --- | Applies at the next take]
 Compare Mode
 Compare Engines > [✓Fun-ASR (local) — primary | ✓Doubao 2.0 (cloud) | --- | Each take also goes to the checked engines; | the primary delivers as always]
 Edit Hotwords… *

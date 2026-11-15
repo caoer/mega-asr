@@ -35,6 +35,9 @@ type Request struct {
 	// Dictation is the take's text, sent inside <dictation>: material for
 	// the model, never a message to it.
 	Dictation string
+	// Output is what the answer is: EditList ("" too), the changes to make,
+	// or FullText, the whole text to deliver.
+	Output string
 }
 
 // UserContent is the user message of r: the context, when there is one, and
@@ -69,9 +72,11 @@ type Usage struct {
 	Output     int `json:"output_tokens"`
 }
 
-// Reply is a provider's answer: the edit list.
+// Reply is a provider's answer: the edit list, or for a FullText request
+// the text.
 type Reply struct {
 	Edits []Edit
+	Text  string
 	Usage Usage
 }
 
@@ -84,7 +89,7 @@ type Provider interface {
 
 var (
 	ErrRefusal     = errors.New("the model declined")
-	ErrUnparseable = errors.New("the answer is not an edit list")
+	ErrUnparseable = errors.New("the answer is not an edit list or a text")
 )
 
 // HTTPError is a provider's status other than 200, with the head of its body.
@@ -100,7 +105,7 @@ const (
 	WhyTimeout = "timeout" // the call outlasted Step.Timeout
 	WhyHTTP    = "http"    // a status other than 200
 	WhyRefusal = "refusal" // the model declined
-	WhyParse   = "parse"   // the answer is not an edit list
+	WhyParse   = "parse"   // the answer is not the edit list or the text asked for
 	WhyGuard   = "guard"   // a change failed the mode's guard
 	WhyError   = "error"   // anything else: no route, a cancelled take
 )
@@ -108,6 +113,7 @@ const (
 // Step is the model step as one take runs it.
 type Step struct {
 	Provider Provider
+	Mode     string // what the model is asked to do (Modes); "" is fix-words
 	Model    string
 	Effort   string
 	System   []string      // Request.System
@@ -130,7 +136,8 @@ func (s Step) Run(ctx context.Context, text string) Result {
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 	t0 := time.Now()
-	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System, Dictation: text})
+	output := OutputOf(s.Mode)
+	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System, Dictation: text, Output: output})
 	r := Result{Text: text, Usage: reply.Usage, Wall: time.Since(t0)}
 	if err != nil {
 		r.Err = err
@@ -147,6 +154,14 @@ func (s Step) Run(ctx context.Context, text string) Result {
 		default:
 			r.Why = WhyError
 		}
+		return r
+	}
+	if output == FullText {
+		if err := CheckText(s.Mode, text, reply.Text); err != nil {
+			r.Why, r.Err = WhyGuard, err
+			return r
+		}
+		r.Text = reply.Text
 		return r
 	}
 	out, applied, dropped, err := Apply(text, reply.Edits)

@@ -266,7 +266,12 @@ func apply(mi objc.ID, it Item, acts *[]func()) {
 }
 
 // Field is one text field of a Prompt.
-type Field struct{ Label, Placeholder, Value string }
+// Field is one text field of Prompt; a Secret one shows dots for what is
+// typed.
+type Field struct {
+	Label, Placeholder, Value string
+	Secret                    bool
+}
 
 // Prompt asks for fields in a modal alert brought to the front, with ok as
 // the default button; it returns the values, or false when cancelled. Call
@@ -287,7 +292,11 @@ func Prompt(title, info, ok string, fields []Field) ([]string, bool) {
 		label := send(class("NSTextField"), "labelWithString:", nsString(f.Label))
 		send(label, "setFrame:", CGRect{0, y + 28, w, 18})
 		send(view, "addSubview:", label)
-		t := send(class("NSTextField"), "textFieldWithString:", nsString(f.Value))
+		cls := "NSTextField"
+		if f.Secret {
+			cls = "NSSecureTextField"
+		}
+		t := send(class(cls), "textFieldWithString:", nsString(f.Value))
 		send(t, "setPlaceholderString:", nsString(f.Placeholder))
 		send(t, "setFrame:", CGRect{0, y + 4, w, 22})
 		send(view, "addSubview:", t)

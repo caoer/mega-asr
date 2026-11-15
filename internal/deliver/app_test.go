@@ -128,3 +128,34 @@ func TestResolveRefusesGoneTargets(t *testing.T) {
 		t.Error("a pane resolved while herdr did not answer")
 	}
 }
+
+// A pane's record names the agent herdr sees in it, whether the take found
+// the pane focused, a scratch instance names it, or a resend resolves it; a
+// pane with no agent is no agent's target.
+func TestPaneRecordsItsAgent(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "herdr")
+	script := `#!/bin/sh
+case "$1 $2" in
+"pane list") echo '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1"},{"pane_id":"w1:p2","workspace_id":"w1","agent":"claude"}]}}' ;;
+"workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"saltmarsh"}]}}' ;;
+*) echo "unexpected: $*" >&2; exit 1 ;;
+esac
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for pane, agent := range map[string]string{"w1:p1": "", "w1:p2": "claude"} {
+		d := Deliverer{Herdr: Herdr{Bin: bin}}
+		resolved, err := d.Resolve("pane:" + pane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.Pane = pane
+		for how, st := range map[string]session.Target{"scratch": d.Capture(), "resend": resolved} {
+			r := st.(*Target).Record()
+			if r.Kind != "herdr" || r.Agent != agent || r.IsAgent() != (agent != "") {
+				t.Errorf("%s %s: record %+v", how, pane, r)
+			}
+		}
+	}
+}

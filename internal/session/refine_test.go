@@ -136,3 +136,39 @@ func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
 		t.Fatalf("asked %d, refine %+v, final %q, phone %q", asked, refine, got, sink.got())
 	}
 }
+
+// What the step gives an agent's target is what the take delivers, whole and
+// once: under both the corrected text with its marked second part, which the
+// deliver line keeps; under raw the text as recognised, with no text on the
+// deliver line, while the refine line keeps the edits and the overlay says
+// they were only recorded.
+func TestRefineAgentCopies(t *testing.T) {
+	edits := []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}
+	for _, tc := range []struct {
+		copy, text, deliverText string
+	}{
+		{"both", "用Haiku跑一下 Python\n\n[Mega Voice · heard → corrected] 海库 → Haiku", "用Haiku跑一下 Python\n\n[Mega Voice · heard → corrected] 海库 → Haiku"},
+		{"raw", "用海库跑一下 Python", ""},
+	} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+		r.c.Deliver = paneDeliverer{r.del}
+		ev := &store.Event{Ev: "refine", Model: "m", LatencyMS: 900, Edits: edits, Copy: tc.copy}
+		r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
+			return func(context.Context, RefineInput) (string, *store.Event) { return tc.text, ev }
+		}
+		r.c.Toggle()
+		r.c.Toggle()
+		r.wait(t)
+		if d := r.del.got(); !strings.HasSuffix(d, "|"+tc.text) || strings.Count(d, "Python") != 1 {
+			t.Fatalf("%s: delivered %q", tc.copy, d)
+		}
+		refine, deliver := refineLines(t, r.dir+"/20200417-104200")
+		if refine == nil || refine.Copy != tc.copy || len(refine.Edits) != 1 || deliver == nil || deliver.Text != tc.deliverText {
+			t.Fatalf("%s: refine %+v, deliver %+v", tc.copy, refine, deliver)
+		}
+		note := refineNote(ev)
+		if !strings.Contains(r.ui.String(), "flash:"+note) || strings.HasPrefix(note, "海库") == (tc.copy == "raw") {
+			t.Fatalf("%s: note %q, ui %s", tc.copy, note, r.ui)
+		}
+	}
+}

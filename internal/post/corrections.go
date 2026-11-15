@@ -39,6 +39,13 @@ type Corrections []Rule
 // lines starting with # are skipped. "zh:" before the mishearing makes a Zh
 // rule.
 func ParseCorrections(r io.Reader) (Corrections, error) {
+	c, err := parse(r)
+	c.order()
+	return c, err
+}
+
+// parse reads the lines of a table as rules, in the table's order.
+func parse(r io.Reader) (Corrections, error) {
 	var c Corrections
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {
@@ -57,7 +64,6 @@ func ParseCorrections(r io.Reader) (Corrections, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	c.order()
 	return c, nil
 }
 
@@ -138,32 +144,35 @@ func CorrectionsFile(path string) Stage {
 
 // CorrectionsFiles is a Stage that reads the tables paths names on every
 // call and applies them as one table, so an edit, a new file or a removed
-// one takes effect at the next utterance. A missing file corrects nothing; a
-// malformed one is logged and skipped, and the others still apply.
+// one takes effect at the next utterance.
 func CorrectionsFiles(paths func() []string) Stage {
 	return func(s string) string {
-		var all Corrections
-		for _, path := range paths() {
-			c, err := readCorrections(path)
-			if err != nil {
-				log.Printf("post: corrections %s: %v", path, err)
-				continue
-			}
-			all = append(all, c...)
-		}
+		all := Corrections(ReadRules(paths()...))
 		all.order()
 		return all.Apply(s)
 	}
 }
 
-func readCorrections(path string) (Corrections, error) {
-	f, err := os.Open(path)
-	if os.IsNotExist(err) {
-		return nil, nil
+// ReadRules reads the tables at paths as one list of rules, in the order
+// the files give them. A missing file adds nothing; a malformed one is
+// logged and skipped, and the others still count.
+func ReadRules(paths ...string) []Rule {
+	var all []Rule
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		var c Corrections
+		if err == nil {
+			c, err = parse(f)
+			f.Close()
+		}
+		if err != nil {
+			log.Printf("post: corrections %s: %v", path, err)
+			continue
+		}
+		all = append(all, c...)
 	}
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return ParseCorrections(f)
+	return all
 }

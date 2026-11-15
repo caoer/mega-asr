@@ -28,7 +28,12 @@ func TestVoiceMenu(t *testing.T) {
 		Models:  []model{{"lab-build", build}},
 		Logs:    []string{"/L/megavoice.log", "/L/megameet.log"},
 		Capture: app.CaptureConfig{Source: "local", Mic: "default"},
-		Inputs:  []inputView{{"builtin-mic", "Built-in Microphone", 1, true}, {"stage-interface", "Stage Interface", 3, false}}}
+		Inputs:  []inputView{{"builtin-mic", "Built-in Microphone", 1, true}, {"stage-interface", "Stage Interface", 3, false}},
+		Refine: refineSettings{Mode: "fix-words", Model: "claude-haiku-5-5", Effort: "low", Context: app.RefineContextConfig{Screen: "off"},
+			Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.txt"}} // the shipped defaults: no key yet
+	refineOn := base
+	refineOn.Refine = refineSettings{On: true, Keyed: true, Mode: "translate", Model: "a-typed-model", Effort: "off",
+		Context: app.RefineContextConfig{App: true, Clipboard: true, Screen: "image"}, Prompt: "/c/modes.d/translate.md", Glossary: "/c/glossary.txt"}
 	pending := base
 	pending.File = voiceSettings{TapKey: "right_shift", WholeMax: 90 * time.Second, LLM: build, Engine: "doubao"}
 	pending.Compare = compareSettings{On: true}
@@ -67,7 +72,7 @@ func TestVoiceMenu(t *testing.T) {
 		v    voiceState
 	}{{"settled", base}, {"pending", pending}, {"broken", broken}, {"busy", busy}, {"input-pinned", pinned}, {"input-absent", absent}, {"input-ssh", ssh},
 		{"input-remote-online", online}, {"input-remote-offline", offline}, {"input-remote-unpaired", unpaired},
-		{"input-add-found", found}, {"input-add-searching", searching}, {"input-add-no-network", localNet}, {"recording", recording}, {"listener-held", portHeld}} {
+		{"input-add-found", found}, {"input-add-searching", searching}, {"input-add-no-network", localNet}, {"recording", recording}, {"listener-held", portHeld}, {"refine-on", refineOn}} {
 		t.Run(c.name, func(t *testing.T) {
 			got := titles(c.v.rows())
 			if want, err := os.ReadFile(filepath.Join("testdata", "voicemenu-"+c.name+".txt")); os.Getenv("UPDATE") != "" {

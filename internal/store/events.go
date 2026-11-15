@@ -105,6 +105,10 @@ type Event struct {
 	Edits    []RefineEdit `json:"edits,omitempty"`
 	Dropped  int          `json:"dropped,omitempty"`
 	Usage    *RefineUsage `json:"usage,omitempty"`
+	// Copy is what an agent target got of the step's result (refine.agent_copy):
+	// "both", the corrected text and the marked second part; "raw", the
+	// recognised text, the edits recorded only. Empty: the text the step gave.
+	Copy string `json:"copy,omitempty"`
 }
 
 // RefineEdit is a change the model step made: every From in the text became
@@ -143,6 +147,13 @@ type Target struct {
 	PID       int    `json:"pid,omitempty"`
 	BundleID  string `json:"bundle_id,omitempty"`
 	Title     string `json:"title,omitempty"`
+	Agent     string `json:"agent,omitempty"` // the agent herdr sees in the pane
+}
+
+// IsAgent reports whether the target is an agent's: a herdr pane herdr sees
+// an agent in, or the Telegram chat of the locked keypad.
+func (t *Target) IsAgent() bool {
+	return t != nil && (t.Kind == "telegram" || t.Kind == "herdr" && t.Agent != "")
 }
 
 // Prev is the take before this one and the seconds between them.

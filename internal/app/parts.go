@@ -215,8 +215,8 @@ func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target
 	if err != nil {
 		return fail(refine.WhyError, err)
 	}
-	res := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Model: r.Model, Effort: r.Effort,
-		System: []string{prompt}, Timeout: r.Limit(target)}.Run(ctx, text)
+	res := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
+		System: append([]string{prompt}, Glossary().Blocks()...), Timeout: r.Limit(target)}.Run(ctx, text)
 	ev.LatencyMS, ev.Dropped = res.Wall.Milliseconds(), res.Dropped
 	if u := res.Usage; u != (refine.Usage{}) {
 		ev.Usage = &store.RefineUsage{Input: u.Input, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead, Output: u.Output}
@@ -228,6 +228,29 @@ func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target
 		return fail(res.Why, res.Err)
 	}
 	ev.At = time.Now()
+	return r.agentCopy(text, res, target, ev)
+}
+
+// agentCopy is what a take bound for target delivers of the step's result
+// res on text: for an agent's target (store.Target.IsAgent) as agent_copy
+// says — refined, the corrected text; both, the corrected text with the
+// marked second part when something changed (refine.Both); raw, text as it
+// came, the edits on the refine line only — and the corrected text for
+// every other target. ev.Copy records which.
+func (r RefineConfig) agentCopy(text string, res refine.Result, target *store.Target, ev *store.Event) (string, *store.Event) {
+	if !target.IsAgent() {
+		return res.Text, ev
+	}
+	switch r.AgentCopy {
+	case "raw":
+		ev.Copy = "raw"
+		return text, ev
+	case "both":
+		if res.Text != text {
+			ev.Copy = "both"
+		}
+		return refine.Both(text, res.Text, res.Edits), ev
+	}
 	return res.Text, ev
 }
 

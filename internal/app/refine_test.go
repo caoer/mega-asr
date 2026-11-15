@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -157,7 +158,7 @@ func TestRefineStageReadsTheFileOnlyWhenItChanged(t *testing.T) {
 		t.Fatalf("3 takes with the step off read the config %d times, want the first take's once:\n%s", n, logged.String())
 	}
 	logged.Reset()
-	writeConfig(t, dir, "[refine]\nmode = \"tidy\"\n")
+	writeConfig(t, dir, "[refine]\nmode = \"rewrite\"\n")
 	takes()
 	if n := strings.Count(logged.String(), "keeping refine.on = false"); n != 1 {
 		t.Fatalf("a file that does not load is reported %d times in 3 takes, want once:\n%s", n, logged.String())
@@ -277,7 +278,7 @@ key_file = "/keys/other.key"
 		{"[refine.providers.gateway]\nkind = \"anthropic\"\nbase_url = \"https://g.example\"\nkey_file = \"/k\"\nkey = \"sk\"\n", "unknown key refine.providers.gateway.key"},
 		{"[refine]\non = true\n", "refine.provider: \"\" is not a [refine.providers.<name>] table"},
 		{"[refine]\non = true\nprovider = \"o\"\n[refine.providers.o]\nkind = \"openai\"\nbase_url = \"https://o.example/v1\"\nkey_file = \"/k\"\n", "refine.provider: o is kind openai"},
-		{"[refine]\nmode = \"tidy\"\n", "refine.mode: \"tidy\" is not one of fix-words"},
+		{"[refine]\nmode = \"rewrite\"\n", "refine.mode: \"rewrite\" is not one of fix-words"},
 		{"[refine]\neffort = \"max\"\n", "refine.effort"},
 		{"[refine]\ntimeout = \"-1s\"\n", "refine.timeout"},
 		{"[refine]\nagent_copy = \"none\"\n", "refine.agent_copy"},
@@ -342,5 +343,64 @@ func TestRefinePromptFile(t *testing.T) {
 	}
 	if l.Refine.Run(context.Background(), "好", nil); system != "my prompt" {
 		t.Fatalf("system %q, want the user's file", system)
+	}
+}
+
+// Toward an agent's target — a herdr pane with an agent in it, the keypad's
+// Telegram chat — agent_copy chooses what is delivered: refined, the
+// corrected text; both, the corrected text with the marked changes; raw, the
+// text as recognised. Every other target gets the corrected text under each
+// value. The refine line keeps the edits whatever was delivered.
+func TestAgentCopy(t *testing.T) {
+	const heard, fixed = "用海库跑一下", "用Haiku跑一下"
+	both := fixed + "\n\n" + refine.MarkEdits + " 海库 → Haiku"
+	pane := &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}
+	chat := &store.Target{Kind: "telegram", App: "报到群"}
+	others := []*store.Target{{Kind: "herdr", Pane: "w1:p1"}, {Kind: "app", App: "Notes"}, {Kind: "clipboard"}, nil}
+	p := newProvider(t)
+	p.answer = edits(`[{"from":"海库","why":"模型名","to":"Haiku"}]`)
+	for _, tc := range []struct{ copy, agent, line string }{
+		{"refined", fixed, ""},
+		{"both", both, "both"},
+		{"raw", heard, "raw"},
+	} {
+		dir := isolate(t)
+		refineConfig(t, dir, p.URL, "agent_copy = \""+tc.copy+"\"\n")
+		l, err := Load(LoadOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := l.RefineStage(LoadOpts{}).Take()
+		check := func(target *store.Target, want, line string) {
+			got, ev := run(context.Background(), session.RefineInput{Text: heard, Target: target})
+			if got != want || ev == nil || ev.Why != "" || ev.Copy != line || len(ev.Edits) != 1 || ev.Edits[0].To != "Haiku" {
+				t.Errorf("%s toward %+v: delivered %q, want %q; refine line %+v", tc.copy, target, got, want, ev)
+			}
+		}
+		check(pane, tc.agent, tc.line)
+		check(chat, tc.agent, tc.line)
+		for _, o := range others {
+			check(o, fixed, "")
+		}
+	}
+}
+
+// both adds nothing when the step changed nothing: the agent gets the text
+// as it came, once.
+func TestAgentCopyBothUnchanged(t *testing.T) {
+	const heard = "跑一下 Haiku"
+	p := newProvider(t)
+	p.answer = edits(`[]`)
+	dir := isolate(t)
+	refineConfig(t, dir, p.URL, "agent_copy = \"both\"\n")
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []*store.Target{{Kind: "herdr", Pane: "w1:p2", Agent: "codex"}, {Kind: "telegram"}} {
+		got, ev := l.RefineStage(LoadOpts{}).Take()(context.Background(), session.RefineInput{Text: heard, Target: target})
+		if got != heard || ev == nil || ev.Why != "" || ev.Copy != "" || len(ev.Edits) != 0 {
+			t.Errorf("toward %+v: delivered %q, refine line %+v", target, got, ev)
+		}
 	}
 }

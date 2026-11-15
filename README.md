@@ -313,6 +313,12 @@ drives AppKit/CoreGraphics).
   terms added and keeps that text, unless that decode's hot-word pass did not
   end at EOG (cut by the loop guard or the token cap), when the first text
   stands; every other chunk is decoded once, as without the file.
+  With the model step on (`[refine]`), the model is told these terms too: the
+  hot words, what the corrections table corrects to, then `glossary.txt` and
+  `glossary.d/*.txt` (one term per line, for terms not worth a hot-word slot;
+  the first 350 terms over all of them count), the table's rules as known
+  mis-hearings, and `about.txt`, a line on who you are and what you talk
+  about.
 - **Filler cleanup:** after corrections, `internal/post/filler.go` drops
   嗯/呃/um/uh, stutter repeats and VAD-break full stops; it only deletes (or
   turns 。 into ，) and delivers the raw text if that ever fails. Gold set,

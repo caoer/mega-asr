@@ -24,6 +24,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/relay/auth"
 )
 
@@ -260,7 +261,7 @@ type NamesConfig struct {
 // the mode's guards, leaves the text as it was.
 type RefineConfig struct {
 	On        bool                            `toml:"on"`
-	Mode      string                          `toml:"mode"`       // what the model is asked to do: fix-words
+	Mode      string                          `toml:"mode"`       // what the model is asked to do: fix-words, tidy or translate
 	Provider  string                          `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
 	Model     string                          `toml:"model"`      // the provider's model id
 	Effort    string                          `toml:"effort"`     // off, low, medium or high: how much the model thinks
@@ -289,7 +290,7 @@ type RefineProviderConfig struct {
 }
 
 // RefineModes are the modes refine.mode can name.
-var RefineModes = []string{"fix-words"}
+var RefineModes = refine.Modes
 
 type DeliverConfig struct {
 	HerdrApps []string `toml:"herdr_apps"` // bundle ids of herdr's host terminals
@@ -903,10 +904,13 @@ func (d DoubaoConfig) Key() (string, error) { return readKey(d.KeyFile, d.KeyVar
 // Key reads the provider's key from key_file, the whole file.
 func (p RefineProviderConfig) Key() (string, error) { return readKey(p.KeyFile, "") }
 
+// PromptPath is the mode's prompt file beside the config, modes.d/<mode>.md.
+func (r RefineConfig) PromptPath() string { return filepath.Join(ConfigDir(), "modes.d", r.Mode+".md") }
+
 // Prompt is the mode's instruction to the model: modes.d/<mode>.md beside
 // the config when the user keeps one, else the built-in.
 func (r RefineConfig) Prompt() (string, error) {
-	b, err := os.ReadFile(filepath.Join(ConfigDir(), "modes.d", r.Mode+".md"))
+	b, err := os.ReadFile(r.PromptPath())
 	if errors.Is(err, fs.ErrNotExist) {
 		b, err = defaults.ReadFile("defaults/modes/" + r.Mode + ".md")
 	}
@@ -1117,16 +1121,21 @@ func Template() []byte {
 	return b
 }
 
-// Seed writes the default hotwords and corrections files when absent; an
-// existing file is the user's and is never touched.
+// Seed writes the default hotwords and corrections files, and each mode's
+// prompt as modes.d/<mode>.md, when absent; an existing file is the user's
+// and is never touched.
 func Seed() {
-	for _, name := range []string{"hotwords.txt", "corrections.tsv"} {
+	files := map[string]string{"hotwords.txt": "hotwords.txt", "corrections.tsv": "corrections.tsv"}
+	for _, m := range RefineModes {
+		files[filepath.Join("modes.d", m+".md")] = "modes/" + m + ".md"
+	}
+	for name, from := range files {
 		path := filepath.Join(ConfigDir(), name)
 		if _, err := os.Stat(path); err == nil {
 			continue
 		}
-		b, _ := defaults.ReadFile("defaults/" + name)
-		err := os.MkdirAll(ConfigDir(), 0o755)
+		b, _ := defaults.ReadFile("defaults/" + from)
+		err := os.MkdirAll(filepath.Dir(path), 0o755)
 		if err == nil {
 			err = os.WriteFile(path, b, 0o644)
 		}

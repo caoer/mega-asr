@@ -68,6 +68,9 @@ const editsSchema = `{"type":"object","properties":{"edits":{"type":"array","ite
 	`"properties":{"from":{"type":"string"},"why":{"type":"string"},"to":{"type":"string"}},` +
 	`"required":["from","why","to"],"additionalProperties":false}}},"required":["edits"],"additionalProperties":false}`
 
+// textSchema constrains a FullText answer to the text alone.
+const textSchema = `{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`
+
 // thinking is the thinking type and the effort the API takes for a model at
 // the step's effort. off: Haiku 5.5 takes disabled, Sonnet 5.5 refuses that
 // and takes between_tools, and Opus 5.5, Fable and Mythos cannot stop
@@ -98,6 +101,9 @@ func (a Anthropic) body(req Request) ([]byte, error) {
 	}
 	m.Thinking.Type, m.Output.Effort = thinking(req.Model, req.Effort)
 	m.Output.Format.Type, m.Output.Format.Schema = "json_schema", json.RawMessage(editsSchema)
+	if req.Output == FullText {
+		m.Output.Format.Schema = json.RawMessage(textSchema)
+	}
 	return json.Marshal(m)
 }
 
@@ -179,10 +185,16 @@ func (a Anthropic) Refine(ctx context.Context, req Request) (Reply, error) {
 	}
 	var answer struct {
 		Edits *[]Edit `json:"edits"`
+		Text  *string `json:"text"`
 	}
-	if err := json.Unmarshal([]byte(text.String()), &answer); err != nil || answer.Edits == nil {
+	err = json.Unmarshal([]byte(text.String()), &answer)
+	switch {
+	case err == nil && req.Output == FullText && answer.Text != nil:
+		reply.Text = *answer.Text
+	case err == nil && req.Output != FullText && answer.Edits != nil:
+		reply.Edits = *answer.Edits
+	default:
 		return reply, fmt.Errorf("%w: %.200q", ErrUnparseable, text.String())
 	}
-	reply.Edits = *answer.Edits
 	return reply, nil
 }

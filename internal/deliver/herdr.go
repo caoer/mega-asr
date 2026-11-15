@@ -108,18 +108,19 @@ func (h Herdr) Panes() ([]Pane, error) {
 	return panes, nil
 }
 
-// Focused returns herdr's focused pane and the label of its workspace.
-func (h Herdr) Focused() (pane, workspace string, err error) {
+// pane is the first of herdr's panes that is; an error naming what when
+// none is.
+func (h Herdr) pane(what string, is func(Pane) bool) (Pane, error) {
 	panes, err := h.Panes()
 	if err != nil {
-		return "", "", err
+		return Pane{}, err
 	}
 	for _, p := range panes {
-		if p.Focused {
-			return p.ID, p.Workspace, nil
+		if is(p) {
+			return p, nil
 		}
 	}
-	return "", "", errors.New("herdr: no focused pane")
+	return Pane{}, errors.New("herdr: no " + what)
 }
 
 // SendText pastes text into a pane without pressing Enter, through herdr's

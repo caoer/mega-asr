@@ -87,8 +87,15 @@
 [refine]                     # the model step: after recognition, one call to a model puts mis-heard words right
 #                            # before the text is delivered. It needs a provider table and your own key
 # on = false                 # off: no call is made. On, a call that is slow, fails or is refused leaves the text as it was
-# mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else. Its prompt is
-#                            # modes.d/fix-words.md beside this file when you keep one, else the built-in
+# mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else; tidy: drop
+#                            # fillers and repeats, fix punctuation; translate: render it by meaning (into English;
+#                            # the language is in its prompt). Tidy and translate return the whole text, kept only
+#                            # when it passes a length check. Each mode's prompt is modes.d/<mode>.md beside this
+#                            # file, written once and then yours to edit; without it, the built-in
+#                            # The model is told your terms: the hot words, what the corrections table corrects to,
+#                            # and glossary.txt and glossary.d/*.txt beside this file (one term per line, the ones
+#                            # you say most first; the first 350 terms count), with the table's rules as known
+#                            # mis-hearings. about.txt, a line on who you are and what you talk about, goes with them
 # provider = ""              # the [refine.providers.<name>] table the call goes to
 # model = "claude-haiku-5-5"   # the provider's model id
 # effort = "low"             # off, low, medium, high: how much the model thinks first; off is no thinking
@@ -99,9 +106,14 @@
 # wait = false               # true: every take is held for the model's answer. false: a take toward an agent pane
 #                            # or a Telegram chat is delivered when the answer is ready; a take for an
 #                            # application window is held as well
-#                            # agent_copy and [refine.context] are accepted and change nothing in this build:
-#                            # the corrected text is what is delivered, and the dictation travels alone
-# agent_copy = "refined"     # what an agent pane or chat gets: refined (the corrected text), both, raw
+#                            # [refine.context] is accepted and changes nothing in this build: the dictation
+#                            # travels alone
+# agent_copy = "refined"     # what a herdr pane with an agent in it, or the keypad's Telegram chat, gets:
+#                            # refined: the corrected text. both: the corrected text, a blank line, then a marked
+#                            # second part, only when something changed: the words changed, heard → corrected,
+#                            # or under tidy and translate the whole text as heard. raw: the text as recognised;
+#                            # what the model would have changed is only recorded. Every other target gets the
+#                            # corrected text
 # providers = {}             # one table per provider, in place of this line:
 #                            #   [refine.providers.anthropic]
 #                            #   kind = "anthropic"                        # anthropic: the Messages API; openai: chat completions

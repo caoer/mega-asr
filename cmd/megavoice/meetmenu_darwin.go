@@ -225,6 +225,7 @@ func (m *meetMenu) readLocal() {
 		v.Store = l.Store.Data
 		v.Compare = compareSettings{On: l.Compare.On, Engines: l.Compare.Engines}
 		v.Capture = l.Capture
+		v.Refine = refineOf(l.Refine)
 	}
 	m.mu.Unlock()
 }
@@ -503,6 +504,32 @@ func (m *meetMenu) do(a act) {
 		}()
 	case actExit:
 		m.exit(a.arg)
+	case actEdit:
+		app.Seed() // a mode's prompt removed since the start is written again
+		err := touch(a.arg)
+		if err == nil {
+			err = m.command([]string{"open", "-t", a.arg}).Start()
+		}
+		if err != nil {
+			log.Printf("menu: edit %s: %v", a.arg, err)
+		}
+		m.note(err)
+	case actModel:
+		vals, ok := mac.Prompt(l10n.T("Model", "模型"), l10n.T("The provider's model id, as its API names it, e.g. claude-haiku-5-5.", "服务商 API 里的模型 id，比如 claude-haiku-5-5。"),
+			l10n.T("Set", "设置"), []mac.Field{{Label: l10n.T("Model", "模型"), Value: a.arg}})
+		if !ok || strings.TrimSpace(vals[0]) == "" {
+			return
+		}
+		err := set(m.config, "refine.model", strconv.Quote(strings.TrimSpace(vals[0])))
+		if err != nil {
+			log.Printf("menu: refine.model: %v", err)
+		} else {
+			log.Printf("menu: refine.model = %q", strings.TrimSpace(vals[0]))
+		}
+		m.readLocal()
+		m.note(err)
+	case actKey:
+		m.setKey()
 	case actRun:
 		m.check(a.arg, "", a.argv)
 	case actLast:
@@ -517,6 +544,39 @@ func (m *meetMenu) do(a act) {
 		saved, _ := os.ReadFile(strings.TrimSuffix(wav, ".wav") + ".txt")
 		m.check(a.arg, "Take "+strings.TrimSuffix(filepath.Base(wav), ".wav")+"\nSaved: "+strings.TrimSpace(string(saved))+"\n\nNow:", []string{"megavoice", "transcribe", wav})
 	}
+}
+
+// setKey is Set API Key…: it asks for the key, makes one test call with
+// it off the main thread, and keeps it only when the call has an answer.
+func (m *meetMenu) setKey() {
+	vals, ok := mac.Prompt(l10n.T("Set API Key", "设置 API Key"),
+		l10n.T("The model step's key. One test call is made with it, to the model set in this menu; the key is kept, in a file of its own beside the config, only when the call answers.",
+			"模型纠错用的 key。先用它向这个菜单里选的模型试打一次；打通了才保存，存在配置旁边单独的文件里。"),
+		l10n.T("Test and Save", "测试并保存"), []mac.Field{{Label: "API key", Placeholder: "sk-ant-…", Secret: true}})
+	if !ok || strings.TrimSpace(vals[0]) == "" {
+		return
+	}
+	m.mu.Lock()
+	m.st.Voice.Check, m.st.Voice.Note = l10n.T("Testing the key", "正在测试 key"), ""
+	m.mu.Unlock()
+	m.render()
+	go func() {
+		took, err := app.SetRefineKey(context.Background(), m.config, vals[0], macSetCheck)
+		m.mu.Lock()
+		m.st.Voice.Check = ""
+		m.mu.Unlock()
+		m.readLocal()
+		m.note(err)
+		if err != nil {
+			log.Printf("menu: set api key: %v", err)
+			mac.Later(func() { mac.Alert(l10n.T("The key was not saved", "key 没有保存"), err.Error()) })
+			return
+		}
+		log.Printf("menu: set api key: the test call answered in %v; the key is kept", took.Round(time.Millisecond))
+		mac.Later(func() {
+			mac.Alert(l10n.T("Key saved", "key 已保存"), l10n.F("The test call answered in %.1f s. Switch the model step on in this menu.", "试打一次 %.1f 秒有了回答。在这个菜单里打开模型纠错即可。", took.Seconds()))
+		})
+	}()
 }
 
 // exit is Restart or Quit: while a take records it offers to end the take

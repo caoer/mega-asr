@@ -1606,11 +1606,11 @@ func refineNote(ev *store.Event) string {
 			parts = append(parts, fmt.Sprintf("+%d", len(ev.Edits)-i))
 			break
 		}
-		from, to := refine.Changed(e.From, e.To)
-		if from == "" || to == "" {
-			from, to = e.From, e.To
-		}
+		from, to := refine.Shown(e.From, e.To)
 		parts = append(parts, from+" → "+to)
+	}
+	if ev.Copy == "raw" && len(parts) > 0 { // the agent got the text as recognised
+		return l10n.T("仅记录 · ", "Recorded only · ") + strings.Join(parts, " · ")
 	}
 	return strings.Join(parts, " · ")
 }

@@ -40,6 +40,9 @@ func TestMenuSpeaksTheMacsLanguage(t *testing.T) {
 	rec := v
 	rec.Take = voiceTake{ID: "t", Recording: true, Elapsed: 65 * time.Second}
 	sameInBoth := map[string]bool{"MacBook Air Microphone": true, "USB Audio": true, "box": true, "den": true}
+	for _, m := range refineModels {
+		sameInBoth[m] = true
+	}
 	var lines = func() []string {
 		var out []string
 		for _, s := range []voiceState{v, pending, rec} {

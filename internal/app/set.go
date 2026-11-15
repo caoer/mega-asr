@@ -34,11 +34,12 @@ var (
 // a valid config, check included (the caller's own, as LoadOpts.Check), or
 // the file is left as it was. A symlink is written through.
 func Set(path, key, val string, check func(Config) []string) error {
-	dot := strings.LastIndex(key, ".")
-	if dot <= 0 || dot == len(key)-1 {
-		return fmt.Errorf("config set: %q: want section.key", key)
-	}
-	table, name := key[:dot], key[dot+1:]
+	return SetAll(path, [][2]string{{key, val}}, check)
+}
+
+// SetAll is Set for several keys, in order, written at once: the file
+// changes only when the config loads valid with all of them.
+func SetAll(path string, kvs [][2]string, check func(Config) []string) error {
 	if p, err := filepath.EvalSymlinks(path); err == nil {
 		path = p
 	}
@@ -50,7 +51,20 @@ func Set(path, key, val string, check func(Config) []string) error {
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	out := setLine(string(b), table, name, name+" = "+val)
+	out := string(b)
+	for _, kv := range kvs {
+		key, val := kv[0], kv[1]
+		dot := strings.LastIndex(key, ".")
+		if dot <= 0 || dot == len(key)-1 {
+			return fmt.Errorf("config set: %q: want section.key", key)
+		}
+		table, name := key[:dot], key[dot+1:]
+		out = setLine(out, table, name, name+" = "+val)
+	}
+	what := kvs[0][0]
+	if len(kvs) > 1 {
+		what = fmt.Sprintf("%s and %d more", what, len(kvs)-1)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -69,10 +83,12 @@ func Set(path, key, val string, check func(Config) []string) error {
 	}
 	l, err := Load(LoadOpts{Path: tmp.Name(), Check: check})
 	if err != nil {
-		return fmt.Errorf("config set %s: %w", key, err)
+		return fmt.Errorf("config set %s: %w", what, err)
 	}
-	if l.SourceOf(key) != "file" {
-		return fmt.Errorf("config set %s: the key does not read back from the file", key)
+	for _, kv := range kvs {
+		if l.SourceOf(kv[0]) != "file" {
+			return fmt.Errorf("config set %s: the key does not read back from the file", kv[0])
+		}
 	}
 	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		return err
