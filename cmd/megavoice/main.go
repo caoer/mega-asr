@@ -78,6 +78,12 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
                             took and the <context> it would send, as one JSON
                             line; --out writes the text or the JPEG. Asks for the
                             Screen Recording permission when it is off
+  context [--after D] [--for F] [--sources app,field,pane,clipboard] [--pane ID]
+                            the model step's text sources once, as a take reads
+                            them: the target in front after D (or herdr pane ID),
+                            read F later;
+                            what each read, in how long, and the <context>
+                            they give, as one JSON line
   spike                     taps the agent has seen
   record [--seconds N] OUT.wav
                             capture from capture.source into a WAV
@@ -176,6 +182,8 @@ func main() {
 		err = refineCmd(o, args, os.Stdin, os.Stdout)
 	case "screen":
 		err = screenCmd(o, args, os.Stdout)
+	case "context":
+		err = contextCmd(o, args, os.Stdout)
 	case "resend":
 		err = resendCmd(args)
 	case "retranscribe":

@@ -3,6 +3,7 @@
 package deliver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -33,6 +34,7 @@ type Target struct {
 	App       mac.App
 	Clipboard bool // the text is copied and no key is pressed
 
+	herdr   Herdr             // where a pane target is read (PaneText)
 	sent    time.Time         // when the pane got its last key: the paste, or the Enter
 	entered bool              // Submit pressed Enter in the pane
 	receipt *mac.PasteReceipt // confirmation from the captured composer
@@ -55,6 +57,41 @@ func (t *Target) Record() store.Target {
 	}
 	return store.Target{Kind: kind, Pane: t.Pane, Workspace: t.Workspace, Agent: t.Agent, App: t.App.Name,
 		PID: int(t.App.PID), BundleID: t.App.BundleID, Title: t.App.Title}
+}
+
+// Secure reports whether what is typed in the target is secret now: its
+// captured field is a password field, or the system's secure keyboard input
+// is on (refine.Spot).
+func (t *Target) Secure() bool {
+	return !t.Clipboard && (mac.SecureInput() || t.Pane == "" && t.App.PasswordField())
+}
+
+// FieldText is the captured field's text and the cursor's place in it, in
+// UTF-16 units: the start of the selection, or the end of the text when the
+// field gives no selection (refine.Spot). ok is false for a pane, the
+// clipboard, and a field whose value is not text.
+func (t *Target) FieldText(ctx context.Context) (text string, cursor int, ok bool) {
+	if t.Clipboard || t.Pane != "" {
+		return "", 0, false
+	}
+	if text, ok = t.App.Text(ctx); !ok {
+		return "", 0, false
+	}
+	cursor, _, sel := t.App.Selection(ctx)
+	if !sel {
+		cursor = -1
+	}
+	return text, cursor, true
+}
+
+// PaneText is the pane's last lines (refine.Spot); ok is false for a
+// target that is not a pane.
+func (t *Target) PaneText(ctx context.Context, lines int) (string, bool, error) {
+	if t.Pane == "" {
+		return "", false, nil
+	}
+	text, err := t.herdr.PaneTail(ctx, t.Pane, lines)
+	return text, true, err
 }
 
 // Release frees the captured window reference; safe to call twice.
@@ -94,7 +131,7 @@ type Deliverer struct {
 func (d Deliverer) Capture() session.Target {
 	agents := d.Agents != nil && d.Agents()
 	if d.Pane != "" {
-		t := &Target{Pane: d.Pane}
+		t := &Target{Pane: d.Pane, herdr: d.Herdr}
 		if !agents {
 			return t
 		}
@@ -105,7 +142,7 @@ func (d Deliverer) Capture() session.Target {
 		}
 		return t
 	}
-	t := &Target{App: mac.Frontmost()}
+	t := &Target{App: mac.Frontmost(), herdr: d.Herdr}
 	if slices.Contains(d.HerdrApps, t.App.BundleID) {
 		p, err := d.Herdr.pane("focused pane", func(p Pane) bool { return p.Focused })
 		switch {
@@ -142,7 +179,7 @@ func (d Deliverer) Resolve(to string) (session.Target, error) {
 		}
 		for _, p := range panes {
 			if p.ID == arg {
-				return &Target{Pane: arg, Workspace: p.Workspace}, nil
+				return &Target{Pane: arg, Workspace: p.Workspace, herdr: d.Herdr}, nil
 			}
 		}
 		return nil, fmt.Errorf("target %q: herdr lists no such pane", to)

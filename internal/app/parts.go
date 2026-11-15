@@ -126,6 +126,9 @@ type RefineStage struct {
 	// Display is this machine's screen, for the step's screen source; nil
 	// where there is none to capture, and the source stays off.
 	Display refine.Display
+	// Clip watches this machine's clipboard, for the clipboard source; nil
+	// where there is none, and the source sends nothing.
+	Clip *refine.ClipWatch
 
 	o    LoadOpts
 	mu   sync.Mutex
@@ -142,7 +145,7 @@ type fileStamp struct {
 
 func (c Config) RefineStage(o LoadOpts) *RefineStage {
 	o.Check = nil
-	return &RefineStage{o: o, last: c.Refine}
+	return &RefineStage{o: o, last: c.RefineTake()}
 }
 
 // current is [refine] as the file reads now; as it last loaded when the
@@ -162,7 +165,7 @@ func (s *RefineStage) current() RefineConfig {
 	if l, err := Load(s.o); err != nil {
 		log.Printf("refine: %v; keeping refine.on = %v", err, s.last.On)
 	} else {
-		s.last = l.Refine
+		s.last = l.RefineTake()
 	}
 	return s.last
 }
@@ -235,12 +238,37 @@ func (s *RefineStage) Screen() func(context.Context) *refine.Screen {
 // text of a full Retina window took about 1.4 s on an M1 Max.
 var screenWait = 2 * time.Second
 
+// Sources is session.Controller.Sources: as a take starts it notes the
+// clipboard and gives the call that reads the text sources from the take's
+// target at its stop. nil while refine.on is off or every text source is:
+// nothing is read.
+func (s *RefineStage) Sources() func(context.Context, session.Target) []refine.Part {
+	r := s.current()
+	src := r.Context.TextSources(s.Clip)
+	if !r.On || !src.On() {
+		return nil
+	}
+	ts := src.Start()
+	return func(ctx context.Context, t session.Target) []refine.Part {
+		spot, _ := t.(refine.Spot)
+		return ts.Read(ctx, session.StoreTarget(t), spot)
+	}
+}
+
+// ClipboardOn reports whether the clipboard source is switched on, for its
+// watcher (refine.ClipWatch.On).
+func (s *RefineStage) ClipboardOn() bool {
+	r := s.current()
+	return r.On && r.Context.Clipboard
+}
+
 // NotesAgent reports whether a take's capture should note the agent in its
 // herdr pane: only while the step is on with agent_copy both or raw, the
-// values that deliver differently to an agent.
+// values that deliver differently to an agent, or with the app or pane
+// source, which name it.
 func (s *RefineStage) NotesAgent() bool {
 	r := s.current()
-	return r.On && r.AgentCopy != "refined"
+	return r.On && (r.AgentCopy != "refined" || r.Context.App || r.Context.Pane)
 }
 
 // warmLimit bounds the handshake Warm opens the connection with. A take's
@@ -298,11 +326,15 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 		return fail(refine.WhyError, err)
 	}
 	step := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
-		System: append([]string{prompt}, Glossary().Blocks()...)}
-	if sc := in.Screen; sc != nil {
+		System: append([]string{prompt}, Glossary().Reach(r.GlossaryReach(), text).Blocks()...), Names: r.namesIn(text)}
+	sc := in.Screen
+	if sc != nil {
 		sc = r.screenNow(sc)
-		step.Context, step.Image = sc.Context(), sc.Image
-		ev.Context, ev.Screen = refine.InTag(step.Context), ScreenRecord(sc)
+	}
+	step.Context = refine.Compose(in.Parts, sc) // before the screen's record: it may withhold the screen
+	ev.Context, ev.Sources = refine.InTag(step.Context), SourcesRecord(in.Parts)
+	if sc != nil {
+		step.Image, ev.Screen = sc.Image, ScreenRecord(sc)
 	}
 	res := step.Run(ctx, text)
 	ev.LatencyMS, ev.Dropped = res.Wall.Milliseconds(), res.Dropped
@@ -338,6 +370,42 @@ func (r RefineConfig) screenNow(sc *refine.Screen) *refine.Screen {
 		return sc
 	}
 	return &refine.Screen{Mode: sc.Mode, App: sc.App, Withheld: why}
+}
+
+// namesIn is what the call lists of the names scan on text: the spans the
+// names gate would ask Jev about, all of them once one sounds the same as a
+// listed form, and none otherwise or while names.on is off. The call is the
+// take's one model call, so the model judges them in the gate's place.
+func (r RefineConfig) namesIn(text string) string {
+	if r.people == "" {
+		return ""
+	}
+	ro, err := names.ReadRoster(r.people)
+	if err != nil || ro.Empty() {
+		return ""
+	}
+	cs := ro.Candidates(text)
+	if !names.Fires(cs) {
+		return ""
+	}
+	lines := make([]string, len(cs))
+	for i, c := range cs {
+		lines[i] = refine.NameLine(c.Span, c.Form, c.Person)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// SourcesRecord is the text sources' parts as a refine line records them.
+func SourcesRecord(parts []refine.Part) []store.ContextSource {
+	var out []store.ContextSource
+	for _, p := range parts {
+		rec := store.ContextSource{Source: p.Source, Chars: utf8.RuneCountInString(p.Text), ReadUS: p.Took.Microseconds(), Withheld: p.Withheld}
+		if p.Err != nil {
+			rec.Err = p.Err.Error()
+		}
+		out = append(out, rec)
+	}
+	return out
 }
 
 // ScreenRecord is sc as a refine line records it.

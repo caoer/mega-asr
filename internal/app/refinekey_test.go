@@ -154,3 +154,38 @@ func TestSeedModesOnce(t *testing.T) {
 		t.Errorf("a removed prompt is not written again: %v", err)
 	}
 }
+
+// A text mode whose prompt file is gone loads, and its takes are held until
+// the file is back; setting a key meanwhile is tested in fix-words and kept,
+// the mode left as it is.
+func TestSetRefineKeyWhileTheModesPromptIsGone(t *testing.T) {
+	var asked string
+	p := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		b, _ := json.Marshal(body)
+		asked = string(b)
+		edits(`[]`)(w, body)
+	}))
+	t.Cleanup(p.Close)
+	dir := isolate(t)
+	path := refineConfig(t, dir, p.URL, "mode = \"meeting-notes\"\n")
+	if _, err := SetRefineKey(context.Background(), path, testKey, nil); err != nil {
+		t.Fatalf("the key was refused while modes.d/meeting-notes.md is gone: %v", err)
+	}
+	if fw, _ := (RefineConfig{Mode: "fix-words"}).Prompt(); !strings.Contains(asked, jsonText(strings.SplitN(fw, "\n", 2)[0])) {
+		t.Errorf("the test call did not send fix-words' prompt: %s", asked)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "model.key")); string(b) != testKey+"\n" {
+		t.Errorf("key file %q", b)
+	}
+	if l, err := Load(LoadOpts{Path: path}); err != nil || l.Refine.Mode != "meeting-notes" {
+		t.Errorf("refine.mode after the key: %q, %v", l.Refine.Mode, err)
+	}
+}
+
+// jsonText is s as it reads inside a JSON string.
+func jsonText(s string) string {
+	b, _ := json.Marshal(s)
+	return strings.Trim(string(b), `"`)
+}

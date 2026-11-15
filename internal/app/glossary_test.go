@@ -205,3 +205,86 @@ func TestSeededSamplesAreNotTheSpeakersTerms(t *testing.T) {
 		t.Errorf("a hot-word file the user added to counts for nothing: %+v", g)
 	}
 }
+
+// sentTerms gives the terms and the mis-hearings, as their blocks list
+// them, of the request one take on text makes under the config file as it
+// is: the path a running megavoice takes. The fake provider answers either
+// kind of mode with the text unchanged.
+func sentTerms(t *testing.T, p *provider, text string) (terms, hints string) {
+	t.Helper()
+	var system []map[string]any
+	p.answer = func(w http.ResponseWriter, body map[string]any) {
+		b, _ := json.Marshal(body["system"])
+		json.Unmarshal(b, &system)
+		answer := `{"edits":[]}`
+		if strings.Contains(fmt.Sprint(body["output_config"]), "text:map") {
+			b, _ := json.Marshal(map[string]string{"text": text})
+			answer = string(b)
+		}
+		b, _ = json.Marshal(map[string]any{"content": []map[string]string{{"type": "text", "text": answer}},
+			"stop_reason": "end_turn", "usage": map[string]int{"input_tokens": 900, "output_tokens": 40}})
+		w.Write(b)
+	}
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	take := l.RefineStage(LoadOpts{}).Take()
+	if take == nil {
+		t.Fatal("the stage gives no step")
+	}
+	if _, ev := take.Run(context.Background(), session.RefineInput{Text: text}); ev.Why != "" {
+		t.Fatalf("refine line %+v", ev)
+	}
+	for _, b := range system {
+		s, _ := b["text"].(string)
+		for _, tag := range []string{"terms", "hints"} {
+			if _, in, ok := strings.Cut(s, "\n<"+tag+">\n"); ok {
+				in, _, _ = strings.Cut(in, "\n</"+tag+">")
+				if tag == "terms" {
+					terms = strings.ReplaceAll(in, "\n", ",")
+				} else {
+					hints = strings.ReplaceAll(in, "\n", ",")
+				}
+			}
+		}
+	}
+	return terms, hints
+}
+
+// refine.glossary puts in the request what it says: all the terms and
+// mis-hearings, those the dictation sounds like, or none; unset, all under
+// fix-words and the matching ones under a mode that writes the text.
+func TestRefineGlossaryReach(t *testing.T) {
+	p := newProvider(t)
+	const text = "用海库跑一下"
+	for _, c := range []struct{ more, terms, hints string }{
+		{`glossary = "all"`, "Haiku,Kubernetes,kubectl,Grafana", "海库 → Haiku,cube control → kubectl"},
+		{`glossary = "matching"`, "Haiku", "海库 → Haiku"},
+		{`glossary = "none"`, "", ""},
+		{``, "Haiku,Kubernetes,kubectl,Grafana", "海库 → Haiku,cube control → kubectl"},
+		{`mode = "fix-words"`, "Haiku,Kubernetes,kubectl,Grafana", "海库 → Haiku,cube control → kubectl"},
+		{`mode = "tidy"`, "Haiku", "海库 → Haiku"},
+		{"mode = \"tidy\"\nglossary = \"all\"", "Haiku,Kubernetes,kubectl,Grafana", "海库 → Haiku,cube control → kubectl"},
+	} {
+		dir := isolate(t)
+		refineConfig(t, dir, p.URL, c.more)
+		vocabulary(t, dir, map[string]string{
+			"hotwords.txt":    "Haiku\nKubernetes\n",
+			"corrections.tsv": "海库\tHaiku\ncube control\tkubectl\n",
+			"glossary.txt":    "Grafana\n",
+		})
+		if terms, hints := sentTerms(t, p, text); terms != c.terms || hints != c.hints {
+			t.Errorf("%q: terms %q, mis-hearings %q; want %q, %q", c.more, terms, hints, c.terms, c.hints)
+		}
+	}
+}
+
+// A value refine.glossary does not have is refused at load, by name.
+func TestRefineGlossaryValues(t *testing.T) {
+	dir := isolate(t)
+	refineConfig(t, dir, "http://127.0.0.1:9", `glossary = "some"`)
+	if _, err := Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), "refine.glossary") {
+		t.Errorf("glossary = \"some\" loads: %v", err)
+	}
+}

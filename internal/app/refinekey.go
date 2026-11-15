@@ -29,7 +29,9 @@ const keyTestLimit = 20 * time.Second
 // provider names; with no provider selected, refine.provider becomes
 // anthropic, a new [refine.providers.anthropic] at RefineBaseURL whose key
 // file is anthropic.key beside the config at path when there is no such
-// table yet. A call that fails changes nothing, and the error says why.
+// table yet. The call is made in the selected mode, or in fix-words when
+// that mode's prompt does not read. A call that fails changes nothing, and
+// the error says why.
 // The key is in no error, log line or config value: the config names its
 // file. It returns the test call's time.
 func SetRefineKey(ctx context.Context, path, key string, check func(Config) []string) (time.Duration, error) {
@@ -62,8 +64,11 @@ func SetRefineKey(ctx context.Context, path, key string, check func(Config) []st
 		return 0, fmt.Errorf("provider %s is kind %s, which this build has no client for; nothing was changed", name, p.Kind)
 	}
 	prompt, err := r.Prompt()
-	if err != nil {
-		return 0, fmt.Errorf("the prompt of mode %s does not read, nothing was changed: %w", r.Mode, err)
+	if err != nil { // the mode's prompt file is gone or empty: a take waits for it, the key is tested in fix-words
+		r.Mode = refine.FixWords
+		if prompt, err = r.Prompt(); err != nil {
+			return 0, fmt.Errorf("the prompt of mode %s does not read, nothing was changed: %w", r.Mode, err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, keyTestLimit)
 	defer cancel()

@@ -159,6 +159,9 @@ type RefineInput struct {
 	// Screen is what Controller.Screen got as the take started; nil when
 	// the screen source is off.
 	Screen *refine.Screen
+	// Parts is what the text sources (Controller.Sources) read from the
+	// take's target at its stop; nil when they are off.
+	Parts []refine.Part
 }
 
 // RefineStep is the model step for one take: its one model call.
@@ -222,7 +225,13 @@ type Controller struct {
 	// call that waits for it. What it got goes to the take's model step
 	// (RefineInput.Screen). A take spoken on the phone (StartStream) is not
 	// made at the Mac's screen and never asks.
-	Screen      func() func(context.Context) *refine.Screen
+	Screen func() func(context.Context) *refine.Screen
+	// Sources, when set, is asked as each take dictated at the Mac starts:
+	// nil when the model step's text sources are off, else the call that
+	// reads them from the take's locked target at its stop, before the step
+	// runs. What they read goes to the step (RefineInput.Parts). A take
+	// spoken on the phone never asks.
+	Sources     func() func(context.Context, Target) []refine.Part
 	Deliver     Deliverer
 	UI          UI
 	Store       store.Store
@@ -352,6 +361,8 @@ type take struct {
 	turn    chan struct{}                        // closed when the take before is done delivering
 	next    chan struct{}                        // closed when this take is done delivering
 	screen  func(context.Context) *refine.Screen // Controller.Screen's, nil when the source is off
+	// sources is Controller.Sources', nil when the text sources are off.
+	sources func(context.Context, Target) []refine.Part
 	auto    *time.Timer
 	backup  *backup // nil without NewBackup
 	// ctx is a re-transcription's: once it is done, the take's chunks fail
@@ -1108,6 +1119,9 @@ func (c *Controller) startWithLocked(trigger string, tapAt time.Time, src audio.
 	if c.Screen != nil && c.OnChunks == nil && sink == nil {
 		r.screen = c.Screen()
 	}
+	if c.Sources != nil && c.OnChunks == nil && sink == nil {
+		r.sources = c.Sources()
+	}
 	c.seq++
 	r.seq = c.seq
 	if r.turn == nil {
@@ -1565,11 +1579,12 @@ func (c *Controller) finish(r *take, total int) {
 	var unusable *store.Event // the refine line of a call with no answer to use
 	sent := ""                // what an agent's target is sent in place of text: its both copy
 	if step != nil {
-		in := RefineInput{Text: text, Target: StoreTarget(endTarget())}
+		target := endTarget()
+		in := RefineInput{Text: text, Target: StoreTarget(target)}
 		if step.Aside != nil && step.Aside(in.Target) {
-			c.refineAside(r, step, in)
+			c.refineAside(r, step, in, target)
 		} else {
-			refined, ev := c.refine(r, step, in)
+			refined, ev := c.refine(r, step, in, target)
 			c.mu.Lock()
 			cancelled = r.cancelled
 			c.mu.Unlock()
@@ -1727,14 +1742,18 @@ const HoldRefineFailed = "refine_failed"
 
 // refine has r wait on the model step's call for in, however long it takes:
 // the view shows the wait and nothing is delivered before the answer. A
-// cancel of the waiting take (cancelWaitingLocked) drops the call.
-func (c *Controller) refine(r *take, step *RefineStep, in RefineInput) (string, *store.Event) {
+// cancel of the waiting take (cancelWaitingLocked) drops the call. The
+// text sources are read from target first.
+func (c *Controller) refine(r *take, step *RefineStep, in RefineInput, target Target) (string, *store.Event) {
 	ctx, cancel := context.WithCancel(c.ctx())
 	defer cancel()
 	c.mu.Lock()
 	r.refining, r.heard, r.unrefine = true, in.Text, cancel
 	c.updateLocked()
 	c.mu.Unlock()
+	if r.sources != nil {
+		in.Parts = r.sources(ctx, target)
+	}
 	if r.screen != nil {
 		in.Screen = r.screen(ctx)
 	}
@@ -1755,8 +1774,12 @@ func (c *Controller) refine(r *take, step *RefineStep, in RefineInput) (string, 
 // and the overlay flashes what it would have changed. The call is not in
 // flight for Busy: nothing waits on it, so a restart or quit never waits for
 // it, and an exit before it returns leaves the take delivered with no refine
-// line. Wait still waits for it.
-func (c *Controller) refineAside(r *take, step *RefineStep, in RefineInput) {
+// line. Wait still waits for it. The text sources are read from target
+// before r is delivered.
+func (c *Controller) refineAside(r *take, step *RefineStep, in RefineInput, target Target) {
+	if r.sources != nil {
+		in.Parts = r.sources(c.ctx(), target)
+	}
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()

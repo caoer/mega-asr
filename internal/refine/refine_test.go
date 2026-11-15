@@ -405,3 +405,19 @@ func TestWarmOpensTheConnectionTheCallUses(t *testing.T) {
 		t.Fatalf("%d connections opened, want the one Warm opened", n)
 	}
 }
+
+// A provider's error body is cut to its head for the alert, the log and the
+// refine line; a key the body echoes is replaced before the cut, so not even
+// a prefix of it survives at the edge.
+func TestAnthropicErrorKeepsNoKey(t *testing.T) {
+	m := newMessages(t)
+	const key = "sk-ant-api03-0123456789abcdef"
+	m.status, m.body = 401, strings.Repeat("x", 295)+key+" is not valid; "+key
+	p := m.provider()
+	p.Key = key
+	_, err := p.Refine(context.Background(), Request{Model: "claude-haiku-5-5", Effort: "low", Dictation: "好"})
+	var he *HTTPError
+	if !errors.As(err, &he) || strings.Contains(err.Error(), key[:5]) || !strings.Contains(err.Error(), "[key]") {
+		t.Fatalf("err %v", err)
+	}
+}

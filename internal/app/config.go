@@ -264,26 +264,57 @@ type NamesConfig struct {
 // answer past the mode's guards, holds the take: it is not delivered and
 // stays in Recordings.
 type RefineConfig struct {
-	On        bool                            `toml:"on"`
-	Mode      string                          `toml:"mode"`       // fix-words (an edit list), or a text mode: tidy, translate or any modes.d/<name>.md
-	Provider  string                          `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
-	Model     string                          `toml:"model"`      // the provider's model id
-	Effort    string                          `toml:"effort"`     // off, low, medium or high: how much the model thinks
-	AgentCopy string                          `toml:"agent_copy"` // what an agent pane or chat gets: refined, both or raw
+	On        bool   `toml:"on"`
+	Mode      string `toml:"mode"`       // fix-words (an edit list), or a text mode: tidy, translate or any modes.d/<name>.md
+	Provider  string `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
+	Model     string `toml:"model"`      // the provider's model id
+	Effort    string `toml:"effort"`     // off, low, medium or high: how much the model thinks
+	AgentCopy string `toml:"agent_copy"` // what an agent pane or chat gets: refined, both or raw
+	// Glossary is how much of the glossary a call carries: all, matching
+	// (the entries that sound like a span of the dictation) or none; ""
+	// is refine.DefaultReach of the mode (GlossaryReach).
+	Glossary  string                          `toml:"glossary"`
 	Context   RefineContextConfig             `toml:"context"`
 	Providers map[string]RefineProviderConfig `toml:"providers"`
+
+	people string // [names]'s people.json while names.on is on (Config.RefineTake); "" scans no names
+}
+
+// GlossaryReach is refine.glossary, or the mode's default when it is unset.
+func (r RefineConfig) GlossaryReach() string {
+	if r.Glossary != "" {
+		return r.Glossary
+	}
+	return refine.DefaultReach(r.Mode)
+}
+
+// RefineTake is [refine] as a take runs it: with the people of [names]
+// while names.on is on, so the call carries the spans the names scan finds.
+func (c Config) RefineTake() RefineConfig {
+	r := c.Refine
+	if c.Names.On {
+		r.people = c.Names.People
+	}
+	return r
 }
 
 // RefineContextConfig is what travels with the dictation, as what was in
 // front of the speaker.
 type RefineContextConfig struct {
 	App       bool   `toml:"app"`       // the application and its window's title
-	Field     bool   `toml:"field"`     // the text of the field or pane dictated into
-	Clipboard bool   `toml:"clipboard"` // what was copied just before the take
+	Field     bool   `toml:"field"`     // the text before the cursor in the field dictated into
+	Pane      bool   `toml:"pane"`      // the last lines of the herdr pane dictated into
+	Clipboard bool   `toml:"clipboard"` // what was copied just before the take or during it
 	Screen    string `toml:"screen"`    // the front window: off, ocr (its text) or image
-	// Exclude lists applications by bundle id whose windows are never
-	// captured.
+	// Exclude lists applications by bundle id from which nothing is sent:
+	// their windows are never captured and their fields never read.
 	Exclude []string `toml:"exclude"`
+}
+
+// TextSources is c's text sources for one take, the clipboard read through
+// clip (nil: no clipboard).
+func (c RefineContextConfig) TextSources(clip *refine.ClipWatch) refine.TextSources {
+	return refine.TextSources{App: c.App, Field: c.Field, Pane: c.Pane, Clipboard: c.Clipboard, Exclude: c.Exclude, Clip: clip}
 }
 
 // ScreenExclude is refine.context.exclude's default: the password managers.
@@ -305,12 +336,14 @@ var RefineModes = refine.Modes
 
 // RefineModeNames are the modes refine.mode can name now: RefineModes, then
 // each other modes.d/<name>.md beside the config in name order, a text mode.
+// Names differing only in case are one file on the Mac's disk, so a file
+// whose name differs only in case from one already listed is left out.
 func RefineModeNames() []string {
 	names := slices.Clone(RefineModes)
 	files, _ := os.ReadDir(filepath.Join(ConfigDir(), "modes.d")) // sorted by name
 	for _, f := range files {
 		n, ok := strings.CutSuffix(f.Name(), ".md")
-		if ok && !f.IsDir() && validMode(n) && !slices.Contains(names, n) {
+		if ok && !f.IsDir() && validMode(n) && !slices.ContainsFunc(names, func(m string) bool { return strings.EqualFold(m, n) }) {
 			names = append(names, n)
 		}
 	}
@@ -318,10 +351,25 @@ func RefineModeNames() []string {
 }
 
 // validMode reports whether a mode's name can be its prompt file's name in
-// modes.d: not empty, not hidden, no path separator or control character.
+// modes.d: not empty, not hidden, no path separator or control character,
+// and not a mode the app comes with in another case (seededCase).
 func validMode(name string) bool {
+	_, variant := seededCase(name)
 	return name != "" && name[0] != '.' && !strings.ContainsAny(name, `/\`) &&
-		!strings.ContainsFunc(name, unicode.IsControl)
+		!strings.ContainsFunc(name, unicode.IsControl) && !variant
+}
+
+// seededCase is the mode the app comes with that name spells in another
+// case. Such a name would open that mode's prompt file on the Mac's disk
+// while being a different mode, so no mode is named that way: Fix-Words
+// would send fix-words' edit-list prompt as a text mode.
+func seededCase(name string) (string, bool) {
+	for _, m := range RefineModes {
+		if m != name && strings.EqualFold(m, name) {
+			return m, true
+		}
+	}
+	return "", false
 }
 
 type DeliverConfig struct {
@@ -742,11 +790,16 @@ func (c Config) validate() []string {
 		bad("names.timeout", "must be above 0")
 	}
 	r := c.Refine
-	if !validMode(r.Mode) {
+	if m, ok := seededCase(r.Mode); ok {
+		bad("refine.mode", "%q is %s in another case: write it %s", r.Mode, m, m)
+	} else if !validMode(r.Mode) {
 		bad("refine.mode", "%q is not a mode: fix-words, or the name of a prompt file in modes.d without .md", r.Mode)
 	}
 	oneOf("refine.effort", r.Effort, "off", "low", "medium", "high")
 	oneOf("refine.agent_copy", r.AgentCopy, "refined", "both", "raw")
+	if r.Glossary != "" {
+		oneOf("refine.glossary", r.Glossary, refine.Reaches...)
+	}
 	oneOf("refine.context.screen", r.Context.Screen, "off", "ocr", "image")
 	if slices.Contains(r.Context.Exclude, "") {
 		bad("refine.context.exclude", "holds an empty bundle id")
@@ -1039,6 +1092,9 @@ func writeTable(w io.Writer, v reflect.Value, path []string, source func(string)
 	var tables, maps []int
 	for i := range t.NumField() {
 		f := t.Field(i)
+		if !f.IsExported() { // not a key
+			continue
+		}
 		if f.Type.Kind() == reflect.Struct {
 			tables = append(tables, i)
 			continue

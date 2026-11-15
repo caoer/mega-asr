@@ -175,7 +175,12 @@ func (a Anthropic) Refine(ctx context.Context, req Request) (Reply, error) {
 		return Reply{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Reply{}, &HTTPError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", b)}
+		// the key out before the cut, so no part of it survives at the edge
+		body := string(b)
+		if a.Key != "" {
+			body = strings.ReplaceAll(body, a.Key, "[key]")
+		}
+		return Reply{}, &HTTPError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", body)}
 	}
 	var out struct {
 		Content []struct {

@@ -98,9 +98,11 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 	if _, ev := take(); ev == nil || ev.Model != "claude-sonnet-5-5" || ev.Effort != "high" {
 		t.Errorf("model and effort: %+v", ev)
 	}
-	click("Screen: Its Text (OCR)")
+	for _, title := range []string{"App and Window Title", "Text of the Field", "Terminal Pane (herdr)", "Clipboard", "Screen: Its Text (OCR)"} {
+		click(title)
+	}
 	l, _ = load(o)
-	if c := l.Refine.Context; c.Screen != "ocr" {
+	if c := l.Refine.Context; !c.App || !c.Field || !c.Pane || !c.Clipboard || c.Screen != "ocr" {
 		t.Errorf("context: %+v", c)
 	}
 	if got := titles(menu()); !strings.Contains(got, "Model Step: Model Writes · Rewrite") || !strings.Contains(got, "✓claude-sonnet-5-5") {

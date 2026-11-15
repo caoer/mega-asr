@@ -101,12 +101,13 @@
 #                            # and glossary.txt and glossary.d/*.txt beside this file (one term per line, the ones
 #                            # you say most first; the first 350 terms count), with the table's rules as known
 #                            # mis-hearings. about.txt, a line on who you are and what you talk about, goes with them
+# glossary = ""              # how much of that a call carries: all; matching, only the terms and mis-hearings
+#                            # that sound like something in what you said; none, the about line alone.
+#                            # Unset: all for fix-words, matching for a mode that returns the whole text
 # provider = ""              # the [refine.providers.<name>] table the call goes to
 # model = "claude-haiku-5-5"   # the provider's model id
 # effort = "low"             # off, low, medium, high: how much the model thinks first; off is no thinking
 #                            # where the model allows it
-#                            # of [refine.context], screen is read; app, field and clipboard are accepted
-#                            # and change nothing in this build
 # agent_copy = "refined"     # what a herdr pane with an agent in it, or the keypad's Telegram chat, gets:
 #                            # refined: the corrected text. both: when the two differ, the corrected text, a
 #                            # blank line, then the text as recognised under the mark [Mega Voice · as heard].
@@ -119,16 +120,22 @@
 #                            #   key_file = "~/.config/megavoice/anthropic.key"   # the file holding the key (the key never goes in this file)
 
 [refine.context]             # what travels with the dictation, as what was in front of you
-# app = false                # the application and its window's title
-# field = false              # the text of the field or pane you dictate into
-# clipboard = false          # what you copied just before the take
+# app = false                # the application and its window's title (and the herdr pane's workspace and agent)
+# field = false              # the text before the cursor in the field you dictate into, up to 2,000 characters
+# pane = false               # the last 60 lines of the herdr pane you dictate into, up to 6,000 characters
+# clipboard = false          # what you copied up to 8 seconds before the take or during it; never Mega
+#                            # Voice's own last transcript, nor a copy a password manager marks as concealed
+#                            # The four are read as the take stops, from where it is delivered. With the field
+#                            # or the pane giving text, the screen is not sent. Nothing is read while the
+#                            # keyboard is in a password field, nor from an application in exclude. Each take's
+#                            # refine line holds the context as sent and what each source read, in how long
 # screen = "off"             # the front window, captured as a take starts: off, ocr (its text, read on this
 #                            # Mac, sent as text) or image (its picture, sent to the model and kept beside
 #                            # the take as <take>.screen.jpg). Needs the Screen Recording permission, which
 #                            # the app asks for when this is switched on; without it the step runs without
 #                            # the screen. Nothing is captured while the keyboard is in a password field
 # exclude = ["com.1password.1password", "com.agilebits.onepassword7", "com.apple.Passwords", "com.apple.keychainaccess", "com.bitwarden.desktop", "com.lastpass.LastPass", "org.keepassxc.keepassxc"]
-#                            # applications, by bundle id, whose windows are never captured
+#                            # applications, by bundle id, from which nothing is read or captured
 
 [deliver]
 # herdr_apps = ["com.github.wez.wezterm"]   # bundle ids of the terminals herdr runs in

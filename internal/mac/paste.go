@@ -97,12 +97,17 @@ func CopyText(text string) error {
 }
 
 func writeClipboard(text string) error {
-	DoSync(func() {
-		pb := send(class("NSPasteboard"), "generalPasteboard")
-		send(pb, "clearContents")
-		send(pb, "setString:forType:", nsString(text), nsString("public.utf8-plain-text"))
-	})
+	DoSync(func() { setClipboard(text) })
 	return nil
+}
+
+// setClipboard puts text on the general pasteboard and notes the copy as
+// Mega Voice's own (Clipboard.Count). Call it on the main thread.
+func setClipboard(text string) {
+	pb := send(class("NSPasteboard"), "generalPasteboard")
+	send(pb, "clearContents")
+	send(pb, "setString:forType:", nsString(text), nsString("public.utf8-plain-text"))
+	ownCopy.Store(int64(sendInt(pb, "changeCount")))
 }
 
 // PressReturn posts a bare Return to whatever has focus.
@@ -159,9 +164,7 @@ func PasteInto(a App, text string, focusWait, wait time.Duration) (*PasteReceipt
 		prepare: func(text string) error {
 			DoSync(func() {
 				key = keycodeFor('v')
-				pb := send(class("NSPasteboard"), "generalPasteboard")
-				send(pb, "clearContents")
-				send(pb, "setString:forType:", nsString(text), nsString("public.utf8-plain-text"))
+				setClipboard(text)
 			})
 			return nil
 		},

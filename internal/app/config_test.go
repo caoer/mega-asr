@@ -81,6 +81,9 @@ func leafKeys(t reflect.Type, prefix string) []string {
 	var out []string
 	for i := range t.NumField() {
 		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
 		key := prefix + f.Tag.Get("toml")
 		if f.Type.Kind() == reflect.Struct {
 			out = append(out, leafKeys(f.Type, key+".")...)

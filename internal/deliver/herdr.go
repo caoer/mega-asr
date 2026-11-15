@@ -150,6 +150,16 @@ func (h Herdr) socket(ctx context.Context) (string, error) {
 	return "", errors.New("herdr status server: no socket line")
 }
 
+// PaneTail is a pane's last lines, as the model step's pane source sends
+// them.
+func (h Herdr) PaneTail(ctx context.Context, pane string, lines int) (string, error) {
+	sock, err := h.socket(ctx)
+	if err != nil {
+		return "", err
+	}
+	return readPane(ctx, sock, pane, lines)
+}
+
 // sendInput makes one pane.send_input request with text and no keys.
 func sendInput(sock, pane, text string) error {
 	_, err := request(context.Background(), sock, "pane.send_input", map[string]string{"pane_id": pane, "text": text})

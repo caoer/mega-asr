@@ -33,6 +33,10 @@ type Request struct {
 	// Context is what was in front of the speaker, sent inside <context>;
 	// "" sends none.
 	Context string
+	// Names are the spans of the dictation that sound like the name of a
+	// person the speaker knows, a line each (NameLine), sent under their
+	// head inside <names>; "" sends none.
+	Names string
 	// Image is a picture of what was in front of the speaker, sent ahead of
 	// the text; nil sends none.
 	Image *Image
@@ -51,23 +55,26 @@ type Image struct {
 	W, H      int // pixels
 }
 
-// UserContent is the user message of r: the context, when there is one, and
-// the dictation, each inside its tag. A closing tag written inside either,
-// spaced out or in full-width characters too, is sent with its < as &lt;,
-// so only the message's own tags close.
+// UserContent is the user message of r: the context and the names, when
+// there are any, and the dictation, each inside its tag. A closing tag
+// written inside any, spaced out or in full-width characters too, is sent
+// with its < as &lt;, so only the message's own tags close.
 func (r Request) UserContent() string {
 	var b strings.Builder
 	if r.Context != "" {
 		b.WriteString("<context>\n" + InTag(r.Context) + "\n</context>\n")
+	}
+	if r.Names != "" {
+		b.WriteString(namesHead + "\n<names>\n" + InTag(r.Names) + "\n</names>\n")
 	}
 	b.WriteString("<dictation>\n" + InTag(r.Dictation) + "\n</dictation>")
 	return b.String()
 }
 
 // closingTag is the end of a tag the request puts material in: the
-// dictation and the context, and the glossary's about line, terms and
-// mis-hearings. InTag keeps material from ending its own tag.
-var closingTag = regexp.MustCompile(`(?i)[<＜]([\s\p{Z}]*[/／][\s\p{Z}]*(?:dictation|context|about|terms|hints))`)
+// dictation, the context and the names, and the glossary's about line,
+// terms and mis-hearings. InTag keeps material from ending its own tag.
+var closingTag = regexp.MustCompile(`(?i)[<＜]([\s\p{Z}]*[/／][\s\p{Z}]*(?:dictation|context|names|about|terms|hints))`)
 
 // InTag is s as a request sends it inside one of its tags: a closing tag
 // written in it has its < sent as &lt;. A second pass changes nothing.
@@ -109,7 +116,8 @@ var (
 	ErrUnparseable = errors.New("the answer is not an edit list or a text")
 )
 
-// HTTPError is a provider's status other than 200, with the head of its body.
+// HTTPError is a provider's status other than 200, with the head of its body,
+// the key replaced by [key] wherever the body echoed it.
 type HTTPError struct {
 	Status int
 	Body   string
@@ -135,6 +143,7 @@ type Step struct {
 	Effort   string
 	System   []string // Request.System
 	Context  string   // Request.Context
+	Names    string   // Request.Names
 	Image    *Image   // Request.Image
 }
 
@@ -155,7 +164,7 @@ func (s Step) Run(ctx context.Context, text string) Result {
 	t0 := time.Now()
 	output := OutputOf(s.Mode)
 	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System,
-		Context: s.Context, Image: s.Image, Dictation: text, Output: output})
+		Context: s.Context, Names: s.Names, Image: s.Image, Dictation: text, Output: output})
 	r := Result{Text: text, Usage: reply.Usage, Wall: time.Since(t0)}
 	if err != nil {
 		r.Err = err

@@ -31,11 +31,11 @@ func TestVoiceMenu(t *testing.T) {
 		Capture: app.CaptureConfig{Source: "local", Mic: "default"},
 		Inputs:  []inputView{{"builtin-mic", "Built-in Microphone", 1, true}, {"stage-interface", "Stage Interface", 3, false}},
 		Refine: refineSettings{Mode: "fix-words", Model: "claude-haiku-5-5", Effort: "low", Context: app.RefineContextConfig{Screen: "off"},
-			Modes: app.RefineModes, Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.txt"}} // the shipped defaults: no key yet
+			Modes: app.RefineModes, Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.txt", Reach: "all"}} // the shipped defaults: no key yet
 	refineOn := base
 	refineOn.Refine = refineSettings{On: true, Keyed: true, Mode: "translate", Model: "a-typed-model", Effort: "off",
 		Context: app.RefineContextConfig{App: true, Clipboard: true, Screen: "image"}, Modes: append(slices.Clone(app.RefineModes), "meeting-notes"),
-		Prompt: "/c/modes.d/translate.md", Glossary: "/c/glossary.txt"}
+		Prompt: "/c/modes.d/translate.md", Glossary: "/c/glossary.txt", Reach: "matching"}
 	pending := base
 	pending.File = voiceSettings{TapKey: "right_shift", WholeMax: 90 * time.Second, LLM: build, Engine: "doubao"}
 	pending.Compare = compareSettings{On: true}
@@ -126,6 +126,9 @@ func TestVoiceMenu(t *testing.T) {
 	}
 	if got := takeArgs(acts["rec: 取消录音"]); !maps.Equal(got, map[string]string{"via": "menu", "take": "20200101-120000"}) {
 		t.Errorf("the take row sends %v", got)
+	}
+	if got := acts["Model Step: Off › Glossary: All › Near Ones Only"]; got.kind != actSet || got.key != "refine.glossary" || got.arg != `"matching"` {
+		t.Errorf("the glossary's Near Ones Only: %+v, want refine.glossary = \"matching\"", got)
 	}
 	if _, ok := acts[in+"Forget Remote Mic"]; ok {
 		t.Error("Forget Remote Mic shows with no remote paired")
@@ -239,16 +242,21 @@ func TestModeMenuListsPromptFiles(t *testing.T) {
 }
 
 // The Context submenu offers only the sources this build sends with the
-// dictation: the screen. App, field and clipboard are not read yet.
+// dictation: the application, the field, the pane, the clipboard and the
+// screen.
 func TestContextMenuListsWhatTheBuildReads(t *testing.T) {
-	reads := map[string]bool{"refine.context.screen": true}
-	for _, c := range []app.RefineContextConfig{{Screen: "off"}, {App: true, Field: true, Clipboard: true, Screen: "image"}} {
+	reads := map[string]bool{"refine.context.app": true, "refine.context.field": true, "refine.context.pane": true,
+		"refine.context.clipboard": true, "refine.context.screen": true}
+	for _, c := range []app.RefineContextConfig{{Screen: "off"}, {App: true, Field: true, Pane: true, Clipboard: true, Screen: "image"}} {
 		v := voiceState{Refine: refineSettings{Mode: "fix-words", Context: c, Modes: app.RefineModes}}
 		sub, ok := subRows([]row{v.refineRow()}, "Context")
 		if !ok || len(sub) == 0 {
 			t.Fatal("no Context submenu")
 		}
 		for _, r := range sub {
+			if r.sep {
+				continue
+			}
 			if r.act == nil || !reads[r.act.key] {
 				t.Errorf("Context offers %q (%+v), which this build does not read", r.title, r.act)
 			}
@@ -836,5 +844,56 @@ func TestMenuExitBoundSurvivesBlockedInterrupt(t *testing.T) {
 	case <-exited:
 		t.Fatal("exit fired twice")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+// A mode named in another case than its prompt file is that file on the
+// Mac's disk: the file's row is checked, and no "file gone" row is added.
+func TestModeMenuPicksAFileInAnotherCase(t *testing.T) {
+	v := voiceState{Refine: refineSettings{Mode: "meeting-notes", Context: app.RefineContextConfig{Screen: "off"},
+		Modes: []string{"fix-words", "tidy", "translate", "Meeting-Notes"}}}
+	sub, ok := subRows([]row{v.refineRow()}, "Mode: Model Writes · meeting-notes")
+	if !ok {
+		t.Fatalf("no mode row in:\n%s", titles([]row{v.refineRow()}))
+	}
+	var checked []string
+	for _, r := range sub {
+		if r.checked {
+			checked = append(checked, r.title)
+		}
+	}
+	if !slices.Equal(checked, []string{"Meeting-Notes"}) {
+		t.Errorf("checked rows %q, want Meeting-Notes alone", checked)
+	}
+}
+
+// Edit Prompt… and Edit Glossary… open their files; with no path — the
+// config never loaded in this process — there is nothing to open, and they
+// are not enabled.
+func TestEditItemsNeedAPath(t *testing.T) {
+	for _, c := range []struct {
+		r    refineSettings
+		want bool
+	}{
+		{refineSettings{Mode: "fix-words"}, false},
+		{refineSettings{Mode: "fix-words", Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.md"}, true},
+	} {
+		n := 0
+		var walk func([]row)
+		walk = func(rs []row) {
+			for _, r := range rs {
+				if r.act != nil && r.act.kind == actEdit {
+					n++
+					if r.enabled != c.want {
+						t.Errorf("%q with path %q: enabled %v", r.title, r.act.arg, r.enabled)
+					}
+				}
+				walk(r.sub)
+			}
+		}
+		walk([]row{(voiceState{Refine: c.r}).refineRow()})
+		if n != 2 {
+			t.Fatalf("%d edit items, want Edit Prompt… and Edit Glossary…", n)
+		}
 	}
 }

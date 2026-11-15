@@ -68,7 +68,7 @@ func refineCmd(o app.LoadOpts, args []string, in io.Reader, out io.Writer) error
 		if wait := stage.Screen(); wait != nil { // refine.context.screen: the window in front now
 			take.Screen = wait(context.Background())
 		}
-		l.Text, l.Refine = c.Refine.RunTake(context.Background(), take)
+		l.Text, l.Refine = c.RefineTake().RunTake(context.Background(), take)
 		if err := enc.Encode(l); err != nil {
 			return err
 		}

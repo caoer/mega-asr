@@ -126,6 +126,23 @@ type Event struct {
 	// Screen is the step's screen source on this take; absent while the
 	// source is off.
 	Screen *Screen `json:"screen,omitempty"`
+	// Sources is what each of the step's switched-on text sources read
+	// (refine.context app, field, pane, clipboard); absent while all are
+	// off. What they sent is in Context.
+	Sources []ContextSource `json:"sources,omitempty"`
+}
+
+// ContextSource is one text source of the model step on a refine line:
+// how much of the take's <context> it gave and how long its read took, or
+// why it gave nothing.
+type ContextSource struct {
+	Source string `json:"source"`          // app, field, pane or clipboard
+	Chars  int    `json:"chars,omitempty"` // characters of its paragraph in the context
+	ReadUS int64  `json:"read_us"`         // its read, in microseconds
+	// Withheld is why it sent nothing: none, empty, stale, own, secure,
+	// excluded or error.
+	Withheld string `json:"withheld,omitempty"`
+	Err      string `json:"err,omitempty"`
 }
 
 // Screen is the model step's screen source on a refine line: what the

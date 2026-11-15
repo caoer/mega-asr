@@ -27,6 +27,7 @@ import (
 	"github.com/caoer/mega-asr/internal/keypad"
 	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/relay/client"
 	"github.com/caoer/mega-asr/internal/remote"
 	"github.com/caoer/mega-asr/internal/session"
@@ -218,6 +219,8 @@ func (s *server) ready() {
 	stage := s.cfg.RefineStage(s.opts)
 	stage.Display = mac.Screen{}
 	s.refine = stage
+	stage.Clip = &refine.ClipWatch{Board: mac.Clipboard{}, On: stage.ClipboardOn}
+	s.lifetime.start(stage.Clip.Run)
 	s.dlv = deliver.Deliverer{
 		Pane:      s.flag.pane,
 		Agents:    stage.NotesAgent,
@@ -274,6 +277,7 @@ func (s *server) ready() {
 		Refine:      stage.Take,
 		Warm:        stage.Warm,
 		Screen:      stage.Screen,
+		Sources:     stage.Sources,
 		Deliver:     dlv,
 		UI:          ui,
 		Store:       store.Store{Dir: s.cfg.Store.Data},

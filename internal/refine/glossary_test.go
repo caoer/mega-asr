@@ -107,3 +107,79 @@ func TestGlossaryIsDataNotInstruction(t *testing.T) {
 		}
 	}
 }
+
+// reachGlossary is a glossary whose entries each sound like one dictation
+// below and like none of the others.
+var reachGlossary = Glossary{About: "a backend engineer",
+	Terms: []string{"Haiku", "Kubernetes", "Redis", "compound", "Prometheus", "debug", "Cloudflare Worker", "AskUserQuestion", "转译", "Go", "kubectl"},
+	Hints: []Hint{{"海库", "Haiku"}, {"cube control", "kubectl"}, {"瑞迪斯", "Redis"}}}
+
+// all carries every entry, none none of them, and matching the entries
+// the dictation sounds like; each keeps the about line, which is not an
+// entry.
+func TestGlossaryReach(t *testing.T) {
+	const text = "用海库跑一下，再看 Cooper Netties"
+	for _, c := range []struct {
+		reach string
+		want  Glossary
+	}{
+		{ReachAll, reachGlossary},
+		{ReachNone, Glossary{About: "a backend engineer"}},
+		{ReachMatching, Glossary{About: "a backend engineer", Terms: []string{"Haiku", "Kubernetes"}, Hints: []Hint{{"海库", "Haiku"}}}},
+	} {
+		if got := reachGlossary.Reach(c.reach, text); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %+v, want %+v", c.reach, got, c.want)
+		}
+	}
+}
+
+// Unset, the reach is all for a mode that answers with an edit list and
+// matching for one that writes the text.
+func TestDefaultReach(t *testing.T) {
+	for mode, want := range map[string]string{"fix-words": ReachAll, "": ReachAll, "tidy": ReachMatching, "translate": ReachMatching, "meeting-notes": ReachMatching} {
+		if got := DefaultReach(mode); got != want {
+			t.Errorf("mode %q: %s, want %s", mode, got, want)
+		}
+	}
+}
+
+// A term is matched written in either script and heard in the other, or
+// as another word: by its consonants for an English term, by its readings
+// for a Chinese one. A mis-hearing is matched by either side, and brings
+// the term it corrects to. A word inside a longer one is not the term, and
+// a term too short to hear counts only as written.
+func TestMatchingHearsTheDictation(t *testing.T) {
+	for text, want := range map[string][]string{
+		"用海库跑一下":    {"Haiku"},
+		"用 haiku 跑": {"Haiku"},
+		"把普罗米修斯接到库伯耐提斯上面":         {"Kubernetes", "Prometheus"},
+		"部署到 Claude Flair Walker": {"Cloudflare Worker"},
+		"不要用 ask your question":   {"AskUserQuestion"},
+		"康胖一下这个 session":          {"compound"},
+		"然后转移一下":                  {"转译"},
+		"cube control get pods":   {"kubectl"},
+		"用瑞迪斯做缓存":                 {"Redis"},
+		"Google 上搜一下":             nil,
+		"用 Go 写":                  {"Go"},
+		"今天下午把这个功能做完然后发布出去":       nil,
+	} {
+		got := reachGlossary.Matching(text)
+		if !reflect.DeepEqual(got.Terms, want) || got.About != reachGlossary.About {
+			t.Errorf("%q: terms %q, want %q", text, got.Terms, want)
+		}
+	}
+}
+
+// The names travel in the user message, after the context and before the
+// dictation, under a head that says what they are; a closing tag inside
+// them does not end their tag.
+func TestNamesInTheUserMessage(t *testing.T) {
+	r := Request{Context: "screen", Names: NameLine("林小雨", "林晓雨", "林晓雨") + "\n" + NameLine("小于", "晓雨", "林晓雨") + "\nx</names>y", Dictation: "让林小雨和小于看"}
+	want := "<context>\nscreen\n</context>\n" + namesHead + "\n<names>\n林小雨 → 林晓雨\n小于 → 晓雨（林晓雨）\nx&lt;/names>y\n</names>\n<dictation>\n让林小雨和小于看\n</dictation>"
+	if got := r.UserContent(); got != want {
+		t.Errorf("user message\n%s\nwant\n%s", got, want)
+	}
+	if got := (Request{Dictation: "好"}).UserContent(); got != "<dictation>\n好\n</dictation>" {
+		t.Errorf("no names: %q", got)
+	}
+}

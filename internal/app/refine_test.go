@@ -233,6 +233,9 @@ func TestRefineWaitsForTheProvider(t *testing.T) {
 		_, ev := l.RefineStage(LoadOpts{}).Take().Run(ctx, session.RefineInput{Text: "用海库跑一下"})
 		done <- ev
 	}()
+	for p.requests.Load() == 0 { // the 500 ms count from the call being under way
+		time.Sleep(time.Millisecond)
+	}
 	select {
 	case ev := <-done:
 		t.Fatalf("the call ended on its own: %+v", ev)
@@ -261,6 +264,7 @@ agent_copy = "both"
 [refine.context]
 app = true
 field = true
+pane = true
 clipboard = true
 screen = "ocr"
 
@@ -280,7 +284,7 @@ key_file = "/keys/other.key"
 	}
 	home, _ := os.UserHomeDir()
 	want := RefineConfig{On: true, Mode: "fix-words", Provider: "gateway", Model: "claude-sonnet-5-5", Effort: "off", AgentCopy: "both",
-		Context: RefineContextConfig{App: true, Field: true, Clipboard: true, Screen: "ocr", Exclude: ScreenExclude},
+		Context: RefineContextConfig{App: true, Field: true, Pane: true, Clipboard: true, Screen: "ocr", Exclude: ScreenExclude},
 		Providers: map[string]RefineProviderConfig{
 			"gateway": {Kind: "anthropic", BaseURL: "https://gateway.example/anthropic", KeyFile: filepath.Join(home, "keys/model.key")},
 			"other":   {Kind: "openai", BaseURL: "https://api.example/v1", KeyFile: "/keys/other.key"},
@@ -664,5 +668,95 @@ func TestStepInMakesOneRequestInThatMode(t *testing.T) {
 	if n := p.requests.Load(); n != 1 || ev == nil || ev.Mode != "tidy" || ev.Why != "" || got != "用海库跑一下 Python。" ||
 		!strings.Contains(system, strings.Trim(string(want), `"`)[:40]) || ev.Copy != "" {
 		t.Fatalf("%d requests, text %q, line %+v, system %.120s", n, got, ev, system)
+	}
+}
+
+// With both stages configured the names scan still runs on a take the step
+// runs on, and what the gate would have asked Jev travels in the step's one
+// request: the spans, under their head, in the user message. Jev hears
+// nothing. With names.on off, or when no span sounds the same as a name,
+// the request lists none.
+func TestNamesTravelInTheOneRequest(t *testing.T) {
+	var jev atomic.Int32
+	typesafe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { jev.Add(1) }))
+	defer typesafe.Close()
+	defer func(u string) { namesURL = u }(namesURL)
+	namesURL = typesafe.URL
+	p := newProvider(t)
+	var user string
+	p.answer = func(w http.ResponseWriter, body map[string]any) {
+		msgs, _ := body["messages"].([]any)
+		m, _ := msgs[0].(map[string]any)
+		user, _ = m["content"].(string)
+		edits(`[{"from":"林小雨","why":"人名","to":"林晓雨"}]`)(w, body)
+	}
+	for _, tc := range []struct {
+		names, said, listed, delivered string
+	}{
+		{"true", "让林小雨用海库跑一下", "林小雨 → 林晓雨", "让林晓雨用海库跑一下"},
+		{"false", "让林小雨用海库跑一下", "", "让林晓雨用海库跑一下"},
+		{"true", "让林晓月用海库跑一下", "", "让林晓月用海库跑一下"}, // near, not the same: the gate would not fire
+	} {
+		jev.Store(0)
+		user = ""
+		dir := isolate(t)
+		vocabulary(t, dir, map[string]string{"people.json": `{"people":[{"slug":"linxiaoyu","name":"林晓雨"}]}`, "typesafe.key": "ts-test\n"})
+		refineConfig(t, dir, p.URL, "")
+		b, _ := os.ReadFile(filepath.Join(dir, "config.toml"))
+		writeConfig(t, dir, "[names]\non = "+tc.names+"\npeople = \""+filepath.Join(dir, "people.json")+"\"\nkey_file = \""+filepath.Join(dir, "typesafe.key")+"\"\n"+string(b))
+		l, err := Load(LoadOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := &pasted{}
+		c := &session.Controller{
+			NewSource: func() audio.Source { return &heardSource{} },
+			ASR:       said(tc.said),
+			Names:     l.NamesStage(),
+			Refine:    l.RefineStage(LoadOpts{}).Take,
+			Deliver:   out,
+			UI:        noUI{},
+			Store:     store.Store{Dir: t.TempDir()},
+			ChunkDir:  t.TempDir(),
+		}
+		c.Toggle()
+		c.Toggle()
+		c.Wait()
+		listed := ""
+		if _, in, ok := strings.Cut(user, "\n<names>\n"); ok {
+			listed, _, _ = strings.Cut(in, "\n</names>")
+		}
+		if listed != tc.listed || jev.Load() != 0 || strings.Join(out.text, ";") != tc.delivered {
+			t.Errorf("names.on = %s, %q: names %q, %d Jev requests, delivered %q; want %q, 0, %q\n%s",
+				tc.names, tc.said, listed, jev.Load(), out.text, tc.listed, tc.delivered, user)
+		}
+	}
+}
+
+// A mode the app comes with, spelled in another case, opens that mode's
+// prompt file on the Mac's disk while being another mode: Fix-Words would
+// send fix-words' edit-list prompt as a text mode and paste its answer. No
+// mode is named so: the config refuses it, and a prompt file so named, or
+// differing only in case from one listed, is not offered.
+func TestModeNamesDifferingOnlyInCase(t *testing.T) {
+	for _, mode := range []string{"Fix-Words", "FIX-WORDS", "Tidy"} {
+		dir := isolate(t)
+		writeConfig(t, dir, "[refine]\nmode = \""+mode+"\"\n")
+		if _, err := Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), "refine.mode: \""+mode+"\" is ") ||
+			!strings.Contains(err.Error(), "in another case") {
+			t.Errorf("mode %q: got %v, want it refused as a seeded mode in another case", mode, err)
+		}
+	}
+	dir := isolate(t)
+	if err := os.MkdirAll(filepath.Join(dir, "modes.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"Fix-Words.md", "Tidy.md", "Meeting-Notes.md", "meeting-notes.md"} {
+		if err := os.WriteFile(filepath.Join(dir, "modes.d", f), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := RefineModeNames(), []string{"fix-words", "tidy", "translate", "Meeting-Notes"}; !slices.Equal(got, want) {
+		t.Errorf("modes offered %q, want %q", got, want)
 	}
 }
