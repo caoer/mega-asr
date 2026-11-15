@@ -79,8 +79,12 @@ func (t *Target) String() string {
 type Deliverer struct {
 	// Pane, when set, is every take's target in place of what is frontmost:
 	// a scratch instance for checks delivers to a pane of its own.
-	Pane      string
-	Herdr     Herdr
+	Pane  string
+	Herdr Herdr
+	// Agents, when set and true, has a capture note the agent herdr sees in
+	// the pane (Target.Agent), for a model step that delivers differently to
+	// an agent; otherwise a capture asks herdr nothing more than it did.
+	Agents    func() bool
 	HerdrApps []string      // bundle ids of terminals that host herdr
 	FocusWait time.Duration // how long the captured window has to take focus
 	Settle    time.Duration // between the text and the Enter that sends it
@@ -88,8 +92,12 @@ type Deliverer struct {
 
 // Capture locks the target: what is frontmost now.
 func (d Deliverer) Capture() session.Target {
+	agents := d.Agents != nil && d.Agents()
 	if d.Pane != "" {
 		t := &Target{Pane: d.Pane}
+		if !agents {
+			return t
+		}
 		if p, err := d.Herdr.pane("pane "+d.Pane, func(p Pane) bool { return p.ID == d.Pane }); err != nil {
 			log.Printf("deliver: %v", err)
 		} else {
@@ -104,7 +112,10 @@ func (d Deliverer) Capture() session.Target {
 		case err != nil:
 			log.Printf("deliver: %v", err)
 		case herdrFront(t.App.BundleID, t.App.Title, d.HerdrApps, p.Workspace):
-			t.Pane, t.Workspace, t.Agent = p.ID, p.Workspace, p.Agent
+			t.Pane, t.Workspace = p.ID, p.Workspace
+			if agents {
+				t.Agent = p.Agent
+			}
 		}
 	}
 	return t
@@ -131,7 +142,7 @@ func (d Deliverer) Resolve(to string) (session.Target, error) {
 		}
 		for _, p := range panes {
 			if p.ID == arg {
-				return &Target{Pane: arg, Workspace: p.Workspace, Agent: p.Agent}, nil
+				return &Target{Pane: arg, Workspace: p.Workspace}, nil
 			}
 		}
 		return nil, fmt.Errorf("target %q: herdr lists no such pane", to)

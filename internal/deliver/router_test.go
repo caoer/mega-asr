@@ -208,7 +208,7 @@ func TestRouterAgentTarget(t *testing.T) {
 	if st := session.StoreTarget(end.ForEnd(false)); st.IsAgent() {
 		t.Fatalf("the Mac's target %+v reads as an agent's", st)
 	}
-	text := "用Haiku跑一下\n\n[Mega Voice · heard → corrected] 海库 → Haiku"
+	text := "用Haiku跑一下\n\n[Mega Voice · as heard]\n用海库跑一下"
 	take(r, captured, text, true)
 	if b, _ := os.ReadFile(out); string(b) != text {
 		t.Fatalf("sent %q, want %q once", b, text)

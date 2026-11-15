@@ -138,38 +138,145 @@ func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
 	}
 }
 
-// What the step gives an agent's target is what the take delivers, whole and
-// once: under both the corrected text with its marked second part, which the
-// deliver line keeps; under raw the text as recognised, with no text on the
-// deliver line, while the refine line keeps the edits and the overlay says
-// they were only recorded.
+// recordDeliverer captures targets whose record is rec.
+type recordDeliverer struct {
+	*fakeDeliverer
+	rec store.Target
+}
+
+type recordTarget struct {
+	Target
+	rec store.Target
+}
+
+func (t recordTarget) Record() store.Target { return t.rec }
+
+func (d recordDeliverer) Capture() Target { return recordTarget{d.fakeDeliverer.Capture(), d.rec} }
+
+// keypadDeliverer captures a keypad take: its Enter sends to a Telegram
+// chat, its plain stop pastes at the cursor.
+type keypadDeliverer struct{ *fakeDeliverer }
+
+type keypadEnd struct{ Target }
+
+func (t keypadEnd) ForEnd(send bool) Target {
+	if send {
+		return recordTarget{&target{name: "chat"}, store.Target{Kind: "telegram"}}
+	}
+	return t.Target
+}
+
+func (d keypadDeliverer) Capture() Target { return keypadEnd{d.fakeDeliverer.Capture()} }
+
+// stepFixing is a model step that corrects 海库 to Haiku and hands the
+// controller agent_copy as the stage does.
+func stepFixing(copy string) func() func(context.Context, RefineInput) (string, *store.Event) {
+	return func() func(context.Context, RefineInput) (string, *store.Event) {
+		return func(_ context.Context, in RefineInput) (string, *store.Event) {
+			return strings.ReplaceAll(in.Text, "海库", "Haiku"), &store.Event{Ev: "refine", Model: "m", LatencyMS: 900,
+				Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}, Copy: copy}
+		}
+	}
+}
+
+// marked is what both adds to the corrected text of 用海库跑一下 ….
+func marked(heard string) string { return "\n\n[Mega Voice · as heard]\n" + heard }
+
+// Toward an agent's target agent_copy chooses what is delivered — refined
+// the corrected text, both the corrected text and the marked changes, raw
+// the text as heard — and every other target gets the corrected text. The
+// deliver line keeps the take's text, never the second part, with what was
+// sent in its place beside it; the refine line says what went out and keeps
+// the edits; under raw the overlay says they were only recorded.
 func TestRefineAgentCopies(t *testing.T) {
-	edits := []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}
+	const heard, fixed = "用海库跑一下 Python", "用Haiku跑一下 Python"
 	for _, tc := range []struct {
-		copy, text, deliverText string
+		copy, to        string
+		rec             *store.Target
+		got, text, sent string
+		line            string
 	}{
-		{"both", "用Haiku跑一下 Python\n\n[Mega Voice · heard → corrected] 海库 → Haiku", "用Haiku跑一下 Python\n\n[Mega Voice · heard → corrected] 海库 → Haiku"},
-		{"raw", "用海库跑一下 Python", ""},
+		{"refined", "agent pane", &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}, fixed, fixed, "", ""},
+		{"both", "agent pane", &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
+		{"raw", "agent pane", &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}, heard, "", "", "raw"},
+		{"both", "chat", &store.Target{Kind: "telegram"}, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
+		{"raw", "chat", &store.Target{Kind: "telegram"}, heard, "", "", "raw"},
+		{"both", "shell pane", &store.Target{Kind: "herdr", Pane: "w1:p1"}, fixed, fixed, "", ""},
+		{"raw", "shell pane", &store.Target{Kind: "herdr", Pane: "w1:p1"}, fixed, fixed, "", ""},
+		{"both", "app", &store.Target{Kind: "app", App: "Notes"}, fixed, fixed, "", ""},
+		{"raw", "unrecorded", nil, fixed, fixed, "", ""},
 	} {
 		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
-		r.c.Deliver = paneDeliverer{r.del}
-		ev := &store.Event{Ev: "refine", Model: "m", LatencyMS: 900, Edits: edits, Copy: tc.copy}
-		r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
-			return func(context.Context, RefineInput) (string, *store.Event) { return tc.text, ev }
+		if tc.rec != nil {
+			r.c.Deliver = recordDeliverer{r.del, *tc.rec}
 		}
+		r.c.Refine = stepFixing(tc.copy)
 		r.c.Toggle()
 		r.c.Toggle()
 		r.wait(t)
-		if d := r.del.got(); !strings.HasSuffix(d, "|"+tc.text) || strings.Count(d, "Python") != 1 {
-			t.Fatalf("%s: delivered %q", tc.copy, d)
+		name := tc.copy + " to " + tc.to
+		if d := r.del.got(); d != "telegram|"+tc.got { // one delivery, nothing else
+			t.Errorf("%s: delivered %q, want %q", name, d, tc.got)
+			continue
 		}
 		refine, deliver := refineLines(t, r.dir+"/20200417-104200")
-		if refine == nil || refine.Copy != tc.copy || len(refine.Edits) != 1 || deliver == nil || deliver.Text != tc.deliverText {
-			t.Fatalf("%s: refine %+v, deliver %+v", tc.copy, refine, deliver)
+		if refine == nil || refine.Copy != tc.line || len(refine.Edits) != 1 || deliver == nil || deliver.Text != tc.text ||
+			deliver.Sent != tc.sent || deliver.Chars != len([]rune(tc.got)) {
+			t.Errorf("%s: refine %+v, deliver %+v", name, refine, deliver)
 		}
-		note := refineNote(ev)
-		if !strings.Contains(r.ui.String(), "flash:"+note) || strings.HasPrefix(note, "海库") == (tc.copy == "raw") {
-			t.Fatalf("%s: note %q, ui %s", tc.copy, note, r.ui)
+		if note := refineNote(refine); strings.HasPrefix(note, "海库") == (tc.line == "raw") {
+			t.Errorf("%s: overlay note %q", name, note)
+		}
+	}
+}
+
+// A take with a failed chunk keeps no .txt, so a resend and the takes list
+// read its text off its deliver line. Delivered with both, that text is the
+// corrected text: the marked second part went to the agent and nowhere else.
+func TestBothKeepsTheMarkerOffTheTake(t *testing.T) {
+	r := newRig(t, &fakeSource{n: 2 * audio.Rate}, "用海库跑一下", "二")
+	r.asr.fail = map[int]bool{2: true}
+	r.c.NewChunker = func() Chunker { return &everyN{n: audio.Rate} }
+	r.c.Deliver = recordDeliverer{r.del, store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}}
+	r.c.Refine = stepFixing("both")
+	r.c.Toggle()
+	r.c.Toggle()
+	r.wait(t)
+	base := r.dir + "/20200417-104200"
+	if d := r.del.got(); !strings.HasSuffix(d, "|用Haiku跑一下"+marked("用海库跑一下")) {
+		t.Fatalf("the agent got %q", d)
+	}
+	evs, err := store.Read(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, _, err := textOf(base, evs, "")
+	if err != nil || text != "用Haiku跑一下" {
+		t.Fatalf("a resend would paste %q (%v), want the corrected text alone", text, err)
+	}
+}
+
+// On a keypad take the copy follows where the take ends: its Enter sends the
+// both copy to the chat; a plain stop pastes the corrected text alone at the
+// cursor.
+func TestRefineBothOnAKeypadTake(t *testing.T) {
+	for _, send := range []bool{true, false} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+		r.c.Deliver = keypadDeliverer{r.del}
+		r.c.Refine = stepFixing("both")
+		r.c.Toggle()
+		if send {
+			r.c.Enter()
+		} else {
+			r.c.Toggle()
+		}
+		r.wait(t)
+		want := "telegram|用Haiku跑一下 Python"
+		if send {
+			want = "chat|用Haiku跑一下 Python" + marked("用海库跑一下 Python")
+		}
+		if d := r.del.got(); !strings.HasPrefix(d, want) {
+			t.Errorf("send %v: delivered %q, want %q", send, d, want)
 		}
 	}
 }

@@ -109,11 +109,10 @@
 #                            # [refine.context] is accepted and changes nothing in this build: the dictation
 #                            # travels alone
 # agent_copy = "refined"     # what a herdr pane with an agent in it, or the keypad's Telegram chat, gets:
-#                            # refined: the corrected text. both: the corrected text, a blank line, then a marked
-#                            # second part, only when something changed: the words changed, heard → corrected,
-#                            # or under tidy and translate the whole text as heard. raw: the text as recognised;
-#                            # what the model would have changed is only recorded. Every other target gets the
-#                            # corrected text
+#                            # refined: the corrected text. both: when the two differ, the corrected text, a
+#                            # blank line, then the text as recognised under the mark [Mega Voice · as heard].
+#                            # raw: the text as recognised; what the model would have changed is only recorded.
+#                            # Every other target gets the corrected text
 # providers = {}             # one table per provider, in place of this line:
 #                            #   [refine.providers.anthropic]
 #                            #   kind = "anthropic"                        # anthropic: the Messages API; openai: chat completions

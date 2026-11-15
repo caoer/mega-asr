@@ -5,29 +5,18 @@ import (
 	"unicode"
 )
 
-// The marks that open the second part of a "both" delivery.
-const (
-	MarkEdits    = "[Mega Voice · heard → corrected]"
-	MarkOriginal = "[Mega Voice · as heard]"
-)
+// MarkOriginal opens the second text of a "both" delivery: the dictation as
+// the recogniser heard it.
+const MarkOriginal = "[Mega Voice · as heard]"
 
-// Both is the one text a "both" delivery carries: the corrected text, a blank
-// line, then the marked second part — the changes, heard → corrected, when
-// the step fixed words (edits), the whole of heard when it rewrote the text.
-// It is text alone when nothing changed.
-func Both(heard, text string, edits []Edit) string {
-	if text == heard {
+// Both is the one text a "both" delivery carries: the model's text, a blank
+// line, then the recognised text heard under MarkOriginal, in every mode.
+// It is text alone when the two differ in nothing but spacing.
+func Both(heard, text string) string {
+	if strings.Join(strings.Fields(text), " ") == strings.Join(strings.Fields(heard), " ") {
 		return text
 	}
-	if len(edits) == 0 {
-		return text + "\n\n" + MarkOriginal + "\n" + heard
-	}
-	parts := make([]string, 0, len(edits))
-	for _, e := range edits {
-		from, to := Shown(e.From, e.To)
-		parts = append(parts, from+" → "+to)
-	}
-	return text + "\n\n" + MarkEdits + " " + strings.Join(parts, " · ")
+	return text + "\n\n" + MarkOriginal + "\n" + heard
 }
 
 // Shown is how an edit reads to a person or an agent: from and to without

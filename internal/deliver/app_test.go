@@ -129,12 +129,14 @@ func TestResolveRefusesGoneTargets(t *testing.T) {
 	}
 }
 
-// A pane's record names the agent herdr sees in it, whether the take found
-// the pane focused, a scratch instance names it, or a resend resolves it; a
-// pane with no agent is no agent's target.
-func TestPaneRecordsItsAgent(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "herdr")
+// fakeHerdrAgents is a herdr whose pane list holds w1:p1 with no agent and
+// w1:p2 with claude in it; each run is appended to calls.
+func fakeHerdrAgents(t *testing.T) (bin, calls string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin, calls = filepath.Join(dir, "herdr"), filepath.Join(dir, "calls")
 	script := `#!/bin/sh
+echo "$*" >> ` + calls + `
 case "$1 $2" in
 "pane list") echo '{"result":{"panes":[{"pane_id":"w1:p1","workspace_id":"w1"},{"pane_id":"w1:p2","workspace_id":"w1","agent":"claude"}]}}' ;;
 "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"saltmarsh"}]}}' ;;
@@ -144,18 +146,40 @@ esac
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return bin, calls
+}
+
+// With the model step off a capture asks herdr nothing and its record names
+// no agent: a take's lines are what they were before the step existed.
+func TestOffCaptureAsksHerdrNothing(t *testing.T) {
+	bin, calls := fakeHerdrAgents(t)
+	d := Deliverer{Pane: "w1:p2", Herdr: Herdr{Bin: bin}}
+	r := d.Capture().(*Target).Record()
+	if b, _ := os.ReadFile(calls); len(b) != 0 || r.Kind != "herdr" || r.Pane != "w1:p2" || r.Agent != "" {
+		t.Fatalf("herdr was asked %q; record %+v", b, r)
+	}
+}
+
+// While the step delivers differently to an agent (Agents), a capture notes
+// the agent herdr sees in the pane; a pane with no agent is no agent's
+// target. A resend's pane records no agent: no step runs on a resend.
+func TestPaneRecordsItsAgent(t *testing.T) {
+	bin, _ := fakeHerdrAgents(t)
 	for pane, agent := range map[string]string{"w1:p1": "", "w1:p2": "claude"} {
-		d := Deliverer{Herdr: Herdr{Bin: bin}}
+		d := Deliverer{Pane: pane, Herdr: Herdr{Bin: bin}, Agents: func() bool { return true }}
+		if r := d.Capture().(*Target).Record(); r.Kind != "herdr" || r.Agent != agent || r.IsAgent() != (agent != "") {
+			t.Errorf("capture %s: record %+v", pane, r)
+		}
+		d.Agents = func() bool { return false }
+		if r := d.Capture().(*Target).Record(); r.Agent != "" {
+			t.Errorf("capture %s with Agents false: record %+v", pane, r)
+		}
 		resolved, err := d.Resolve("pane:" + pane)
 		if err != nil {
 			t.Fatal(err)
 		}
-		d.Pane = pane
-		for how, st := range map[string]session.Target{"scratch": d.Capture(), "resend": resolved} {
-			r := st.(*Target).Record()
-			if r.Kind != "herdr" || r.Agent != agent || r.IsAgent() != (agent != "") {
-				t.Errorf("%s %s: record %+v", how, pane, r)
-			}
+		if r := resolved.(*Target).Record(); r.Agent != "" {
+			t.Errorf("resend %s: record %+v", pane, r)
 		}
 	}
 }

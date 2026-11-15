@@ -214,8 +214,10 @@ func (s *server) ready() {
 	if engine == "doubao" {
 		model = s.cfg.ASR.Doubao.ResourceID
 	}
+	stage := s.cfg.RefineStage(s.opts)
 	s.dlv = deliver.Deliverer{
 		Pane:      s.flag.pane,
+		Agents:    stage.NotesAgent,
 		Herdr:     deliver.Herdr{Bin: "herdr"},
 		HerdrApps: s.cfg.Deliver.HerdrApps,
 		FocusWait: time.Second,
@@ -254,7 +256,6 @@ func (s *server) ready() {
 		deskRouter = s.desk.router(s.dlv, send)
 		dlv = deskRouter
 	}
-	stage := s.cfg.RefineStage(s.opts)
 	s.ctrl = &session.Controller{
 		Engine:      engine,
 		Model:       model,

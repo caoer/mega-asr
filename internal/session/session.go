@@ -1466,11 +1466,14 @@ func (c *Controller) finish(r *take, total int) {
 		}
 		return target
 	}
+	sent := "" // what an agent's target is sent in place of text: its both copy
 	if c.Refine != nil && c.OnChunks == nil && text != "" && !cancelled && !broken {
 		if run := c.Refine(); run != nil {
 			c.refining(r, text)
 			var ev *store.Event
+			heard := text
 			if text, ev = run(c.ctx(), RefineInput{Text: text, Target: StoreTarget(endTarget())}); ev != nil {
+				text, sent = agentCopy(StoreTarget(endTarget()), heard, text, ev)
 				c.Record(r.base, *ev)
 				note = refineNote(ev)
 				log.Printf("session: refine %d ms, %d edits: %q", ev.LatencyMS, len(ev.Edits), text)
@@ -1505,8 +1508,12 @@ func (c *Controller) finish(r *take, total int) {
 	c.updateLocked()
 	c.mu.Unlock()
 	target := endTarget()
-	de := store.Event{Ev: "deliver", N: 1, Via: "auto", Target: StoreTarget(target), Chars: chars(text), Submit: "none", Source: "delivered"}
-	if failed > 0 || text != saved { // no .txt, or not its text: the record keeps what went out
+	out := text // the bytes delivered; text stays the take's text
+	if sent != "" {
+		out = sent
+	}
+	de := store.Event{Ev: "deliver", N: 1, Via: "auto", Target: StoreTarget(target), Chars: chars(out), Submit: "none", Source: "delivered", Sent: sent}
+	if failed > 0 || text != saved { // no .txt, or not its text: the record keeps the take's text
 		de.Text = text
 	}
 	if !r.paste.CompareAndSwap(0, pasteBegun) { // Interrupt marked it undelivered: that stays true
@@ -1516,7 +1523,7 @@ func (c *Controller) finish(r *take, total int) {
 	if r.sink != nil {
 		deliverer = r.sink
 	}
-	if err := deliverer.Deliver(target, text); err != nil {
+	if err := deliverer.Deliver(target, out); err != nil {
 		r.paste.Store(0) // nothing landed
 		c.seal(r)
 		if r.sink != nil {
@@ -1564,7 +1571,7 @@ func (c *Controller) finish(r *take, total int) {
 		c.Record(r.base, store.Event{Ev: "hold", Why: "incomplete"})
 	}
 	if r.sink == nil {
-		c.readBack(r.base, de.N, target, text)
+		c.readBack(r.base, de.N, target, out)
 	}
 	switch {
 	case errors.Is(serr, ErrUnconfirmedPaste):
@@ -1589,6 +1596,34 @@ func (c *Controller) refining(r *take, heard string) {
 	r.refining, r.heard = heard != "", heard
 	c.updateLocked()
 	c.mu.Unlock()
+}
+
+// agentCopy settles what a take the model step ran on gives target, as
+// ev.Copy — refine.agent_copy as the stage hands it — asks, and rewrites
+// ev.Copy to what went out. Toward an agent's target (store.Target.IsAgent):
+// refined, the corrected text; both, the corrected text and, only when
+// something changed, the text as heard under its mark (refine.Both), sent
+// in its place; raw, the text as heard, the edits on the refine line only. Every
+// other target, and a step that failed, gets text. It returns the take's
+// text — the delivered text a resend or the takes list reads, never the
+// second part — and what is sent in its place ("" for text itself).
+func agentCopy(target *store.Target, heard, text string, ev *store.Event) (string, string) {
+	want := ev.Copy
+	ev.Copy = ""
+	if ev.Why != "" || !target.IsAgent() {
+		return text, ""
+	}
+	switch want {
+	case "raw":
+		ev.Copy = "raw"
+		return heard, ""
+	case "both":
+		if sent := refine.Both(heard, text); sent != text {
+			ev.Copy = "both"
+			return text, sent
+		}
+	}
+	return text, ""
 }
 
 // refineNote is what the overlay says once a take the model step ran on is

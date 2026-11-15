@@ -163,8 +163,20 @@ func (s *RefineStage) Take() func(context.Context, session.RefineInput) (string,
 		return nil
 	}
 	return func(ctx context.Context, in session.RefineInput) (string, *store.Event) {
-		return r.Run(ctx, in.Text, in.Target)
+		text, ev := r.Run(ctx, in.Text, in.Target)
+		if ev.Why == "" {
+			ev.Copy = r.AgentCopy // the controller delivers by it (session agentCopy)
+		}
+		return text, ev
 	}
+}
+
+// NotesAgent reports whether a take's capture should note the agent in its
+// herdr pane: only while the step is on with agent_copy both or raw, the
+// values that deliver differently to an agent.
+func (s *RefineStage) NotesAgent() bool {
+	r := s.current()
+	return r.On && r.AgentCopy != "refined"
 }
 
 // Warm opens the provider's connection as a take starts, so the call at
@@ -228,29 +240,6 @@ func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target
 		return fail(res.Why, res.Err)
 	}
 	ev.At = time.Now()
-	return r.agentCopy(text, res, target, ev)
-}
-
-// agentCopy is what a take bound for target delivers of the step's result
-// res on text: for an agent's target (store.Target.IsAgent) as agent_copy
-// says — refined, the corrected text; both, the corrected text with the
-// marked second part when something changed (refine.Both); raw, text as it
-// came, the edits on the refine line only — and the corrected text for
-// every other target. ev.Copy records which.
-func (r RefineConfig) agentCopy(text string, res refine.Result, target *store.Target, ev *store.Event) (string, *store.Event) {
-	if !target.IsAgent() {
-		return res.Text, ev
-	}
-	switch r.AgentCopy {
-	case "raw":
-		ev.Copy = "raw"
-		return text, ev
-	case "both":
-		if res.Text != text {
-			ev.Copy = "both"
-		}
-		return refine.Both(text, res.Text, res.Edits), ev
-	}
 	return res.Text, ev
 }
 

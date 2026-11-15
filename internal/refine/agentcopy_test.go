@@ -2,22 +2,18 @@ package refine
 
 import "testing"
 
-// A "both" delivery is the corrected text, a blank line and the marked
-// second part: the changed words when the step fixed words, the whole text
-// as heard when it rewrote it, and nothing when nothing changed.
+// A "both" delivery is the model's text, a blank line and the recognised
+// text under its mark, whether the model fixed words or rewrote the text;
+// nothing is added when nothing but spacing changed.
 func TestBoth(t *testing.T) {
 	const heard = "用海库跑一下 第八哥"
-	for _, tc := range []struct {
-		name, text string
-		edits      []Edit
-		want       string
-	}{
-		{"unchanged", heard, nil, heard},
-		{"words", "用Haiku跑一下 debug", []Edit{{From: "用海库跑", To: "用Haiku跑"}, {From: "第八哥", To: "debug"}},
-			"用Haiku跑一下 debug\n\n" + MarkEdits + " 海库 → Haiku · 第八哥 → debug"},
-		{"rewrite", "跑一下 Haiku 再 debug", nil, "跑一下 Haiku 再 debug\n\n" + MarkOriginal + "\n" + heard},
+	for _, tc := range []struct{ name, text, want string }{
+		{"unchanged", heard, heard},
+		{"spacing", " 用海库跑一下  第八哥\n", " 用海库跑一下  第八哥\n"},
+		{"words", "用Haiku跑一下 debug", "用Haiku跑一下 debug\n\n" + MarkOriginal + "\n" + heard},
+		{"rewrite", "跑一下 Haiku 再 debug", "跑一下 Haiku 再 debug\n\n" + MarkOriginal + "\n" + heard},
 	} {
-		if got := Both(heard, tc.text, tc.edits); got != tc.want {
+		if got := Both(heard, tc.text); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
 	}

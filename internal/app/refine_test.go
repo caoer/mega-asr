@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -346,61 +345,62 @@ func TestRefinePromptFile(t *testing.T) {
 	}
 }
 
-// Toward an agent's target — a herdr pane with an agent in it, the keypad's
-// Telegram chat — agent_copy chooses what is delivered: refined, the
-// corrected text; both, the corrected text with the marked changes; raw, the
-// text as recognised. Every other target gets the corrected text under each
-// value. The refine line keeps the edits whatever was delivered.
-func TestAgentCopy(t *testing.T) {
+// The stage gives the take's text — the corrected text, never a marked
+// second copy — for every target under every agent_copy, and hands the
+// controller agent_copy on the refine line, which delivers by it. A take's
+// text is what a resend and the takes list read later, wherever they paste.
+func TestStageGivesTheTakeText(t *testing.T) {
 	const heard, fixed = "用海库跑一下", "用Haiku跑一下"
-	both := fixed + "\n\n" + refine.MarkEdits + " 海库 → Haiku"
-	pane := &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}
-	chat := &store.Target{Kind: "telegram", App: "报到群"}
-	others := []*store.Target{{Kind: "herdr", Pane: "w1:p1"}, {Kind: "app", App: "Notes"}, {Kind: "clipboard"}, nil}
 	p := newProvider(t)
 	p.answer = edits(`[{"from":"海库","why":"模型名","to":"Haiku"}]`)
-	for _, tc := range []struct{ copy, agent, line string }{
-		{"refined", fixed, ""},
-		{"both", both, "both"},
-		{"raw", heard, "raw"},
-	} {
+	targets := []*store.Target{{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}, {Kind: "telegram"},
+		{Kind: "herdr", Pane: "w1:p1"}, {Kind: "app", App: "Notes"}, {Kind: "clipboard"}, nil}
+	for _, copy := range []string{"refined", "both", "raw"} {
 		dir := isolate(t)
-		refineConfig(t, dir, p.URL, "agent_copy = \""+tc.copy+"\"\n")
+		refineConfig(t, dir, p.URL, "agent_copy = \""+copy+"\"\n")
 		l, err := Load(LoadOpts{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		run := l.RefineStage(LoadOpts{}).Take()
-		check := func(target *store.Target, want, line string) {
+		for _, target := range targets {
 			got, ev := run(context.Background(), session.RefineInput{Text: heard, Target: target})
-			if got != want || ev == nil || ev.Why != "" || ev.Copy != line || len(ev.Edits) != 1 || ev.Edits[0].To != "Haiku" {
-				t.Errorf("%s toward %+v: delivered %q, want %q; refine line %+v", tc.copy, target, got, want, ev)
+			if got != fixed || ev == nil || ev.Why != "" || ev.Copy != copy || len(ev.Edits) != 1 || ev.Edits[0].To != "Haiku" {
+				t.Errorf("%s toward %+v: text %q, want %q; refine line %+v", copy, target, got, fixed, ev)
 			}
-		}
-		check(pane, tc.agent, tc.line)
-		check(chat, tc.agent, tc.line)
-		for _, o := range others {
-			check(o, fixed, "")
 		}
 	}
 }
 
-// both adds nothing when the step changed nothing: the agent gets the text
-// as it came, once.
-func TestAgentCopyBothUnchanged(t *testing.T) {
-	const heard = "跑一下 Haiku"
-	p := newProvider(t)
-	p.answer = edits(`[]`)
-	dir := isolate(t)
-	refineConfig(t, dir, p.URL, "agent_copy = \"both\"\n")
-	l, err := Load(LoadOpts{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range []*store.Target{{Kind: "herdr", Pane: "w1:p2", Agent: "codex"}, {Kind: "telegram"}} {
-		got, ev := l.RefineStage(LoadOpts{}).Take()(context.Background(), session.RefineInput{Text: heard, Target: target})
-		if got != heard || ev == nil || ev.Why != "" || ev.Copy != "" || len(ev.Edits) != 0 {
-			t.Errorf("toward %+v: delivered %q, refine line %+v", target, got, ev)
+// A capture notes the pane's agent only while the step is on with
+// agent_copy both or raw; off, or refined, it asks herdr nothing more.
+func TestRefineNotesAgent(t *testing.T) {
+	for _, tc := range []struct {
+		on   bool
+		copy string
+		want bool
+	}{
+		{false, "", false},
+		{false, "both", false},
+		{true, "refined", false},
+		{true, "both", true},
+		{true, "raw", true},
+	} {
+		dir := isolate(t)
+		switch {
+		case tc.on:
+			refineConfig(t, dir, "http://127.0.0.1:9", "agent_copy = \""+tc.copy+"\"\n")
+		case tc.copy != "":
+			writeConfig(t, dir, "[refine]\nagent_copy = \""+tc.copy+"\"\n")
+		default:
+			writeConfig(t, dir, "")
+		}
+		l, err := Load(LoadOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := l.RefineStage(LoadOpts{}).NotesAgent(); got != tc.want {
+			t.Errorf("on %v, agent_copy %q: notes the agent %v, want %v", tc.on, tc.copy, got, tc.want)
 		}
 	}
 }
