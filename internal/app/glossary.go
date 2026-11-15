@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"log"
 	"os"
 	"path/filepath"
@@ -23,18 +24,31 @@ func GlossaryFiles() []string { return withDir(GlossaryPath(), "glossary.d", "*.
 func AboutPath() string { return filepath.Join(ConfigDir(), "about.txt") }
 
 // Glossary is what the model step is told of the user, read from the files
-// at each take: the hot words, then what the corrections table corrects to,
-// then the glossary files, as the terms, each file in its own order; the
-// table's rules as the known mis-hearings; about.txt as the about line.
-// With none of the files it is empty.
+// at each take. Its terms are the hot words, then what the corrections
+// table corrects to, then the glossary, each file in its own order: first
+// from the user's own three files, then from the .d files other tools
+// write, so those are what the cap cuts. The table's rules are the known
+// mis-hearings, but for a zh: rule: its heard form is an ordinary word,
+// wrong only beside Chinese, where the table has put it right already.
+// about.txt is the about line. A hot-word or corrections file that still is
+// the sample Seed wrote counts for nothing: its terms are examples, not the
+// user's. With none of the files the glossary is empty.
 func Glossary() refine.Glossary {
-	terms := lines(HotwordsFiles()...)
+	var terms []string
 	var hints []refine.Hint
-	for _, r := range post.ReadRules(CorrectionsFiles()...) {
-		terms = append(terms, r.To)
-		hints = append(hints, refine.Hint{Heard: r.From, Meant: r.To})
+	add := func(hot, corr, glos []string) {
+		terms = append(terms, lines(hot...)...)
+		for _, r := range post.ReadRules(corr...) {
+			terms = append(terms, r.To)
+			if !r.Zh {
+				hints = append(hints, refine.Hint{Heard: r.From, Meant: r.To})
+			}
+		}
+		terms = append(terms, lines(glos...)...)
 	}
-	terms = append(terms, lines(GlossaryFiles()...)...)
+	hot, corr, glos := HotwordsFiles(), CorrectionsFiles(), GlossaryFiles()
+	add(own(hot[0], "hotwords.txt"), own(corr[0], "corrections.tsv"), glos[:1])
+	add(hot[1:], corr[1:], glos[1:])
 	g, past := refine.NewGlossary(strings.Join(lines(AboutPath()), " "), terms, hints)
 	if past > 0 {
 		log.Printf("refine: glossary: %d entries past its caps (%d terms, %d mis-hearings) left out", past, refine.MaxTerms, refine.MaxHints)
@@ -42,21 +56,41 @@ func Glossary() refine.Glossary {
 	return g
 }
 
+// own is path as a list of files to read: none while path still holds the
+// sample Seed wrote from defaults/<sample>.
+func own(path, sample string) []string {
+	if !post.Regular(path) {
+		return nil
+	}
+	b, err := os.ReadFile(path)
+	if d, _ := defaults.ReadFile("defaults/" + sample); err == nil && bytes.Equal(b, d) {
+		return nil
+	}
+	return []string{path}
+}
+
 // lines reads each path in turn as one list: a line is an entry, blank
-// lines and # comments are skipped, and a missing file adds nothing.
+// lines and # comments are skipped, and a byte-order mark at a file's start
+// is not part of its first line. A missing file adds nothing, nor does a
+// path that is not a regular file: a pipe would never finish reading.
 func lines(paths ...string) []string {
 	var out []string
 	for _, path := range paths {
+		if !post.Regular(path) {
+			continue
+		}
 		f, err := os.Open(path)
 		if err != nil {
-			if !os.IsNotExist(err) {
-				log.Printf("refine: glossary: %v", err)
-			}
+			log.Printf("refine: glossary: %v", err)
 			continue
 		}
 		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			if l := strings.TrimSpace(sc.Text()); l != "" && !strings.HasPrefix(l, "#") {
+		for first := true; sc.Scan(); first = false {
+			l := sc.Text()
+			if first {
+				l = strings.TrimPrefix(l, "\ufeff")
+			}
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
 				out = append(out, l)
 			}
 		}

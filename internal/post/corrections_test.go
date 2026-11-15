@@ -2,7 +2,9 @@ package post
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -161,5 +163,26 @@ func TestChain(t *testing.T) {
 	chain := Chain{CorrectionsFile(path), Filler(nil)}
 	if got, want := chain.Apply("呃，拿kuai挂之前先show一下绳。"), "拿快挂之前先收一下绳。"; got != want {
 		t.Errorf("Chain.Apply = %q, want %q", got, want)
+	}
+}
+
+// A table with a malformed line is named in the log by its path and the
+// line's number, never by what the line says; a byte-order mark at a
+// table's start is not part of its first mishearing; and a path that is
+// not a regular file adds nothing.
+func TestReadRulesLogsNoLineText(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	dir := t.TempDir()
+	bad, bom := filepath.Join(dir, "bad.tsv"), filepath.Join(dir, "bom.tsv")
+	os.WriteFile(bad, []byte("bee lay\tbelay\nmy private project name\n"), 0o644)
+	os.WriteFile(bom, []byte("\ufeffget hub\tGitHub\n"), 0o644)
+	rules := ReadRules(bad, bom, dir, filepath.Join(dir, "absent.tsv"))
+	if len(rules) != 1 || rules[0].From != "get hub" || rules[0].To != "GitHub" {
+		t.Errorf("rules %+v, want the one of the table with a byte-order mark", rules)
+	}
+	if got := logged.String(); strings.Contains(got, "private project") || !strings.Contains(got, bad) || !strings.Contains(got, "line 2") {
+		t.Errorf("log %q, want the path and line 2 and none of the line", got)
 	}
 }

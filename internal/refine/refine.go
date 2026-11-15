@@ -41,8 +41,9 @@ type Request struct {
 }
 
 // UserContent is the user message of r: the context, when there is one, and
-// the dictation, each inside its tag. A closing tag written inside either
-// is sent with its < as &lt;, so only the message's own tags close.
+// the dictation, each inside its tag. A closing tag written inside either,
+// spaced out or in full-width characters too, is sent with its < as &lt;,
+// so only the message's own tags close.
 func (r Request) UserContent() string {
 	var b strings.Builder
 	if r.Context != "" {
@@ -52,7 +53,10 @@ func (r Request) UserContent() string {
 	return b.String()
 }
 
-var closingTag = regexp.MustCompile(`(?i)<(/\s*(?:dictation|context))`)
+// closingTag is the end of a tag the request puts material in: the
+// dictation and the context, and the glossary's about line, terms and
+// mis-hearings. inTag keeps material from ending its own tag.
+var closingTag = regexp.MustCompile(`(?i)[<＜]([\s\p{Z}]*[/／][\s\p{Z}]*(?:dictation|context|about|terms|hints))`)
 
 func inTag(s string) string { return closingTag.ReplaceAllString(s, "&lt;$1") }
 
@@ -124,7 +128,7 @@ type Step struct {
 type Result struct {
 	Text    string // the text to deliver: the input unless edits were applied
 	Edits   []Edit // the edits applied
-	Dropped int    // edits left out: From is not in the text on its own, or equals To
+	Dropped int    // edits left out: From is not in the text on its own, or the edit is no repair
 	Why     string // why the text stands as it was; "" when the answer was applied, edits or none
 	Err     error
 	Usage   Usage
@@ -178,25 +182,26 @@ func (s Step) Run(ctx context.Context, text string) Result {
 // not a repair of mis-heard words, and none of it is applied. They measure
 // an edit's changed part (Changed), so the unchanged words a model quotes
 // around a mis-hearing to place it do not count, and they measure it by
-// size, so a line of Chinese and a line of English that say as much may
-// change as much.
+// size, so a term weighs the same spelled in letters and written by sound
+// in Chinese characters.
 const (
 	maxFrom  = 32  // characters in the changed part of a From
 	toSlack  = 8   // a To's changed part may be twice the size of its From's, plus this
 	maxShare = 0.3 // the edits' size over the text's, once over shareFloor
 	// shareFloor: two mis-heard terms can be most of a one-line dictation.
-	// shortShare bounds them there: a third of every dictation stays as it
-	// was said, however short it is.
-	shareFloor = 24
-	shortShare = 2.0 / 3
+	shareFloor = 32
+	// shortShare is how much of a dictation the edits may take out: a
+	// quarter of it stays as it was said, however short it is.
+	shortShare = 0.75
 )
 
 // size is how much s says, in letters: a Chinese character, a kana or a
-// Hangul syllable counts as three.
+// Hangul syllable counts as two, the letters a term takes for each
+// character it is written with by sound.
 func size(s string) (n int) {
 	for _, r := range s {
 		if wide(r) {
-			n += 3
+			n += 2
 		} else {
 			n++
 		}
@@ -208,11 +213,49 @@ func wide(r rune) bool {
 	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
+// maxAdd is what an edit that takes nothing out may add: the rest of a
+// word, a space.
+const maxAdd = 4
+
+// sentenceMarks are the punctuation of a sentence, which a term does not
+// have: a hyphen, a dot, a slash or an underscore can be part of a term.
+const sentenceMarks = "，。？！；：、（）“”‘’《》…?!;,()\"\n"
+
+// repair reports whether putting to in place of from (an edit's changed
+// part) has the shape of a mis-heard word put right. A reply, a gloss and a
+// tidy-up have another: they add Chinese, change Chinese for Chinese of
+// another length, add sentence punctuation, or add more than maxAdd where
+// they take nothing out.
+func repair(from, to string) bool {
+	count := func(s string) (wides, letters, marks int) {
+		for _, r := range s {
+			switch {
+			case wide(r):
+				wides++
+			case spaced(r):
+				letters++
+			case strings.ContainsRune(sentenceMarks, r):
+				marks++
+			}
+		}
+		return
+	}
+	wf, lf, mf := count(from)
+	wt, lt, mt := count(to)
+	switch {
+	case from == "" && size(to) > maxAdd,
+		wt > wf,
+		lf == 0 && lt == 0 && wt != wf,
+		mt > mf:
+		return false
+	}
+	return true
+}
+
 // inWord reports whether text[at:end] is part of a longer word: it starts
 // or ends with a letter or digit of a script that spaces its words, and
 // the character beside that one in text is another.
 func inWord(text string, at, end int) bool {
-	spaced := func(r rune) bool { return (unicode.IsLetter(r) || unicode.IsDigit(r)) && !wide(r) }
 	first, _ := utf8.DecodeRuneInString(text[at:])
 	before, _ := utf8.DecodeLastRuneInString(text[:at])
 	last, _ := utf8.DecodeLastRuneInString(text[:end])
@@ -222,16 +265,17 @@ func inWord(text string, at, end int) bool {
 
 // Apply makes the edits to text, each wherever its From occurs in text as
 // it stood, except inside a longer word: an edit whose From is not in text
-// on its own, or equals its To, is dropped and counted, and where two edits
-// claim the same stretch the earlier one has it. It returns the new text
-// and the edits it made; an edit past the fix-words guards rejects them all.
+// on its own, or that is no repair of a mis-heard word (repair), is dropped
+// and counted, and where two edits claim the same stretch the earlier one
+// has it. It returns the new text and the edits it made; an edit past the
+// fix-words guards rejects them all.
 func Apply(text string, edits []Edit) (out string, applied []Edit, dropped int, err error) {
 	type span struct {
 		at, end int
 		to      string
 	}
 	var spans []span
-	changed := 0
+	changed, gone := 0, 0 // the size the edits change, and what they take out of text
 	for _, e := range edits {
 		if e.From == "" || e.From == e.To || !strings.Contains(text, e.From) {
 			dropped++
@@ -246,6 +290,10 @@ func Apply(text string, edits []Edit) (out string, applied []Edit, dropped int, 
 		if st > 2*sf+toSlack {
 			return text, nil, dropped, fmt.Errorf("edit %q → %q puts %d characters in place of %d", e.From, e.To, nt, nf)
 		}
+		if !repair(from, to) {
+			dropped++
+			continue
+		}
 		made := false
 		for i := 0; ; {
 			j := strings.Index(text[i:], e.From)
@@ -259,6 +307,7 @@ func Apply(text string, edits []Edit) (out string, applied []Edit, dropped int, 
 			}
 			spans = append(spans, s)
 			changed += max(sf, st)
+			gone += sf
 			made = true
 		}
 		if made {
@@ -268,8 +317,11 @@ func Apply(text string, edits []Edit) (out string, applied []Edit, dropped int, 
 		}
 	}
 	total := float64(size(text))
-	if may := max(maxShare*total, min(shareFloor, shortShare*total)); float64(changed) > may {
-		return text, nil, dropped, fmt.Errorf("the edits change %.0f%% of the text, over %.0f%%", 100*float64(changed)/total, 100*may/total)
+	if c := float64(changed); c > shareFloor && c > maxShare*total {
+		return text, nil, dropped, fmt.Errorf("the edits change %.0f%% of the text, over %.0f%%", 100*c/total, maxShare*100)
+	}
+	if g := float64(gone); g > shortShare*total {
+		return text, nil, dropped, fmt.Errorf("the edits replace %.0f%% of the text, over %.0f%%", 100*g/total, shortShare*100)
 	}
 	sort.Slice(spans, func(a, b int) bool { return spans[a].at < spans[b].at })
 	var b strings.Builder

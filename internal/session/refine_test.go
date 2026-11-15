@@ -114,11 +114,12 @@ func TestRefineOffAndFailed(t *testing.T) {
 	}
 }
 
-// A phone take whose stream broke is held as cut off without the model
-// being asked: no call to wait on, no refine line.
+// A phone take whose stream broke is held as cut off without the names
+// stage or the model being asked: no call to wait on, no line of theirs.
 func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
 	r, base := rig2020(t, &fakeSource{}, "partial text")
-	asked := 0
+	asked, named := 0, 0
+	r.c.Names = func(_ context.Context, text string) (string, *store.Event) { named++; return text, nil }
 	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
 		asked++
 		return func(_ context.Context, in RefineInput) (string, *store.Event) {
@@ -132,8 +133,8 @@ func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
 	}
 	r.wait(t)
 	refine, _ := refineLines(t, base)
-	if got := state(base); asked != 0 || refine != nil || got != "undelivered/phone stream sequence gap" || sink.got() != "" {
-		t.Fatalf("asked %d, refine %+v, final %q, phone %q", asked, refine, got, sink.got())
+	if got := state(base); asked != 0 || named != 0 || refine != nil || got != "undelivered/phone stream sequence gap" || sink.got() != "" {
+		t.Fatalf("asked %d, named %d, refine %+v, final %q, phone %q", asked, named, refine, got, sink.got())
 	}
 }
 

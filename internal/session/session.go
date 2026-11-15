@@ -1442,7 +1442,10 @@ func (c *Controller) finish(r *take, total int) {
 		log.Printf("session: %d of %d chunks failed; megavoice retranscribe %s is the retry", failed, len(r.chunks), filepath.Base(r.base))
 	}
 	saved := text
-	if c.Names != nil && c.OnChunks == nil && text != "" {
+	// A phone take whose stream broke is held below whatever its text: no
+	// stage that makes a call runs on it.
+	broken := r.sink != nil && r.src.Err() != nil
+	if c.Names != nil && c.OnChunks == nil && text != "" && !broken {
 		var ev *store.Event
 		if text, ev = c.Names(c.ctx(), text); ev != nil {
 			c.Record(r.base, *ev)
@@ -1463,9 +1466,6 @@ func (c *Controller) finish(r *take, total int) {
 		}
 		return target
 	}
-	// A phone take whose stream broke is held below whatever its text: the
-	// model is not asked about it.
-	broken := r.sink != nil && r.src.Err() != nil
 	if c.Refine != nil && c.OnChunks == nil && text != "" && !cancelled && !broken {
 		if run := c.Refine(); run != nil {
 			c.refining(r, text)

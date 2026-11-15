@@ -50,6 +50,9 @@ func parse(r io.Reader) (Corrections, error) {
 	sc := bufio.NewScanner(r)
 	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimRight(sc.Text(), "\r")
+		if n == 1 {
+			line = strings.TrimPrefix(line, "\ufeff") // a byte-order mark is not part of the first mishearing
+		}
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(strings.TrimSpace(line), "#") {
 			continue
 		}
@@ -57,7 +60,7 @@ func parse(r io.Reader) (Corrections, error) {
 		zh := strings.HasPrefix(from, zhPrefix)
 		from = strings.TrimPrefix(from, zhPrefix)
 		if !ok || from == "" {
-			return nil, fmt.Errorf("line %d: want mishearing<TAB>intended, got %q", n, line)
+			return nil, fmt.Errorf("line %d: want mishearing<TAB>intended", n) // not the line: a log holds no vocabulary
 		}
 		c = append(c, Rule{From: from, To: to, Zh: zh, re: compile(from)})
 	}
@@ -154,15 +157,16 @@ func CorrectionsFiles(paths func() []string) Stage {
 }
 
 // ReadRules reads the tables at paths as one list of rules, in the order
-// the files give them. A missing file adds nothing; a malformed one is
-// logged and skipped, and the others still count.
+// the files give them. A missing file adds nothing, nor does a path that is
+// not a regular file; a malformed one is logged, by its path and the line,
+// and skipped, and the others still count.
 func ReadRules(paths ...string) []Rule {
 	var all []Rule
 	for _, path := range paths {
-		f, err := os.Open(path)
-		if os.IsNotExist(err) {
+		if !Regular(path) {
 			continue
 		}
+		f, err := os.Open(path)
 		var c Corrections
 		if err == nil {
 			c, err = parse(f)
@@ -175,4 +179,12 @@ func ReadRules(paths ...string) []Rule {
 		all = append(all, c...)
 	}
 	return all
+}
+
+// Regular reports whether path is a file to read as a list: there, and a
+// regular file. A pipe or a device under a .d directory would never finish
+// reading, and a take would wait on it.
+func Regular(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular()
 }
