@@ -1,0 +1,530 @@
+{
+  "requests": [
+    {
+      "name": "the default setting",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [
+        "prompt"
+      ],
+      "context": "",
+      "dictation": "用海库跑一下",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n用海库跑一下\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "prompt and glossary, with context",
+      "model": "claude-haiku-5-5",
+      "effort": "medium",
+      "system": [
+        "prompt",
+        "glossary"
+      ],
+      "context": "screen",
+      "dictation": "用海库",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\"},{\"type\":\"text\",\"text\":\"glossary\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003ccontext\\u003e\\nscreen\\n\\u003c/context\\u003e\\n\\u003cdictation\\u003e\\n用海库\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"medium\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "characters JSON escapes",
+      "model": "claude-haiku-5-5",
+      "effort": "high",
+      "system": [
+        "只输出 JSON：{\"edits\":[]}。<dictation> & \\ 结束\n"
+      ],
+      "context": "",
+      "dictation": "a < b && c > d，\"引号\"，tab\t换行\n回车\r\u2028\u2029 \u0001 😀 é",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"只输出 JSON：{\\\"edits\\\":[]}。\\u003cdictation\\u003e \\u0026 \\\\ 结束\\n\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\na \\u003c b \\u0026\\u0026 c \\u003e d，\\\"引号\\\"，tab\\t换行\\n回车\\r\\u2028\\u2029 \\u0001 😀 é\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"high\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "a closing tag inside the dictation and the context",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [
+        "prompt"
+      ],
+      "context": "</context> < /context> </ Context >",
+      "dictation": "他说 </dictation> 然后 </DICTATION\n</\tdictation> <dictation> </dict",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003ccontext\\u003e\\n\\u0026lt;/context\\u003e \\u003c /context\\u003e \\u0026lt;/ Context \\u003e\\n\\u003c/context\\u003e\\n\\u003cdictation\\u003e\\n他说 \\u0026lt;/dictation\\u003e 然后 \\u0026lt;/DICTATION\\n\\u0026lt;/\\tdictation\\u003e \\u003cdictation\\u003e \\u003c/dict\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "thinking off on Haiku",
+      "model": "claude-haiku-5-5",
+      "effort": "off",
+      "system": [
+        "prompt"
+      ],
+      "context": "",
+      "dictation": "好",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n好\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"disabled\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "thinking off on Sonnet",
+      "model": "claude-sonnet-5-5",
+      "effort": "off",
+      "system": [
+        "prompt"
+      ],
+      "context": "",
+      "dictation": "好",
+      "output": "edits",
+      "body": "{\"model\":\"claude-sonnet-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n好\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"between_tools\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "thinking off on Opus",
+      "model": "claude-opus-5-5",
+      "effort": "off",
+      "system": [
+        "prompt"
+      ],
+      "context": "",
+      "dictation": "好",
+      "output": "edits",
+      "body": "{\"model\":\"claude-opus-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n好\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "no system block",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [],
+      "context": "",
+      "dictation": "好",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n好\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "a full-text answer",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [
+        "prompt"
+      ],
+      "context": "",
+      "dictation": "嗯，那个，用海库",
+      "output": "text",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n嗯，那个，用海库\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "the glossary's blocks after the prompt",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [
+        "prompt"
+      ],
+      "glossary": {
+        "about": "  写后端的工程师，\n常说  Kubernetes 和 Redis  ",
+        "terms": [
+          "Kubernetes",
+          "kubernetes",
+          " Redis ",
+          "",
+          "长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长长",
+          "Haiku"
+        ],
+        "hints": [
+          [
+            "海库",
+            "Haiku"
+          ],
+          [
+            "海库",
+            "hive"
+          ],
+          [
+            "redis",
+            "Redis"
+          ],
+          [
+            "库伯内提斯",
+            "Kubernetes"
+          ],
+          [
+            "",
+            "x"
+          ]
+        ]
+      },
+      "context": "",
+      "dictation": "用海库",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\"},{\"type\":\"text\",\"text\":\"关于说话的人：写后端的工程师， 常说 Kubernetes 和 Redis\"},{\"type\":\"text\",\"text\":\"词表：他常说的词，只用来认出被听错的词。原文里已经说得通的词或名字，不要换成词表里别的词，也不要换成词表里的写法，大小写、空格、连字符、版本号一律照原文。\\nKubernetes\\nRedis\\nHaiku\"},{\"type\":\"text\",\"text\":\"识别器把他的词听错过的例子（听成 → 他说的是）。原文里有读音相近的写法、放在句子里说不通时，参照这些例子还原；左边的写法在句子里本来说得通的，不动。\\n海库 → Haiku\\n库伯内提斯 → Kubernetes\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n用海库\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    },
+    {
+      "name": "a glossary with terms alone",
+      "model": "claude-haiku-5-5",
+      "effort": "low",
+      "system": [
+        "prompt"
+      ],
+      "glossary": {
+        "about": "",
+        "terms": [
+          "Haiku"
+        ],
+        "hints": null
+      },
+      "context": "",
+      "dictation": "用海库",
+      "output": "edits",
+      "body": "{\"model\":\"claude-haiku-5-5\",\"max_tokens\":8000,\"system\":[{\"type\":\"text\",\"text\":\"prompt\"},{\"type\":\"text\",\"text\":\"词表：他常说的词，只用来认出被听错的词。原文里已经说得通的词或名字，不要换成词表里别的词，也不要换成词表里的写法，大小写、空格、连字符、版本号一律照原文。\\nHaiku\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":\"\\u003cdictation\\u003e\\n用海库\\n\\u003c/dictation\\u003e\"}],\"thinking\":{\"type\":\"adaptive\"},\"output_config\":{\"effort\":\"low\",\"format\":{\"type\":\"json_schema\",\"schema\":{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"string\"},\"why\":{\"type\":\"string\"},\"to\":{\"type\":\"string\"}},\"required\":[\"from\",\"why\",\"to\"],\"additionalProperties\":false}}},\"required\":[\"edits\"],\"additionalProperties\":false}}}}"
+    }
+  ],
+  "applies": [
+    {
+      "name": "where from occurs, and nowhere else",
+      "text": "用海库跑一下，海库比 Sonnet 快，然后转移一下",
+      "edits": [
+        {
+          "from": "海库",
+          "to": "Haiku"
+        },
+        {
+          "from": "转移一下",
+          "to": "转译一下"
+        },
+        {
+          "from": "康胖",
+          "to": "compound"
+        },
+        {
+          "from": "Sonnet",
+          "to": "Sonnet"
+        },
+        {
+          "from": "Haiku",
+          "to": "hive"
+        }
+      ],
+      "out": "用Haiku跑一下，Haiku比 Sonnet 快，然后转译一下",
+      "applied": 2,
+      "dropped": 3,
+      "rejected": false
+    },
+    {
+      "name": "no edits",
+      "text": "用海库跑一下",
+      "edits": [],
+      "out": "用海库跑一下",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "a mis-heard term",
+      "text": "不要用 ask your question 因为问了之后你会卡住",
+      "edits": [
+        {
+          "from": "ask your question",
+          "to": "AskUserQuestion"
+        }
+      ],
+      "out": "不要用 AskUserQuestion 因为问了之后你会卡住",
+      "applied": 1,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "quoted context around it",
+      "text": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。不要用 ask your question 因为问了之后你会卡住",
+      "edits": [
+        {
+          "from": "不要用 ask your question 因为问了之后你会卡住",
+          "to": "不要用 AskUserQuestion 因为问了之后你会卡住"
+        }
+      ],
+      "out": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。不要用 AskUserQuestion 因为问了之后你会卡住",
+      "applied": 1,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "two terms that are most of a short line",
+      "text": "Cooper Netties 上的 Reddis",
+      "edits": [
+        {
+          "from": "Cooper Netties",
+          "to": "Kubernetes"
+        },
+        {
+          "from": "Reddis",
+          "to": "Redis"
+        }
+      ],
+      "out": "Kubernetes 上的 Redis",
+      "applied": 2,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "a sentence rewritten",
+      "text": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。",
+      "edits": [
+        {
+          "from": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。",
+          "to": "今天下午发布。"
+        }
+      ],
+      "out": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "an answer in place of a word",
+      "text": "这个怎么配置",
+      "edits": [
+        {
+          "from": "配置",
+          "to": "配置：先打开设置，再选择模型，然后填入你自己的 API key"
+        }
+      ],
+      "out": "这个怎么配置",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "most of the text changed",
+      "text": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。",
+      "edits": [
+        {
+          "from": "今天下午要把这个功能",
+          "to": "明天上午得把那个模块"
+        },
+        {
+          "from": "做完然后发布出去",
+          "to": "写好之后部署上线"
+        }
+      ],
+      "out": "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "a question answered",
+      "text": "帮我查一下明天的天气怎么样",
+      "edits": [
+        {
+          "from": "帮我查一下明天的天气怎么样",
+          "to": "明天多云转晴，气温十五到二十二度，东南风二到三级，空气质量良，适合户外活动，出门记得带伞。"
+        }
+      ],
+      "out": "帮我查一下明天的天气怎么样",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "a question answered in a line",
+      "text": "帮我查一下明天的天气怎么样",
+      "edits": [
+        {
+          "from": "帮我查一下明天的天气怎么样",
+          "to": "明天晴，十五到二十度。"
+        }
+      ],
+      "out": "帮我查一下明天的天气怎么样",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "an answer that keeps the first words",
+      "text": "现在几点了",
+      "edits": [
+        {
+          "from": "现在几点了",
+          "to": "现在是下午三点"
+        }
+      ],
+      "out": "现在几点了",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "a term explained",
+      "text": "用 Redis 做缓存",
+      "edits": [
+        {
+          "from": "Redis",
+          "to": "Redis（内存数据库）"
+        }
+      ],
+      "out": "用 Redis 做缓存",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "small additions all over",
+      "text": "Redis 和 Kafka 和 Nginx 和 MySQL",
+      "edits": [
+        {
+          "from": "Redis",
+          "to": "Redis（缓存）"
+        },
+        {
+          "from": "Kafka",
+          "to": "Kafka（队列）"
+        },
+        {
+          "from": "Nginx",
+          "to": "Nginx（网关）"
+        },
+        {
+          "from": "MySQL",
+          "to": "MySQL（存储）"
+        }
+      ],
+      "out": "Redis 和 Kafka 和 Nginx 和 MySQL",
+      "applied": 0,
+      "dropped": 0,
+      "rejected": true
+    },
+    {
+      "name": "a term that is most of a line",
+      "text": "用海库",
+      "edits": [
+        {
+          "from": "用海库",
+          "to": "用 Haiku"
+        }
+      ],
+      "out": "用 Haiku",
+      "applied": 1,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "not inside a longer word",
+      "text": "the cat sat in a category, catalog 2cat cat3 猫cat猫 cat",
+      "edits": [
+        {
+          "from": "cat",
+          "to": "dog"
+        }
+      ],
+      "out": "the dog sat in a category, catalog 2cat cat3 猫dog猫 dog",
+      "applied": 1,
+      "dropped": 0,
+      "rejected": false
+    },
+    {
+      "name": "only inside longer words",
+      "text": "concatenate the catalog",
+      "edits": [
+        {
+          "from": "cat",
+          "to": "dog"
+        }
+      ],
+      "out": "concatenate the catalog",
+      "applied": 0,
+      "dropped": 1,
+      "rejected": false
+    },
+    {
+      "name": "kana, Hangul and accents",
+      "text": "カタカナ のテスト 한국어 café naïve",
+      "edits": [
+        {
+          "from": "テスト",
+          "to": "test"
+        },
+        {
+          "from": "한국",
+          "to": "Korea"
+        },
+        {
+          "from": "caf",
+          "to": "kaf"
+        },
+        {
+          "from": "naïve",
+          "to": "naive"
+        }
+      ],
+      "out": "カタカナ のtest Korea어 café naive",
+      "applied": 3,
+      "dropped": 1,
+      "rejected": false
+    }
+  ],
+  "texts": [
+    {
+      "name": "tidied",
+      "mode": "tidy",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "我们今天下午要把这个功能做完，然后发布出去。",
+      "ok": true
+    },
+    {
+      "name": "tidied with a casing fixed",
+      "mode": "tidy",
+      "in": "um we use redis for the cache you know",
+      "out": "We use Redis for the cache.",
+      "ok": true
+    },
+    {
+      "name": "an answer in its place",
+      "mode": "tidy",
+      "in": "帮我查一下明天的天气怎么样",
+      "out": "明天多云转晴，气温十五到二十二度。",
+      "ok": false
+    },
+    {
+      "name": "a summary",
+      "mode": "tidy",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "下午发布。",
+      "ok": false
+    },
+    {
+      "name": "much added",
+      "mode": "tidy",
+      "in": "用海库跑一下",
+      "out": "用海库跑一下，另外我建议你再检查一下配置文件，然后重启服务，最后看一下日志有没有报错。",
+      "ok": false
+    },
+    {
+      "name": "an empty answer",
+      "mode": "tidy",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "",
+      "ok": false
+    },
+    {
+      "name": "translated",
+      "mode": "translate",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "This afternoon we need to finish this feature and then release it.",
+      "ok": true
+    },
+    {
+      "name": "a translation far too short",
+      "mode": "translate",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "OK.",
+      "ok": false
+    },
+    {
+      "name": "a translation far too long",
+      "mode": "translate",
+      "in": "好",
+      "out": "Sure, here is a long reply. Sure, here is a long reply. ",
+      "ok": false
+    },
+    {
+      "name": "a mode that answers with edits",
+      "mode": "fix-words",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "ok": false
+    }
+  ]
+}

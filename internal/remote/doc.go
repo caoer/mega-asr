@@ -157,7 +157,11 @@
 //
 //	{"type":"asr_key","id":"<id>","ok":true,"engine":"doubao","key":"…","url":"wss://…/api/v3/plan/sauc/…","resource_id":"…"}
 //
-// or with ok false, code "no_key" (no key, or the Mac gives none) or
+// engine "refine" asks for the model step's key in the same way: key is the
+// selected [refine] provider's key (its key_file, read at the request), url
+// its base_url and resource_id the model, for the phone's own model step.
+//
+// Either is answered with ok false, code "no_key" (no key, or the Mac gives none) or
 // "bad_request", and a Chinese reason. The phone keeps the key in its
 // Keychain and refuses a url outside the plan. The key rides only this
 // session's TLS or sealed channel: it is never logged and never kept in the

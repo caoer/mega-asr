@@ -190,3 +190,32 @@ func upConfig(t *testing.T, cfg Config) *Server {
 	})
 	return s
 }
+
+// A paired phone asks for the model step's key as it asks for a recogniser's:
+// engine refine, answered with the key, the provider's address and the model.
+func TestASRKeyRefine(t *testing.T) {
+	refine := ASRKey{Key: fakePlanKey, URL: "https://gateway.example/anthropic", ResourceID: "claude-haiku-5-5"}
+	s := upConfig(t, Config{ASRKey: func(engine string) (ASRKey, error) {
+		if engine != "refine" {
+			t.Errorf("engine %q", engine)
+		}
+		return refine, nil
+	}})
+	p, err := s.NewPairing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := secretOf(t, p)
+	c, err := dial(t, s, q.Get("fp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	send(t, c, map[string]any{"type": "pair", "secret": q.Get("s"), "device": "iPhone 3fa2"})
+	recv(t, c, "paired")
+	send(t, c, map[string]any{"type": "asr_key", "id": "r1", "engine": "refine"})
+	got := recv(t, c, "asr_key")
+	if got["ok"] != true || got["engine"] != "refine" || got["key"] != refine.Key || got["url"] != refine.URL || got["resource_id"] != refine.ResourceID {
+		t.Fatalf("answer %v", got)
+	}
+}

@@ -103,7 +103,7 @@ type Config struct {
 	// telling onName the name it holds (mac.Register); nil advertises
 	// nothing. A failure is retried every 30 s.
 	Advertise func(ctx context.Context, port int, txt []string, onName func(string)) error
-	// ASRKey reads a cloud engine's key for a phone that asks (asr_key):
+	// ASRKey reads an engine's key for a phone that asks (asr_key):
 	// called at each request, so the key file is read then; nil answers
 	// every request with no_key.
 	ASRKey func(engine string) (ASRKey, error)
@@ -114,10 +114,11 @@ type Config struct {
 // key, its endpoint and the resource it bills.
 type ASRKey struct{ Key, URL, ResourceID string }
 
-// ASREngines are the engines a phone may ask a key for.
-var ASREngines = []string{"doubao"}
+// ASREngines are what a phone may ask a key for: a cloud recogniser, or
+// refine, the model step.
+var ASREngines = []string{"doubao", "refine"}
 
-var engineLabel = map[string]l10n.Pair{"doubao": l10n.Pair{"豆包", "Doubao"}}
+var engineLabel = map[string]l10n.Pair{"doubao": l10n.Pair{"豆包", "Doubao"}, "refine": l10n.Pair{"模型纠错", "model step"}}
 
 // Server is the phones' listener. Its control operations (NewPairing,
 // Phones, Revoke, Changed, Done, RotateRelay) are safe to call while it

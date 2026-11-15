@@ -411,7 +411,12 @@ func (s *server) startPhones() {
 		Advertise: func(ctx context.Context, port int, txt []string, onName func(string)) error {
 			return mac.Register(ctx, remote.ServiceType, port, txt, onName)
 		},
-		ASRKey: func(string) (remote.ASRKey, error) { return doubaoKey(s.cfg.ASR.Doubao) },
+		ASRKey: func(engine string) (remote.ASRKey, error) {
+			if engine == "refine" {
+				return refineKey(s.cfg.Refine)
+			}
+			return doubaoKey(s.cfg.ASR.Doubao)
+		},
 	})
 	if err != nil {
 		s.phonesWhy = l10n.T("iPhone 遥控起不来：", "iPhone Remote couldn't start: ") + err.Error()
@@ -463,6 +468,21 @@ func doubaoKey(d app.DoubaoConfig) (remote.ASRKey, error) {
 		return remote.ASRKey{}, err
 	}
 	return remote.ASRKey{Key: k, URL: d.URL, ResourceID: d.ResourceID}, nil
+}
+
+// refineKey is the model step's key a paired phone asks for (asr_key, engine
+// refine): the selected provider's key, read from key_file now, with its
+// base_url as the url and the model as the resource.
+func refineKey(r app.RefineConfig) (remote.ASRKey, error) {
+	p, ok := r.Providers[r.Provider]
+	if !ok || p.Kind == "openai" {
+		return remote.ASRKey{}, errors.New("[refine] selects no Messages API provider")
+	}
+	k, err := p.Key()
+	if err != nil {
+		return remote.ASRKey{}, err
+	}
+	return remote.ASRKey{Key: k, URL: p.BaseURL, ResourceID: r.Model}, nil
 }
 
 // computerName is this Mac's name until Bonjour names the service.
