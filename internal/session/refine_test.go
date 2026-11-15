@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -719,6 +720,44 @@ func TestSentModelTextFollowsAgentCopy(t *testing.T) {
 		de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true, Copy: tc.copy, For: agent})
 		if err != nil || r.del.got() != "telegram|"+tc.got || de.Sent != tc.sent || de.Chars != len([]rune(tc.got)) {
 			t.Errorf("%s: %v, delivered %q, line %+v", tc.copy, err, r.del.got(), de)
+		}
+	}
+}
+
+// clipDeliverer is a recordDeliverer that takes a clipboard copy apart from
+// what it delivers, and notes each.
+type clipDeliverer struct {
+	recordDeliverer
+	clips *[]string
+}
+
+func (d clipDeliverer) DeliverClip(t Target, text, clip string) error {
+	*d.clips = append(*d.clips, clip)
+	return d.fakeDeliverer.Deliver(t, text)
+}
+
+// Under both the agent's pane gets both texts while the clipboard is left
+// the take's text, what a Cmd-V or a resend pastes; refined asks for no copy
+// apart.
+func TestBothLeavesTheTakeTextOnTheClipboard(t *testing.T) {
+	for _, copy := range []string{"both", "refined"} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+		var clips []string
+		r.c.Deliver = clipDeliverer{recordDeliverer{r.del, store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}}, &clips}
+		r.c.Refine = stepFixing(copy)
+		r.c.Toggle()
+		r.c.Toggle()
+		r.wait(t)
+		const fixed = "用Haiku跑一下 Python"
+		want, wantClips := "telegram|"+fixed, []string(nil)
+		if copy == "both" {
+			want, wantClips = "telegram|"+fixed+marked("用海库跑一下 Python"), []string{fixed}
+		}
+		if d := r.del.got(); d != want {
+			t.Errorf("%s: delivered %q, want %q", copy, d, want)
+		}
+		if !slices.Equal(clips, wantClips) {
+			t.Errorf("%s: clipboard copies %q, want %q", copy, clips, wantClips)
 		}
 	}
 }

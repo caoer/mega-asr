@@ -83,6 +83,13 @@ type Deliverer interface {
 	Submit(t Target) error
 }
 
+// ClipDeliverer is a Deliverer that can leave on the clipboard other than
+// what it delivers: an agent's both copy goes to the agent while the
+// clipboard holds the take's text, what a paste or a resend gives.
+type ClipDeliverer interface {
+	DeliverClip(t Target, text, clip string) error
+}
+
 // ErrMaybeSent marks a Deliver error after which the text may have reached
 // the target anyway: a send command that ran out of time.
 var ErrMaybeSent = l10n.Err("可能已发送", "may have been sent")
@@ -1659,7 +1666,11 @@ func (c *Controller) finish(r *take, total int) {
 	if r.sink != nil {
 		deliverer = r.sink
 	}
-	if err := deliverer.Deliver(target, out); err != nil {
+	deliver := func() error { return deliverer.Deliver(target, out) }
+	if cd, ok := deliverer.(ClipDeliverer); ok && sent != "" {
+		deliver = func() error { return cd.DeliverClip(target, out, text) }
+	}
+	if err := deliver(); err != nil {
 		r.paste.Store(0) // nothing landed
 		c.seal(r)
 		if r.sink != nil {

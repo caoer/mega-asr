@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +182,31 @@ func TestPaneRecordsItsAgent(t *testing.T) {
 		if r := resolved.(*Target).Record(); r.Agent != "" {
 			t.Errorf("resend %s: record %+v", pane, r)
 		}
+	}
+}
+
+// A both copy into an agent's pane: the pane gets both texts through herdr,
+// the clipboard the take's text alone, what a later Cmd-V pastes.
+func TestPaneBothCopyClipboard(t *testing.T) {
+	sock, got := fakeHerdr(t, `{"id":"megavoice","result":{"type":"ok"}}`)
+	bin := filepath.Join(t.TempDir(), "herdr")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho 'socket: "+sock+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var copied []string
+	copyText = func(s string) error { copied = append(copied, s); return nil }
+	t.Cleanup(func() { copyText = mac.CopyText })
+	r := &Router{Mac: Deliverer{Herdr: Herdr{Bin: bin}}}
+	fixed := "用Haiku跑一下"
+	sent := fixed + "\n\n[Mega Voice · as heard]\n用海库跑一下"
+	if err := r.DeliverClip(&Target{Pane: "w1:p2", Agent: "claude"}, sent, fixed); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := (<-got)["params"].(map[string]any)
+	if params["text"] != sent {
+		t.Errorf("the pane got %q, want both texts", params["text"])
+	}
+	if !slices.Equal(copied, []string{fixed}) {
+		t.Errorf("the clipboard got %q, want the take's text alone", copied)
 	}
 }

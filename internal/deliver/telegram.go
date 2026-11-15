@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
@@ -70,11 +72,23 @@ var telegramChat = regexp.MustCompile(`^(-?[0-9]+|@[A-Za-z0-9_]{1,64})$`)
 // messageID is the send command's report of the message it sent.
 var messageID = regexp.MustCompile(`message (\d+)`)
 
-// Deliver copies the text, then runs the send command for t. An error says
-// why the text did not reach the chat; it is on the clipboard either way.
+// TelegramLimit is how many code points Telegram takes in one message; a
+// longer text is refused (MESSAGE_TOO_LONG).
+const TelegramLimit = 4096
+
+// Deliver copies the text, then sends it to t. An error says why the text
+// did not reach the chat; it is on the clipboard either way.
 func (g Telegram) Deliver(t *TelegramTarget, text string) error {
+	return g.DeliverClip(t, text, text)
+}
+
+// DeliverClip copies clip, then sends text to t: in one message, or, past
+// TelegramLimit, in as many as it takes, in order (telegramParts). An error
+// says why the text did not reach the chat; one after a part went out says
+// how many did and wraps session.ErrMaybeSent.
+func (g Telegram) DeliverClip(t *TelegramTarget, text, clip string) error {
 	if g.Copy != nil {
-		if err := g.Copy(text); err != nil {
+		if err := g.Copy(clip); err != nil {
 			return err
 		}
 	}
@@ -84,6 +98,29 @@ func (g Telegram) Deliver(t *TelegramTarget, text string) error {
 	if !telegramChat.MatchString(t.Chat) {
 		return fmt.Errorf("telegram: chat %q is not an id or @username", t.Chat)
 	}
+	parts := telegramParts(text)
+	for k, part := range parts {
+		if err := g.send(t, part); err != nil {
+			if k == 0 {
+				return err
+			}
+			why := strings.TrimPrefix(err.Error(), "telegram: ")
+			if errors.Is(err, session.ErrMaybeSent) {
+				return fmt.Errorf("telegram: %d of %d messages sent, then %s: %w", k, len(parts), why, session.ErrMaybeSent)
+			}
+			return fmt.Errorf("telegram: %d of %d messages sent, then %s; %w", k, len(parts), why, session.ErrMaybeSent)
+		}
+	}
+	if g.OnSent != nil && t.MessageID > 0 {
+		g.OnSent(t)
+	}
+	return nil
+}
+
+// send sends one message of at most TelegramLimit code points, through the
+// stream when it takes the send, else by the send command, each under its
+// own deadline; it sets t.MessageID when the send gave one.
+func (g Telegram) send(t *TelegramTarget, text string) error {
 	wait := g.Wait
 	if wait <= 0 {
 		wait = TelegramWait
@@ -94,9 +131,6 @@ func (g Telegram) Deliver(t *TelegramTarget, text string) error {
 		if id, used, err := g.Stream.send(ctx, t, text); used {
 			if err == nil {
 				t.MessageID = id
-				if g.OnSent != nil {
-					g.OnSent(t)
-				}
 			}
 			return err
 		}
@@ -125,10 +159,45 @@ func (g Telegram) Deliver(t *TelegramTarget, text string) error {
 	if m := messageID.FindStringSubmatch(stdout.String()); m != nil {
 		t.MessageID, _ = strconv.ParseInt(m[1], 10, 64)
 	}
-	if g.OnSent != nil && t.MessageID > 0 {
-		g.OnSent(t)
-	}
 	return nil
+}
+
+// telegramParts is text as messages of at most TelegramLimit code points:
+// text itself when it fits, else cut at the last paragraph break within the
+// limit, else the last line break, else after the last 。, else the last
+// space, else at the limit. The whitespace at a cut is dropped; every other
+// character goes, in order. A both copy past the limit is cut where its
+// second part starts when the first fits.
+func telegramParts(text string) []string {
+	var parts []string
+	for utf8.RuneCountInString(text) > TelegramLimit {
+		end, n := 0, 0
+		for i := range text {
+			if n == TelegramLimit {
+				end = i
+				break
+			}
+			n++
+		}
+		head, cut := text[:end], end
+		for _, sep := range []string{"\n\n", "\n", "。", " "} {
+			if i := strings.LastIndex(head, sep); i > 0 {
+				cut = i
+				if sep == "。" {
+					cut += len(sep)
+				}
+				break
+			}
+		}
+		if part := strings.TrimRightFunc(text[:cut], unicode.IsSpace); part != "" {
+			parts = append(parts, part)
+		}
+		text = strings.TrimLeftFunc(text[cut:], unicode.IsSpace)
+	}
+	if strings.TrimSpace(text) != "" || len(parts) == 0 {
+		parts = append(parts, text)
+	}
+	return parts
 }
 
 // sendErr is a send's failure from its command's error, whether the

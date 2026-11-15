@@ -35,6 +35,7 @@ var notShown = map[[2]string]string{
 	{"../update/update.go", "更新校验失败，下次再试"}:    "the same",
 	{"../update/update.go", "请从页面重新安装"}:       "the same",
 	{"../takes/takes.go", "录音历史 · megavoice"}: "PageTitle: the window title the resend picker matches; page/app.js shows it or PageTitleEN",
+	{"../deliver/telegram.go", "。"}:           "telegramParts: a sentence's end to cut a long Telegram message at, never shown",
 }
 
 // TestCallsSpeakBoth: every Chinese string literal in the user-facing

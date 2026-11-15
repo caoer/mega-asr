@@ -35,6 +35,7 @@ type Router struct {
 
 var (
 	_ session.Deliverer      = (*Router)(nil)
+	_ session.ClipDeliverer  = (*Router)(nil)
 	_ session.ReadBacker     = (*Router)(nil)
 	_ session.CursorCapturer = (*Router)(nil)
 )
@@ -89,8 +90,15 @@ func (r *Router) CaptureCursor() session.Target { return r.Mac.Capture() }
 // Telegram send ends there: sent, timeout or failed. A Mac delivery that fails is
 // failed; one that lands waits for its Enter, if any, until Received.
 func (r *Router) Deliver(t session.Target, text string) error {
+	return r.DeliverClip(t, text, text)
+}
+
+// DeliverClip is Deliver leaving clip on the clipboard in text's place
+// (session.ClipDeliverer), for Telegram and for a Mac deliverer that takes
+// it; another Mac deliverer gets text alone.
+func (r *Router) DeliverClip(t session.Target, text, clip string) error {
 	if tt, ok := t.(*TelegramTarget); ok {
-		err := r.Telegram.Deliver(tt, text)
+		err := r.Telegram.DeliverClip(tt, text, clip)
 		switch {
 		case err == nil:
 			r.tell(Sent)
@@ -101,7 +109,13 @@ func (r *Router) Deliver(t session.Target, text string) error {
 		}
 		return err
 	}
-	if err := r.Mac.Deliver(t, text); err != nil {
+	var err error
+	if cd, ok := r.Mac.(session.ClipDeliverer); ok {
+		err = cd.DeliverClip(t, text, clip)
+	} else {
+		err = r.Mac.Deliver(t, text)
+	}
+	if err != nil {
 		r.tell(Failed)
 		return err
 	}

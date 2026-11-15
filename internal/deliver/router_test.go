@@ -214,3 +214,27 @@ func TestRouterAgentTarget(t *testing.T) {
 		t.Fatalf("sent %q, want %q once", b, text)
 	}
 }
+
+// A both copy sent to the locked chat leaves the take's text on the
+// clipboard, what a Cmd-V or a resend would paste; the chat gets both texts.
+func TestRouterBothCopyClipboard(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "got")
+	send := fakeSend(`cat > ` + out + `; echo "Sent → message 5"`)
+	var copied []string
+	send.Copy = func(s string) error { copied = append(copied, s); return nil }
+	r, outcomes, _ := newRouter(&fakeMac{}, send)
+	fixed := "用Haiku跑一下"
+	sent := fixed + "\n\n[Mega Voice · as heard]\n用海库跑一下"
+	if err := r.DeliverClip(&TelegramTarget{Chat: "-100"}, sent, fixed); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(out); string(b) != sent {
+		t.Errorf("the chat got %q, want both texts", b)
+	}
+	if !slices.Equal(copied, []string{fixed}) {
+		t.Errorf("the clipboard got %q, want the take's text alone", copied)
+	}
+	if !slices.Equal(*outcomes, []Outcome{Sent}) {
+		t.Errorf("outcomes %v", *outcomes)
+	}
+}

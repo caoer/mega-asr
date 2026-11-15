@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/caoer/mega-asr/internal/session"
 )
@@ -191,3 +193,105 @@ func TestTelegramCommandDashText(t *testing.T) {
 		}
 	}
 }
+
+// fakeTelegram is a send command that behaves as Telegram does with a
+// message past its limit: it refuses one over TelegramLimit bytes (the texts
+// here are ASCII but for the mark, so bytes bound code points) with
+// MESSAGE_TOO_LONG, and keeps each message it takes as dir/1, dir/2, ….
+// failAt, when not 0, refuses that message instead.
+func fakeTelegram(dir string, failAt int) Telegram {
+	return fakeSend(`n=$(ls ` + dir + ` | wc -l | tr -d ' '); n=$((n+1)); cat > ` + dir + `/new
+if [ "$(wc -c < ` + dir + `/new)" -gt 4096 ]; then rm ` + dir + `/new; echo "MESSAGE_TOO_LONG" >&2; exit 1; fi
+if [ "$n" = "` + strconv.Itoa(failAt) + `" ]; then rm ` + dir + `/new; echo "FLOOD_WAIT_30" >&2; exit 1; fi
+mv ` + dir + `/new ` + dir + `/$n; echo "Sent → message $n"`)
+}
+
+// messages are the texts fakeTelegram took, in order.
+func messages(t *testing.T, dir string) []string {
+	t.Helper()
+	var got []string
+	for n := 1; ; n++ {
+		b, err := os.ReadFile(filepath.Join(dir, strconv.Itoa(n)))
+		if err != nil {
+			return got
+		}
+		got = append(got, string(b))
+	}
+}
+
+// A both copy past Telegram's limit arrives whole: in two messages, cut
+// where the text as heard starts, every word in order. Sent as one, Telegram
+// refuses it and the take is not delivered.
+func TestTelegramLongTextArrivesWhole(t *testing.T) {
+	dir := t.TempDir()
+	fixed := strings.Repeat("Please report to your Super Advisor. ", 80) // 2960 characters
+	heard := strings.Repeat("Please report to your super adviser. ", 80)
+	sent := fixed + "\n\n[Mega Voice · as heard]\n" + heard
+	g := fakeTelegram(dir, 0)
+	var copied []string
+	g.Copy = func(s string) error { copied = append(copied, s); return nil }
+	tt := &TelegramTarget{Chat: "-100"}
+	if err := g.Deliver(tt, sent); err != nil {
+		t.Fatalf("a %d-character both copy: %v", len([]rune(sent)), err)
+	}
+	got := messages(t, dir)
+	if len(got) != 2 || got[0] != strings.TrimSpace(fixed) || !strings.HasPrefix(got[1], "[Mega Voice · as heard]\n") {
+		t.Fatalf("messages %d: %.40q …", len(got), got)
+	}
+	if !slices.Equal(strings.Fields(strings.Join(got, " ")), strings.Fields(sent)) {
+		t.Error("the messages do not carry every word of the copy in order")
+	}
+	if tt.MessageID != 2 {
+		t.Errorf("message id %d, want the last message's, 2", tt.MessageID)
+	}
+	if !slices.Equal(copied, []string{sent}) {
+		t.Errorf("copied %d texts", len(copied))
+	}
+}
+
+// A part refused after an earlier one went out says how many did and is a
+// send that may have reached the chat: the take is held as cut, not lost.
+func TestTelegramPartlySent(t *testing.T) {
+	dir := t.TempDir()
+	text := strings.Repeat("word ", 1000) // 5000 characters: two messages
+	err := fakeTelegram(dir, 2).Deliver(&TelegramTarget{Chat: "-100"}, text)
+	if err == nil || !strings.Contains(err.Error(), "1 of 2 messages sent, then FLOOD_WAIT_30") || !errors.Is(err, session.ErrMaybeSent) {
+		t.Fatalf("err %v", err)
+	}
+	if got := messages(t, dir); len(got) != 1 {
+		t.Fatalf("%d messages went out, want 1", len(got))
+	}
+}
+
+func TestTelegramParts(t *testing.T) {
+	zh := strings.Repeat("这是一句四十个字左右的中文口述，没有空格也没有换行，一直说下去直到句号。", 250) // 9000 code points
+	for name, text := range map[string]string{
+		"fits":            "  short, spaces kept  ",
+		"at the limit":    strings.Repeat("x", TelegramLimit),
+		"zh sentences":    zh,
+		"no break at all": strings.Repeat("长", 2*TelegramLimit+5),
+		"lines":           strings.Repeat("一行字 and words\n", 700),
+	} {
+		parts := telegramParts(text)
+		for _, p := range parts {
+			if n := utf8.RuneCountInString(p); n > TelegramLimit || n == 0 {
+				t.Errorf("%s: a part of %d code points", name, n)
+			}
+		}
+		if utf8.RuneCountInString(text) <= TelegramLimit {
+			if len(parts) != 1 || parts[0] != text {
+				t.Errorf("%s: %q, want the text as it is", name, parts)
+			}
+			continue
+		}
+		if nonSpace(strings.Join(parts, "")) != nonSpace(text) {
+			t.Errorf("%s: the parts lose or reorder text", name)
+		}
+		if name == "zh sentences" && !strings.HasSuffix(parts[0], "。") {
+			t.Errorf("zh sentences: the first part ends %q, want a sentence's end", []rune(parts[0])[len([]rune(parts[0]))-3:])
+		}
+	}
+}
+
+// nonSpace is s without its whitespace.
+func nonSpace(s string) string { return strings.Join(strings.Fields(s), "") }

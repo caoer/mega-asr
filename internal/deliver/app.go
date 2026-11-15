@@ -210,10 +210,20 @@ func (d Deliverer) Resolve(to string) (session.Target, error) {
 // text stays on the clipboard, so clipboard history keeps every transcript;
 // on failure the error says why.
 func (d Deliverer) Deliver(st session.Target, text string) error {
+	return d.DeliverClip(st, text, text)
+}
+
+// DeliverClip is Deliver leaving clip on the clipboard in text's place where
+// the clipboard is not how text gets there: a herdr pane. The clipboard and
+// an app, which is pasted through the clipboard, get text.
+func (d Deliverer) DeliverClip(st session.Target, text, clip string) error {
 	t := st.(*Target)
+	if t.Pane == "" {
+		clip = text
+	}
 	var err error
 	if t.Clipboard || t.Pane != "" || t.App.PID == 0 {
-		if err = copyText(text); err != nil {
+		if err = copyText(clip); err != nil {
 			return clipboardError(err)
 		}
 	}
