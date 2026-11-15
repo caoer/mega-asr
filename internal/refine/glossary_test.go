@@ -127,7 +127,7 @@ func TestGlossaryReach(t *testing.T) {
 		{ReachNone, Glossary{About: "a backend engineer"}},
 		{ReachMatching, Glossary{About: "a backend engineer", Terms: []string{"Haiku", "Kubernetes"}, Hints: []Hint{{"海库", "Haiku"}}}},
 	} {
-		if got := reachGlossary.Reach(c.reach, text); !reflect.DeepEqual(got, c.want) {
+		if got, _ := reachGlossary.Reach(c.reach, text); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: %+v, want %+v", c.reach, got, c.want)
 		}
 	}
@@ -181,5 +181,25 @@ func TestNamesInTheUserMessage(t *testing.T) {
 	}
 	if got := (Request{Dictation: "好"}).UserContent(); got != "<dictation>\n好\n</dictation>" {
 		t.Errorf("no names: %q", got)
+	}
+}
+
+// A vowel Chinese adds after a term's last consonant costs nothing, and a
+// term of one syllable is heard over two characters or more: Opus as
+// 欧普斯, Claude as 克劳德, Mac as 麦克. One character is never a
+// one-syllable term (Mac is not 买 in 去买东西).
+func TestMatchingHearsChineseRenderings(t *testing.T) {
+	g := Glossary{Terms: []string{"Opus", "Claude", "Mac", "Node"}}
+	for text, want := range map[string][]string{
+		"用欧普斯写":      {"Opus"},
+		"让克劳德看看":     {"Claude"},
+		"在麦克上跑":      {"Mac"},
+		"诺德的版本":      {"Node"},
+		"去买东西":       nil,
+		"Opus 和 Mac": {"Opus", "Mac"},
+	} {
+		if got := g.Matching(text).Terms; !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: %q, want %q", text, got, want)
+		}
 	}
 }

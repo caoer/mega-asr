@@ -400,6 +400,7 @@ type refineSettings struct {
 	Prompt   string   // the mode's prompt file
 	Glossary string   // glossary.txt
 	Reach    string   // how much of the glossary a call carries (app.RefineConfig.GlossaryReach)
+	ReachSet string   // refine.glossary as the file has it; "" goes by the mode
 }
 
 // named is a config value and its name in the menu.
@@ -421,7 +422,7 @@ func modeLabel(mode string) string {
 var refineReaches = []named{
 	{"all", l10n.Pair{"All", "全部"}},
 	{"matching", l10n.Pair{"Near Ones Only", "只带读音相近的"}},
-	{"none", l10n.Pair{"None", "不带"}},
+	{"none", l10n.Pair{"None (the About Me line still goes)", "不带（「关于我」照发）"}},
 }
 
 // refineModels are the models the menu offers; Other… takes any id.
@@ -525,14 +526,14 @@ func (v voiceState) refineRow() row {
 }
 
 // glossaryRows are the Glossary submenu: how much of it a call carries,
-// then its file.
+// by the mode (refine.glossary unset) or fixed, then its file.
 func (r refineSettings) glossaryRows(pick func(title string, on bool, key, val string) row) []row {
-	var rows []row
+	rows := []row{pick(l10n.T("By Mode: All for Fix Mis-heard Words, Near Ones for the Others", "按模式：纠正听错的词带全部，其他模式只带读音相近的"),
+		r.ReachSet == "", "refine.glossary", `""`), {sep: true}}
 	for _, g := range refineReaches {
-		rows = append(rows, pick(g.label.String(), g.key == r.Reach, "refine.glossary", strconv.Quote(g.key)))
+		rows = append(rows, pick(g.label.String(), g.key == r.ReachSet, "refine.glossary", strconv.Quote(g.key)))
 	}
 	return append(rows, row{sep: true},
-		row{title: l10n.T("Unset: All for Fix Mis-heard Words, the near ones for the other modes", "不设时：纠正听错的词带全部，其他模式只带读音相近的")},
 		row{title: l10n.T("Edit Glossary…", "编辑词表…"), enabled: r.Glossary != "", act: &act{kind: actEdit, arg: r.Glossary}})
 }
 
@@ -541,7 +542,7 @@ func (r refineSettings) glossaryRows(pick func(title string, on bool, key, val s
 func refineOf(r app.RefineConfig) refineSettings {
 	_, keyed := r.Providers[r.Provider]
 	return refineSettings{On: r.On, Mode: r.Mode, Model: r.Model, Effort: r.Effort, Keyed: keyed, Context: r.Context,
-		Modes: app.RefineModeNames(), Prompt: r.PromptPath(), Glossary: app.GlossaryPath(), Reach: r.GlossaryReach()}
+		Modes: app.RefineModeNames(), Prompt: r.PromptPath(), Glossary: app.GlossaryPath(), Reach: r.GlossaryReach(), ReachSet: r.Glossary}
 }
 
 // voiceTake is the dictation take recording now, if one does.

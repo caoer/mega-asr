@@ -130,6 +130,9 @@ func TestVoiceMenu(t *testing.T) {
 	if got := acts["Model Step: Off › Glossary: All › Near Ones Only"]; got.kind != actSet || got.key != "refine.glossary" || got.arg != `"matching"` {
 		t.Errorf("the glossary's Near Ones Only: %+v, want refine.glossary = \"matching\"", got)
 	}
+	if got := acts["Model Step: Off › Glossary: All › By Mode: All for Fix Mis-heard Words, Near Ones for the Others"]; got.kind != actSet || got.key != "refine.glossary" || got.arg != `""` {
+		t.Errorf("the glossary's By Mode: %+v, want refine.glossary = \"\" (unset)", got)
+	}
 	if _, ok := acts[in+"Forget Remote Mic"]; ok {
 		t.Error("Forget Remote Mic shows with no remote paired")
 	}

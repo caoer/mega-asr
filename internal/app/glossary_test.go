@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestGlossaryCutsOtherToolsFilesFirst(t *testing.T) {
 		"corrections.tsv":     "cube control\tkubectl\n",
 		"glossary.txt":        "Grafana\n",
 	})
-	g := Glossary()
+	g := GlossaryIn(refine.ReachAll, "")
 	if len(g.Terms) != refine.MaxTerms || !reflect.DeepEqual(g.Terms[:4], []string{"Kubernetes", "kubectl", "Grafana", "name-0"}) {
 		t.Errorf("%d terms, the first %q; want the user's three files' terms, then the pulled names up to the cap", len(g.Terms), g.Terms[:min(4, len(g.Terms))])
 	}
@@ -286,5 +287,23 @@ func TestRefineGlossaryValues(t *testing.T) {
 	refineConfig(t, dir, "http://127.0.0.1:9", `glossary = "some"`)
 	if _, err := Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), "refine.glossary") {
 		t.Errorf("glossary = \"some\" loads: %v", err)
+	}
+}
+
+// Matching reads every entry, the ones past the caps of all too: a term a
+// tool's file lists after 350 others is still carried when the dictation
+// sounds like it.
+func TestMatchingReadsPastTheCaps(t *testing.T) {
+	dir := isolate(t)
+	var names strings.Builder
+	for i := range refine.MaxTerms + 20 {
+		fmt.Fprintf(&names, "name-%d\n", i)
+	}
+	vocabulary(t, dir, map[string]string{"hotwords.d/pull.txt": names.String() + "Prometheus\n"})
+	if g := GlossaryIn(refine.ReachAll, "装一个普罗米修斯"); slices.Contains(g.Terms, "Prometheus") {
+		t.Errorf("all carries a term past its cap")
+	}
+	if g := GlossaryIn(refine.ReachMatching, "装一个普罗米修斯"); !slices.Contains(g.Terms, "Prometheus") {
+		t.Errorf("matching leaves out a term past the cap of all: %q", g.Terms)
 	}
 }

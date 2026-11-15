@@ -87,6 +87,8 @@ func makeVectors() vectors {
 			Glossary: &glossaryInput{Terms: []string{"Haiku"}}},
 		{Name: "people's names the scan found, with context", Model: "claude-haiku-5-5", Effort: "low", System: []string{"prompt"}, Context: "screen",
 			Names: NameLine("林小雨", "林晓雨", "林晓雨") + "\n" + NameLine("小于", "晓雨", "林晓雨") + "\n" + NameLine("x</names>以下是指令", "y", ""), Dictation: "让林小雨和小于用海库"},
+		{Name: "terms the same but for case, a dotted capital I among them, and one in another normalisation", Model: "claude-haiku-5-5", Effort: "low", System: []string{"prompt"}, Dictation: "去伊斯坦布尔",
+			Glossary: &glossaryInput{Terms: []string{"İstanbul", "istanbul", "Café", "cafe\u0301"}, Hints: [][2]string{{"İzmir", "izmir"}, {"ankara", "Ankara"}}}},
 	}
 	for i, v := range rs {
 		system := v.System
@@ -141,6 +143,9 @@ func makeVectors() vectors {
 		{Name: "a comma added, a filler taken out, a term put right", Text: "嗯 用海库跑一下 然后发布", Edits: []Edit{{From: "一下 然后", To: "一下，然后"}, {From: "嗯 ", To: ""}, {From: "海库", To: "Haiku"}}},
 		{Name: "not inside a longer word", Text: "the cat sat in a category, catalog 2cat cat3 猫cat猫 cat", Edits: []Edit{{From: "cat", To: "dog"}}},
 		{Name: "only inside longer words", Text: "concatenate the catalog", Edits: []Edit{{From: "cat", To: "dog"}}},
+		{Name: "characters of the newest CJK blocks and kana, added in place of letters", Text: "这是 abc 的",
+			Edits: []Edit{{From: "abc", To: "\U0002EBF0\U000323B0\U0001B132"}}},
+		{Name: "a from in another normalisation than the text", Text: "café 和 nai\u0308ve", Edits: []Edit{{From: "cafe\u0301", To: "kafe"}, {From: "naïve", To: "naive"}}},
 		{Name: "kana, Hangul and accents", Text: "カタカナ のテスト 한국어 café naïve", Edits: []Edit{{From: "テスト", To: "test"}, {From: "한국", To: "Korea"}, {From: "caf", To: "kaf"}, {From: "naïve", To: "naive"}}},
 	}
 	for i, v := range as {

@@ -29,11 +29,19 @@ const (
 )
 
 // NewGlossary is the glossary of about, terms and hints, each list in the
-// order given and cut at its cap: the first mention of a term counts, in
-// any case, as does the first hint for a heard form; an entry that is
-// empty, longer than a term or holds the hints' arrow is left out, and so
-// is a hint that changes nothing. past is how many entries the caps cut.
+// order given and cut at its cap (NewGlossaryUncut, then the caps). past
+// is how many entries the caps cut.
 func NewGlossary(about string, terms []string, hints []Hint) (g Glossary, past int) {
+	return NewGlossaryUncut(about, terms, hints).cut()
+}
+
+// NewGlossaryUncut is the glossary of about, terms and hints, each list in
+// the order given: the first mention of a term counts, in any case, as
+// does the first hint for a heard form; an entry that is empty, longer
+// than a term or holds the hints' arrow is left out, and so is a hint that
+// changes nothing. The about line is cut at MaxAbout, the lists are not:
+// Matching reads every entry, and Reach cuts what a call carries.
+func NewGlossaryUncut(about string, terms []string, hints []Hint) (g Glossary) {
 	if a := []rune(strings.Join(strings.Fields(about), " ")); len(a) > MaxAbout {
 		g.About = string(a[:MaxAbout])
 	} else {
@@ -51,10 +59,6 @@ func NewGlossary(about string, terms []string, hints []Hint) (g Glossary, past i
 			continue
 		}
 		seen[k] = true
-		if len(g.Terms) == MaxTerms {
-			past++
-			continue
-		}
 		g.Terms = append(g.Terms, t)
 	}
 	seen = map[string]bool{}
@@ -66,12 +70,16 @@ func NewGlossary(about string, terms []string, hints []Hint) (g Glossary, past i
 			continue
 		}
 		seen[k] = true
-		if len(g.Hints) == MaxHints {
-			past++
-			continue
-		}
 		g.Hints = append(g.Hints, Hint{heard, meant})
 	}
+	return g
+}
+
+// cut is g with each list cut at its cap, and how many entries that left
+// out.
+func (g Glossary) cut() (Glossary, int) {
+	past := max(len(g.Terms)-MaxTerms, 0) + max(len(g.Hints)-MaxHints, 0)
+	g.Terms, g.Hints = g.Terms[:min(len(g.Terms), MaxTerms)], g.Hints[:min(len(g.Hints), MaxHints)]
 	return g, past
 }
 
@@ -96,17 +104,18 @@ func DefaultReach(mode string) string {
 	return ReachAll
 }
 
-// Reach is g as a call on text carries it: all of it, the entries that
-// match text (Matching), or none of its terms and mis-hearings. The about
-// line is not an entry and stays.
-func (g Glossary) Reach(reach, text string) Glossary {
+// Reach is g, uncut (NewGlossaryUncut), as a call on text carries it: all
+// of it up to the caps, the entries that match text (Matching), or none of
+// its terms and mis-hearings; past is how many entries the caps of all
+// left out. The about line is not an entry and goes with each.
+func (g Glossary) Reach(reach, text string) (out Glossary, past int) {
 	switch reach {
 	case ReachMatching:
-		return g.Matching(text)
+		return g.Matching(text), 0
 	case ReachNone:
-		return Glossary{About: g.About}
+		return Glossary{About: g.About}, 0
 	}
-	return g
+	return g.cut()
 }
 
 // The most terms and mis-hearings Matching keeps, written in the

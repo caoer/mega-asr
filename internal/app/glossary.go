@@ -32,7 +32,8 @@ func AboutPath() string { return filepath.Join(ConfigDir(), "about.txt") }
 // wrong only beside Chinese, where the table has put it right already.
 // about.txt is the about line. A hot-word or corrections file that still is
 // the sample Seed wrote counts for nothing: its terms are examples, not the
-// user's. With none of the files the glossary is empty.
+// user's. With none of the files the glossary is empty. Its lists are
+// uncut: GlossaryIn gives what a call carries.
 func Glossary() refine.Glossary {
 	var terms []string
 	var hints []refine.Hint
@@ -49,7 +50,13 @@ func Glossary() refine.Glossary {
 	hot, corr, glos := HotwordsFiles(), CorrectionsFiles(), GlossaryFiles()
 	add(own(hot[0], "hotwords.txt"), own(corr[0], "corrections.tsv"), glos[:1])
 	add(hot[1:], corr[1:], glos[1:])
-	g, past := refine.NewGlossary(strings.Join(lines(AboutPath()), " "), terms, hints)
+	return refine.NewGlossaryUncut(strings.Join(lines(AboutPath()), " "), terms, hints)
+}
+
+// GlossaryIn is the glossary a call on text carries under reach
+// (refine.Glossary.Reach); with all, the entries past the caps are logged.
+func GlossaryIn(reach, text string) refine.Glossary {
+	g, past := Glossary().Reach(reach, text)
 	if past > 0 {
 		log.Printf("refine: glossary: %d entries past its caps (%d terms, %d mis-hearings) left out", past, refine.MaxTerms, refine.MaxHints)
 	}

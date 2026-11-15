@@ -70,10 +70,12 @@ type match struct {
 // or, from three characters, differ in one that keeps its initial or its
 // final. Any other term is heard as its consonants and vowels in classes
 // (pinyinKey, wordKey) and sounds like a span that starts as it does and is
-// within slip of it; a term of one syllable sounds only like Latin words,
-// as too many Chinese characters read like it. A term of fewer than two
-// consonants or of no vowel (an abbreviation, said letter by letter), or a
-// single character, counts only as written.
+// within slip of it, a vowel Chinese adds after the term's last
+// consonant costing nothing (Opus heard as 欧普斯); a term of one syllable
+// sounds like Latin words, or two characters or more at most a vowel off
+// (Claude heard as 克劳德), never one, as too many characters read like
+// it. A term of fewer than two consonants or of no vowel (an abbreviation,
+// said letter by letter), or a single character, counts only as written.
 func (s sounds) hear(entry string) match {
 	if s.written(entry) {
 		return match{ok: true, written: true}
@@ -98,11 +100,11 @@ func (s sounds) hear(entry string) match {
 	if limit < 0 || c == len(k) {
 		return match{}
 	}
-	latinOnly := len(k)-c < 2
+	oneSyllable := len(k)-c < 2
 	best := limit + 1
 	col := make([]int, len(k)+1)
 	for i := range s.units {
-		if s.units[i].key == "" || !sameStart(s.units[i].key, k) || latinOnly && s.units[i].han {
+		if s.units[i].key == "" || !sameStart(s.units[i].key, k) {
 			continue
 		}
 		for r := range col {
@@ -112,18 +114,23 @@ func (s sounds) hear(entry string) match {
 			}
 		}
 		n := 0 // symbols of the span
-		for j := i; j < len(s.units) && j < i+maxSpan && n <= len(k)+limit && !(latinOnly && s.units[j].han); j++ {
+		for j := i; j < len(s.units) && j < i+maxSpan && n <= 2*len(k)+limit; j++ {
 			for _, x := range []byte(s.units[j].key) {
 				n++
 				diag := col[0]
 				col[0] += step(x)
 				for r := 1; r <= len(k); r++ {
 					up := col[r]
-					col[r] = min(diag+swap(k[r-1], x), up+step(x), col[r-1]+drop(k, r-1))
+					col[r] = min(diag+swap(k[r-1], x), up+add(k, r, x), col[r-1]+drop(k, r-1))
 					diag = up
 				}
 			}
-			best = min(best, col[len(k)])
+			switch {
+			case !oneSyllable || !s.units[i].han:
+				best = min(best, col[len(k)])
+			case j > i && col[len(k)] <= 1: // one vowel off at most, over two characters or more
+				best = min(best, col[len(k)])
+			}
 		}
 	}
 	if best > limit {
@@ -191,6 +198,16 @@ func drop(k string, i int) int {
 		return 2
 	}
 	return step(k[i])
+}
+
+// add is the cost of a span's x where the term has nothing, after its
+// k[:r]: nothing for a vowel after the consonant that ends the term, which
+// Chinese says with a vowel (s of Opus as 斯); else step.
+func add(k string, r int, x byte) int {
+	if vowel(x) && r == len(k) && !vowel(k[r-1]) {
+		return 0
+	}
+	return step(x)
 }
 
 func swap(a, b byte) int {

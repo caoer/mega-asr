@@ -326,7 +326,7 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 		return fail(refine.WhyError, err)
 	}
 	step := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
-		System: append([]string{prompt}, Glossary().Reach(r.GlossaryReach(), text).Blocks()...), Names: r.namesIn(text)}
+		System: append([]string{prompt}, GlossaryIn(r.GlossaryReach(), text).Blocks()...), Names: r.namesIn(text)}
 	sc := in.Screen
 	if sc != nil {
 		sc = r.screenNow(sc)
