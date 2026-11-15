@@ -230,5 +230,5 @@ func Policy(pages ...[]byte) string {
 		}
 	}
 	return "default-src 'self'; script-src 'self'" + scripts + "; style-src 'self'" + styles +
-		"; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+		"; media-src 'self' blob:; img-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 }

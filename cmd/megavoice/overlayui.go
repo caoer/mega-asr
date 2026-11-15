@@ -131,6 +131,8 @@ func (u *overlayUI) renderLocked() {
 		return
 	case v.Delivering && v.Send && v.Target != "":
 		label = l10n.T("发送中…", "Sending…")
+	case v.Refining && !v.EscCancels: // a take a phone streams: neither key is its
+		label = l10n.T("转译中…", "Refining…")
 	case v.Refining && v.Send:
 		label = l10n.T("转译中… → 粘贴 + Enter · Esc 取消", "Refining… → paste + Enter · Esc cancels")
 	case v.Refining:

@@ -40,8 +40,9 @@ func TestOverlayShowsPendingTelegramDelivery(t *testing.T) {
 }
 
 // While a take waits on the model step the overlay says so, in place of the
-// transcribing label, and that Esc cancels; it shows the text as recognised
-// and counts the time from the take's stop.
+// transcribing label, and that Esc cancels when the take is Esc's; it shows
+// the text as recognised and counts the time from the take's stop. A take a
+// phone streams waits with no key offered.
 func TestOverlaySaysRefining(t *testing.T) {
 	u, ov, _ := newTestUI()
 	u.Show(session.View{Started: time.Now()})
@@ -49,15 +50,19 @@ func TestOverlaySaysRefining(t *testing.T) {
 		t.Fatal(ov.label)
 	}
 	stopped := time.Now().Add(-7 * time.Second)
-	u.Show(session.View{Started: stopped, Refining: true, Live: func() string { return "用海库" }})
+	u.Show(session.View{Started: stopped, Refining: true, EscCancels: true, Live: func() string { return "用海库" }})
 	if !strings.HasPrefix(ov.label, "转译中…") || strings.Contains(ov.label, "识别中") || !strings.Contains(ov.label, "Esc 取消") {
 		t.Fatal(ov.label)
 	}
 	if ov.live == nil || ov.live() != "用海库" || !ov.started.Equal(stopped) {
 		t.Fatalf("live text %v, stopwatch from %v, want the recognised text and %v", ov.live != nil, ov.started, stopped)
 	}
-	u.Show(session.View{Started: time.Now(), Refining: true, Send: true})
+	u.Show(session.View{Started: time.Now(), Refining: true, EscCancels: true, Send: true})
 	if !strings.HasPrefix(ov.label, "转译中… → ") || !strings.Contains(ov.label, "Esc 取消") {
+		t.Fatal(ov.label)
+	}
+	u.Show(session.View{Started: time.Now(), Refining: true, Send: true})
+	if !strings.HasPrefix(ov.label, "转译中…") || strings.Contains(ov.label, "Esc") || strings.Contains(ov.label, "Enter") {
 		t.Fatal(ov.label)
 	}
 }

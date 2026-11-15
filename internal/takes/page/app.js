@@ -49,6 +49,9 @@
   // ------------------------------------------------------------ requests
 
   var Refused = new Error("refused");
+  // Aborted is an action the page took back itself (init.signal): the
+  // listener answered nothing, and the tab carries on.
+  var Aborted = new Error("aborted");
 
   // The listener's key: megavoice opens the page with #k=<key>, which a
   // browser never sends to a server. This tab keeps it in sessionStorage,
@@ -82,7 +85,8 @@
   // so the player plays a blob: URL). A refused request's error carries the
   // server's code (err.code, worded by refusal) and its words. A GET gives
   // up after 10 s, an action waits for its answer (a re-transcription takes
-  // as long as the decode). A 403, or no answer, stops the tab: Refused.
+  // as long as the decode). A 403, or no answer, stops the tab: Refused;
+  // an action the page aborts through init.signal rejects with Aborted.
   function api(path, init) {
     if (stopped) return Promise.reject(Refused);
     init = init || {};
@@ -106,6 +110,7 @@
       return init.blob ? r.blob() : r.json();
     }, function () {
       clearTimeout(timer);
+      if (init.signal && init.signal.aborted) throw Aborted;
       throw stop();
     });
   }
@@ -839,8 +844,9 @@
   // actions in flight per take, so a take left and come back to still shows
   // its button waiting, and a second click sends nothing.
   var DT = { id: "", take: null, err: null, note: null, picker: null, targets: null, dest: "", enter: false, engine: "" };
-  var busy = { resend: {}, retr: {}, label: {} };
+  var busy = { resend: {}, retr: {}, label: {}, refine: {}, send: {} };
   var ENG = null; // the engines, re-read when the engine picker opens
+  var MODES = null; // the model step's modes and [refine], re-read as each take opens
   var playWhenReady = "";
 
   // openTake reads the take S.sel names when it is not the one shown, and
@@ -856,6 +862,7 @@
       seen(id);
     });
     if (!ENG) api("api/engines").then(function (r) { ENG = r.engines || []; if (DT.take) drawDetail(); }, function () {});
+    api("api/modes").then(function (r) { MODES = r; if (DT.take) drawDetail(); }, function () {});
   }
 
   // seen marks the take shown seen when the user opened it and it counts as
@@ -1244,8 +1251,9 @@
     if (v.main && v.src === "raw") add(row, h("p", { class: "muted" }, tr("没有整理过的文字，这是原始识别结果。", "No cleaned-up text; this is the raw transcription.")));
     var popen = DT.picker && DT.picker.kind === "resend" && DT.picker.where === v.id;
     // one primary per view: 重发… on a 未送达 take, 复制 otherwise, while no
-    // picker is open and no ground truth is being composed
-    var lead = v.main && !DT.picker && !gtBusy(t.id);
+    // picker is open, no ground truth is being composed and the model
+    // step's actions do not lead
+    var lead = v.main && !DT.picker && !gtBusy(t.id) && !stepOpen(t);
     var undel = t.state === "undelivered" && !t.dismissed;
     add(
       row,
@@ -2239,6 +2247,11 @@
     backup_text: tr("这一条的文字来自备用输入，录音文件里没有这段声音：只能存备注", "This take's text came from the backup input, which the audio file doesn't hold: a note only"),
     disk_full: tr("磁盘满了", "The disk is full"),
     no_permission: tr("没有写入的权限", "No permission to write"),
+    delivered: tr("这一条已经送达，不再从这里发；要再发一次用 重发…", "This take was delivered, so it isn't sent from here; to send it again use Resend…"),
+    refining: tr("这条正在转译", "The model step is running on this take"),
+    no_target: tr("这一条没有记下目标：用 重发… 选一个", "This take has no recorded target: pick one with Resend…"),
+    unknown_mode: tr("没有这个模式", "There's no such mode"),
+    unavailable: tr("这里不能转译或发出", "The model step can't run here"),
     no_text: function (x) {
       var v = x && x.v;
       var why = !v ? "" : v.retr ? (v.err ? tr("重新识别 #" + v.id.slice(1) + " 失败了", "re-transcription #" + v.id.slice(1) + " failed") : tr("没有重新识别 #" + v.id.slice(1), "there is no re-transcription #" + v.id.slice(1))) : v.src === "raw" ? tr("原始文字是空的", "the raw text is empty") : v.src === "delivered" ? tr("送达的文字是空的", "the delivered text is empty") : v.err ? tr(v.name + " 这次识别失败了", v.name + " failed this time") : tr("对比记录里没有 " + v.name + " 的结果", "the compare record has no result from " + v.name);
@@ -2346,6 +2359,223 @@
       });
   }
 
+  // ------------------------------------------------------------ model step
+
+  // STEP_WHY is why a model step's call gave no answer to use, in the
+  // overlay's words (session refineFailedMsg).
+  var STEP_WHY = tr(
+    { http: "服务出错", refusal: "模型拒绝了", parse: "回答读不懂", guard: "回答不能用", key: "读不到密钥", error: "调用失败", cancelled: "已取消" },
+    { http: "the provider returned an error", refusal: "the model declined", parse: "the answer could not be read", guard: "the answer could not be used", key: "the key cannot be read", error: "the call failed", cancelled: "cancelled" },
+  );
+  function modeName(name) {
+    var m = MODES && MODES.modes.filter(function (x) { return x.name === name; })[0];
+    return m ? m.label : name || "";
+  }
+  function reached(t) {
+    return t.events.some(function (e) { return e.ev === "deliver" && e.ok; });
+  }
+  // modelText is the text a refine line's call gave: a run again's, on its
+  // line; the take's own call's, on its own delivery's line when it differs
+  // from the text as recognised. "" when the call gave none.
+  function modelText(t, e) {
+    if (e.why) return "";
+    if (e.text) return e.text;
+    var d = t.events.filter(function (x) { return x.ev === "deliver" && x.via === "auto"; })[0];
+    return (d && d.text) || "";
+  }
+  // the model's answer to send: the newest refine line with a text, as the
+  // server's send picks it
+  function sendable(rs) {
+    return rs.filter(function (e) { return !e.why && e.text; }).pop() || null;
+  }
+
+  // stepBlock is the take's model step, stage by stage: the text as
+  // recognised, then each call — its mode, the model's text or why it gave
+  // none, what it was given beside the dictation — and, on a take held or
+  // cancelled that never reached a target, 再转译 in a mode picked here and
+  // the two sends. A take that was delivered shows its stages and offers no
+  // send: a second delivery is 重发…'s, on purpose.
+  // stepOpen says whether the take offers 再转译 and the sends: held or
+  // cancelled, never delivered, with its text as recognised, and the step
+  // on or already run on it.
+  function stepOpen(t) {
+    var ran = t.events.some(function (e) { return e.ev === "refine"; });
+    return !reached(t) && !!heardText(t) && (t.state === "cancelled" || t.state === "undelivered") && (ran || !!(MODES && MODES.on));
+  }
+  // heardText is the take's text as recognised: its .txt, else the text its
+  // hold line kept (a take whose chunks failed keeps no .txt).
+  function heardText(t) {
+    if (t.text) return t.text;
+    var h = t.events.filter(function (e) { return e.ev === "hold" && e.text; }).pop();
+    return h ? h.text : "";
+  }
+  function stepBlock(t) {
+    var rs = t.events.filter(function (e) { return e.ev === "refine"; });
+    var open = stepOpen(t);
+    if (!rs.length && !open) return null;
+    var sec = h("section", { class: "block step", "aria-labelledby": "h-step" }, h("h2", { id: "h-step" }, tr("转译", "Model step")));
+    var rows = [];
+    var heard = heardText(t);
+    if (heard) rows.push(h("div", { class: "ver", "data-v": "heard" }, h("div", { class: "ver-head" }, h("span", { class: "who" }, tr("识别的字", "Recognised"))), h("p", { class: "d-text", lang: "zh-CN" }, heard)));
+    rs.forEach(function (e) {
+      rows.push(stepRow(t, e));
+    });
+    add(sec, h("div", { class: "vers" }, rows));
+    if (open) add(sec, stepActions(t, rs));
+    else if (rs.length && reached(t)) add(sec, h("p", { class: "muted" }, tr("这一条已经送达；要再发一次用上面的 重发…", "This take was delivered; to send it again use Resend… above")), note("step"));
+    return sec;
+  }
+
+  function stepRow(t, e) {
+    var txt = modelText(t, e);
+    var head = h(
+      "div",
+      { class: "ver-head" },
+      h("span", { class: "who" }, e.via === "page" ? tr("再转译 · ", "Again · ") + hm(new Date(e.at)) : tr("录音时", "When recorded")),
+      h("span", { class: "who" }, modeName(e.mode)),
+      e.model ? h("span", { class: "who mono", translate: "no" }, e.model) : null,
+      h("span", { class: "grow" }),
+      e.latency_ms ? h("span", { class: "lat" }, tr("用时 ", "Took "), h("span", { class: "num" }, (e.latency_ms / 1000).toFixed(2)), tr(" 秒", " s")) : null,
+    );
+    var body;
+    if (e.why === "cancelled") body = h("p", { class: "d-text none" }, tr("已取消，没有模型的字", "Cancelled: no text from the model"));
+    else if (e.why) body = h("div", { class: "alert", role: "alert" }, h("h3", null, svg(10, 10, ICON.x), tr("转译未成 · ", "Model step failed · "), STEP_WHY[e.why] || e.why), e.err ? h("p", null, h("code", null, e.err)) : null);
+    else if (txt) body = h("p", { class: "d-text", lang: "zh-CN" }, txt);
+    else body = h("p", { class: "d-text none" }, tr("模型没有改动", "The model changed nothing"));
+    var edits = (e.edits || []).length
+      ? h(
+          "ul",
+          { class: "edits" },
+          e.edits.map(function (x) {
+            return h("li", null, h("span", { class: "mono" }, x.from), " → ", h("span", { class: "mono" }, x.to), x.why ? h("span", { class: "muted" }, " · " + x.why) : null);
+          }),
+        )
+      : null;
+    var sc = e.screen;
+    var given =
+      e.context || (sc && sc.image)
+        ? h("details", { class: "more-box" }, h("summary", null, tr("模型还看到的", "What the model was also given")), e.context ? h("pre", { class: "ctx" }, e.context) : null, sc && sc.image ? screenImg(sc) : null)
+        : null;
+    var withheld = sc && sc.withheld ? h("p", { class: "muted" }, tr("屏幕没有发：", "Screen not sent: "), h("span", { class: "mono" }, sc.withheld)) : null;
+    return h("div", { class: "ver", "data-v": "refine:" + (e.n || 1) }, head, body, edits, given, withheld);
+  }
+
+  // screenImg is the picture a call was sent, fetched through api once as a
+  // blob: URL (an <img> sends no key).
+  var SHOTS = {};
+  function screenImg(sc) {
+    var img = h("img", { class: "screen", alt: tr("发给模型的屏幕画面", "The screen picture sent to the model"), width: sc.image_w || null, height: sc.image_h || null });
+    if (SHOTS[sc.image]) img.src = SHOTS[sc.image];
+    else
+      api("screen/" + encodeURIComponent(sc.image), { blob: true }).then(function (b) {
+        img.src = SHOTS[sc.image] = URL.createObjectURL(b);
+      }, failedAction);
+    return img;
+  }
+
+  function stepActions(t, rs) {
+    var ms = (MODES && MODES.modes) || [];
+    if (!ms.some(function (m) { return m.name === DT.mode; })) DT.mode = (MODES && MODES.mode) || (ms[0] && ms[0].name) || "";
+    var run = busy.refine[t.id];
+    var sending = busy.send[t.id];
+    var model = sendable(rs);
+    var box = h("div", { class: "picker step-run", role: "group", "aria-label": tr("再转译一次", "Run the model step again") });
+    if (!MODES) add(box, h("p", { class: "muted" }, tr("正在读取模式…", "Loading modes…")));
+    else
+      add(
+        box,
+        h(
+          "div",
+          { class: "opts" },
+          ms.map(function (m) {
+            return h(
+              "label",
+              { class: "opt" },
+              h("input", { type: "radio", name: "mode", value: m.name, "data-k": "mode:" + m.name, disabled: !!run, checked: DT.mode === m.name, onchange: function () { DT.mode = m.name; drawDetail(); } }),
+              h("span", { class: "name" }, m.label),
+              h("span", { class: "sub mono", translate: "no" }, m.name),
+            );
+          }),
+        ),
+      );
+    add(
+      box,
+      h(
+        "div",
+        { class: "confirm-row" },
+        run
+          ? h("button", { class: "btn", type: "button", "data-k": "step-cancel", onclick: function () { run.abort(); } }, tr("取消转译", "Cancel"))
+          : h("button", { class: "btn" + (model ? "" : " primary"), type: "button", "data-k": "step-go", disabled: !DT.mode || !!sending, onclick: function () { doRerefine(t, DT.mode); } }, rs.length ? tr("再转译一次", "Run again") : tr("转译", "Run the model step")),
+        model ? h("button", { class: "btn primary", type: "button", "data-k": "send-model", disabled: !!run || !!sending, onclick: function () { doSend(t, "model"); } }, tr("发出模型的字", "Send the model's text")) : null,
+        h("button", { class: "btn", type: "button", "data-k": "send-heard", disabled: !!run || !!sending, onclick: function () { doSend(t, "recognised"); } }, tr("按识别的字发出", "Send as recognised")),
+        run ? h("span", { class: "act-note", role: "status" }, tr("转译中…", "Running…")) : note("step"),
+      ),
+    );
+    add(box, h("p", { class: "muted" }, tr("发到录音时的目标：", "Sends to where the take was going: "), target(t.target).full || tr("没有记下", "not recorded")));
+    return box;
+  }
+
+  // doRerefine runs the step again on the take in mode, one call with no
+  // time limit; 取消转译 aborts the request, and the server's line then says
+  // cancelled. The answer joins the stages as its own row.
+  function doRerefine(t, mode) {
+    var id = t.id;
+    if (busy.refine[id]) return;
+    var ctl = new AbortController();
+    busy.refine[id] = ctl;
+    DT.note = null;
+    drawDetail();
+    api("api/rerefine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: id, mode: mode }), signal: ctl.signal })
+      .then(
+        function (line) {
+          if (DT.id !== id) return;
+          if (line.why) say("step", "err", [tr("转译未成：", "Model step failed: "), STEP_WHY[line.why] || line.why]);
+          else say("step", "ok", tr("模型的字已到 · ", "The model's text is here · ") + ((line.latency_ms || 0) / 1000).toFixed(1) + tr(" 秒", " s"));
+        },
+        function (err) {
+          if (err === Aborted) {
+            if (DT.id === id) say("step", "err", tr("已取消转译", "Model step cancelled"));
+            return;
+          }
+          if (err === Refused) return failed(err);
+          if (DT.id === id) say("step", "err", [tr("没有转译：", "Not run: "), refusal(err)]);
+        },
+      )
+      .then(function () {
+        busy.refine[id] = null;
+        if (DT.id === id) reloadTake(id).then(drawDetail);
+      });
+  }
+
+  // doSend sends the take once to its own target: the model's text or the
+  // text as recognised. The server refuses a take that has reached a target,
+  // so a second click sends nothing.
+  function doSend(t, which) {
+    var id = t.id;
+    if (busy.send[id]) return;
+    busy.send[id] = true;
+    DT.note = null;
+    drawDetail();
+    var name = target(t.target).full;
+    postJSON("api/send", { id: id, text: which })
+      .then(
+        function (line) {
+          if (DT.id !== id) return;
+          if (line.ok && line.not_recorded) say("step", "err", [tr("已发出，记录未写入 → " + name + "：", "Sent, but not recorded → " + name + ": "), reason(line.not_recorded)]);
+          else if (line.ok) say("step", "ok", (line.submit === "ok" ? tr("已发送到 ", "Sent to ") : tr("已粘贴到 ", "Pasted into ")) + name);
+          else say("step", "err", [tr("送达失败 → " + name + "：", "Delivery failed → " + name + ": "), reason(line.err)]);
+        },
+        function (err) {
+          if (err === Refused) return failed(err);
+          if (DT.id === id) say("step", "err", [tr("没有发出去：", "Not sent: "), refusal(err)]);
+        },
+      )
+      .then(function () {
+        busy.send[id] = false;
+        if (DT.id === id) reloadTake(id).then(drawDetail);
+      });
+  }
+
   // ------------------------------------------------------------ timeline
 
   var STOP = tr(
@@ -2383,6 +2613,8 @@
         return tr("读回 #", "Read back #") + e.n + " · " + (e.received === "whole" ? tr("完整", "complete") : e.received === "short" ? tr("不完整", "incomplete") : tr("看不出", "unclear"));
       case "recover":
         return tr("重启后找回", "Recovered after a restart");
+      case "refine":
+        return [e.via === "page" ? tr("从历史页再转译 #" + e.n + " · ", "Model step again from Recordings #" + e.n + " · ") : tr("转译 · ", "Model step · "), modeName(e.mode), e.why ? [tr(" · 未成：", " · failed: "), STEP_WHY[e.why] || e.why] : e.latency_ms ? " · " + (e.latency_ms / 1000).toFixed(1) + tr(" 秒", " s") : ""];
       case "retranscribe":
         return tr("重新识别 #", "Re-transcription #") + e.n + " · " + e.engine + (e.err ? tr(" · 失败：", " · failed: ") + e.err : " · " + tr(Array.from(e.text || "").length + " 字", charsN(Array.from(e.text || "").length)));
       case "seen":
@@ -2413,7 +2645,7 @@
         "ol",
         { class: "tl" },
         t.events.map(function (e) {
-          var bad = (e.ev === "deliver" && !e.ok) || (e.ev === "hold" && e.why !== "cancelled" && e.why !== "empty") || (e.ev === "retranscribe" && e.err);
+          var bad = (e.ev === "deliver" && !e.ok) || (e.ev === "hold" && e.why !== "cancelled" && e.why !== "empty") || (e.ev === "retranscribe" && e.err) || (e.ev === "refine" && e.why && e.why !== "cancelled");
           var at = new Date(e.at);
           return h("li", null, h("span", { class: "off" }, offset(at.getTime() - t0, at)), h("span", { class: bad ? "bad" : e.ev === "deliver" ? "ok" : null }, evWords(e)));
         }),
@@ -2443,6 +2675,7 @@
       parts = [
         dheader(t),
         texts(t),
+        stepBlock(t),
         labelBlock(t),
         playerBlock(t),
         timeline(t),

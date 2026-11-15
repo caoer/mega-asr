@@ -153,7 +153,8 @@ func TestActionsGuarded(t *testing.T) {
 		if w := request(h, http.MethodGet, "/takes/api/targets?id=20200314-092653", edit); w.Code != http.StatusForbidden {
 			t.Errorf("targets, %s: %d, want 403", name, w.Code)
 		}
-		for path, body := range map[string]string{"/takes/api/resend": takeBody, "/takes/api/retranscribe": `{"id":"20200314-092653","engine":"cloudasr"}`} {
+		for path, body := range map[string]string{"/takes/api/resend": takeBody, "/takes/api/retranscribe": `{"id":"20200314-092653","engine":"cloudasr"}`,
+			"/takes/api/send": `{"id":"20200314-092653","text":"recognised"}`, "/takes/api/rerefine": `{"id":"20200314-092653","mode":"tidy"}`} {
 			if w := post(h, path, body, edit); w.Code != http.StatusForbidden {
 				t.Errorf("%s, %s: %d, want 403", path, name, w.Code)
 			}
@@ -619,5 +620,207 @@ func TestTargetsLeaveOutPage(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("targets:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// heldTake is a take held because the model step's call gave no answer to
+// use: spoken into pane w1:p2, ended as stop says, its text as recognised
+// kept.
+func heldTake(t *testing.T, dir, id, stop string) string {
+	t.Helper()
+	base := filepath.Join(dir, id)
+	if err := (store.Store{Dir: dir}).SaveText(base, "用海库跑一下 派森", "用海库跑一下 Python"); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2020, 3, 14, 9, 26, 53, 0, time.Local)
+	for _, e := range []store.Event{
+		{At: at, Ev: "start", Trigger: "tap", Target: &store.Target{Kind: "herdr", Pane: "w1:p2", Workspace: "basalt"}},
+		{At: at.Add(time.Second), Ev: "stop", Kind: stop, DurS: 1},
+		{At: at.Add(2 * time.Second), Ev: "text", Engine: "funasr", Chars: 13},
+		{At: at.Add(3 * time.Second), Ev: "refine", Mode: "fix-words", Model: "m", Why: "http", Err: "status 529: overloaded"},
+		{At: at.Add(3 * time.Second), Ev: "hold", Why: session.HoldRefineFailed},
+	} {
+		if err := store.Append(base, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return base
+}
+
+// stepIn is a Step that counts its calls and the modes they were made in,
+// answering the dictation with "<mode>: <text>".
+func stepIn(calls *[]string) func(string) (*session.RefineStep, error) {
+	return func(mode string) (*session.RefineStep, error) {
+		if mode != "fix-words" && mode != "tidy" {
+			return nil, fmt.Errorf("refine.mode %q: want one of fix-words, tidy", mode)
+		}
+		return &session.RefineStep{Run: func(_ context.Context, in session.RefineInput) (string, *store.Event) {
+			*calls = append(*calls, mode)
+			return mode + ": " + in.Text, &store.Event{Ev: "refine", Mode: mode, Model: "m", LatencyMS: 200}
+		}}, nil
+	}
+}
+
+// Run again from the page on a held take is one call in the mode picked:
+// its line is the answer and joins the record, nothing is delivered and the
+// take stays held. Send then delivers the model's text to the take's own
+// pane, once: a second send is 409 delivered and delivers nothing.
+func TestRunAgainFromPageThenSend(t *testing.T) {
+	dir := t.TempDir()
+	base := heldTake(t, dir, "20200314-092653", "tap")
+	del := &fakeDeliverer{}
+	h, _, th := actionsOf(t, dir, del, []Pane{{ID: "w1:p2"}}, nil)
+	var calls []string
+	th.Step = stepIn(&calls)
+	th.Modes = func() Modes {
+		return Modes{On: true, Mode: "fix-words", Copy: "both", Modes: []Mode{{"fix-words", "纠正听错的词"}, {"tidy", "整理口语"}}}
+	}
+	if w := post(h, "/takes/api/rerefine", `{"id":"20200314-092653","mode":"poem"}`, nil); w.Code != http.StatusBadRequest || len(calls) != 0 {
+		t.Fatalf("an unknown mode: %d %s, calls %v", w.Code, w.Body, calls)
+	}
+	w := post(h, "/takes/api/rerefine", `{"id":"20200314-092653","mode":"tidy"}`, nil)
+	var line store.Event
+	if err := json.Unmarshal(w.Body.Bytes(), &line); err != nil || w.Code != http.StatusOK {
+		t.Fatalf("%d %s (%v)", w.Code, w.Body, err)
+	}
+	if len(calls) != 1 || calls[0] != "tidy" || line.Mode != "tidy" || line.N != 2 || line.Via != "page" || line.Text != "tidy: 用海库跑一下 Python" ||
+		del.String() != "" || store.State(mustEvents(t, base)).Why != session.HoldRefineFailed {
+		t.Fatalf("calls %v, line %+v, delivered %q, state %+v", calls, line, del.String(), store.State(mustEvents(t, base)))
+	}
+	w = post(h, "/takes/api/send", `{"id":"20200314-092653","text":"model"}`, nil)
+	if w.Code != http.StatusOK || del.String() != "pane:w1:p2|tidy: 用海库跑一下 Python" {
+		t.Fatalf("send: %d %s, delivered %q", w.Code, w.Body, del.String())
+	}
+	evs := mustEvents(t, base)
+	if last := evs[len(evs)-1]; last.Ev != "deliver" || !last.OK || last.Via != "page" || last.Source != "model" || last.Submit != "none" ||
+		store.State(evs).State != "pasted" {
+		t.Fatalf("last line %+v, state %+v", last, store.State(evs))
+	}
+	before := record(t, base)
+	for _, body := range []string{`{"id":"20200314-092653","text":"model"}`, `{"id":"20200314-092653","text":"recognised"}`} {
+		if code, why := refusal(t, post(h, "/takes/api/send", body, nil)); code != http.StatusConflict || why != "delivered" {
+			t.Errorf("%s again: %d %s", body, code, why)
+		}
+	}
+	if code, why := refusal(t, post(h, "/takes/api/rerefine", `{"id":"20200314-092653","mode":"tidy"}`, nil)); code != http.StatusConflict || why != "delivered" || len(calls) != 1 {
+		t.Errorf("run again on the delivered take: %d %s, calls %v", code, why, calls)
+	}
+	if del.String() != "pane:w1:p2|tidy: 用海库跑一下 Python" || record(t, base) != before {
+		t.Fatalf("delivered %q; record changed: %v", del.String(), record(t, base) != before)
+	}
+}
+
+// A held take sent as recognised delivers its .txt to its own pane, with
+// Enter when the take ended with Enter, once. Its own pane gone, or the
+// take's record naming none, the send is refused and nothing goes out.
+func TestSendFromPageAsRecognised(t *testing.T) {
+	dir := t.TempDir()
+	base := heldTake(t, dir, "20200314-092653", "enter")
+	del := &fakeDeliverer{}
+	h, _, th := actionsOf(t, dir, del, []Pane{{ID: "w1:p9"}}, nil)
+	th.Step = stepIn(new([]string))
+	if code, why := refusal(t, post(h, "/takes/api/send", `{"id":"20200314-092653","text":"recognised"}`, nil)); code != http.StatusConflict || why != "target_gone" {
+		t.Fatalf("own pane gone: %d %s", code, why)
+	}
+	if code, _ := refusal(t, post(h, "/takes/api/send", `{"id":"20200314-092653","text":"raw"}`, nil)); code != http.StatusBadRequest {
+		t.Fatalf("text raw: %d", code)
+	}
+	h, _, _ = actionsOf(t, dir, del, []Pane{{ID: "w1:p2"}}, nil)
+	if w := post(h, "/takes/api/send", `{"id":"20200314-092653","text":"recognised"}`, nil); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := del.String(); got != "pane:w1:p2|用海库跑一下 Python;pane:w1:p2|⏎" {
+		t.Fatalf("delivered %q", got)
+	}
+	if code, why := refusal(t, post(h, "/takes/api/send", `{"id":"20200314-092653","text":"recognised"}`, nil)); code != http.StatusConflict || why != "delivered" {
+		t.Fatalf("again: %d %s", code, why)
+	}
+	none := filepath.Join(dir, "20200314-100000")
+	(store.Store{Dir: dir}).SaveText(none, "a", "A")
+	store.Append(none, store.Event{Ev: "hold", Why: "cancelled"})
+	if code, why := refusal(t, post(h, "/takes/api/send", `{"id":"20200314-100000","text":"recognised"}`, nil)); code != http.StatusConflict || why != "no_target" {
+		t.Fatalf("no target: %d %s", code, why)
+	}
+	if got := del.String(); got != "pane:w1:p2|用海库跑一下 Python;pane:w1:p2|⏎" {
+		t.Fatalf("delivered %q", got)
+	}
+	_ = base
+}
+
+// A take delivered normally is not sent from the page and the step is not
+// run on it again: both are 409 delivered, nothing goes out and nothing is
+// appended. Its stages read as they were.
+func TestDeliveredTakeIsNotSentAgain(t *testing.T) {
+	dir := t.TempDir()
+	base := take(t, dir, "20200314-092653", "a take written for the test", "A take written for the test.")
+	del := &fakeDeliverer{}
+	h, _, th := actionsOf(t, dir, del, []Pane{{ID: "w1:p2"}}, nil)
+	var calls []string
+	th.Step = stepIn(&calls)
+	before := record(t, base)
+	for path, body := range map[string]string{"/takes/api/send": `{"id":"20200314-092653","text":"recognised"}`, "/takes/api/rerefine": `{"id":"20200314-092653","mode":"tidy"}`} {
+		if code, why := refusal(t, post(h, path, body, nil)); code != http.StatusConflict || why != "delivered" {
+			t.Errorf("%s: %d %s", path, code, why)
+		}
+	}
+	if del.String() != "" || len(calls) != 0 || record(t, base) != before {
+		t.Fatalf("delivered %q, calls %v, record changed: %v", del.String(), calls, record(t, base) != before)
+	}
+}
+
+// The picture a take's call was sent is among its files and served to the
+// page; the modes list is what Modes says, and none where it is not wired.
+func TestScreenAndModes(t *testing.T) {
+	dir := t.TempDir()
+	base := heldTake(t, dir, "20200314-092653", "tap")
+	if _, err := store.SaveScreen(base, []byte("\xff\xd8\xff jpeg")); err != nil {
+		t.Fatal(err)
+	}
+	h, _, th := actionsOf(t, dir, &fakeDeliverer{}, nil, nil)
+	w := request(h, http.MethodGet, "/takes/api/take/20200314-092653", nil)
+	if !strings.Contains(w.Body.String(), "20200314-092653.screen.jpg") {
+		t.Fatalf("files: %s", w.Body)
+	}
+	if w := request(h, http.MethodGet, "/takes/screen/20200314-092653.screen.jpg", nil); w.Code != http.StatusOK || w.Body.String() != "\xff\xd8\xff jpeg" {
+		t.Fatalf("screen: %d %q", w.Code, w.Body)
+	}
+	if w := request(h, http.MethodGet, "/takes/screen/..%2f20200314-092653.screen.jpg", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("a path out of the store: %d", w.Code)
+	}
+	if w := request(h, http.MethodGet, "/takes/api/modes", nil); strings.TrimSpace(w.Body.String()) != `{"on":false,"mode":"","agent_copy":"","modes":[]}` {
+		t.Fatalf("modes unwired: %s", w.Body)
+	}
+	th.Modes = func() Modes {
+		return Modes{On: true, Mode: "tidy", Copy: "both", Modes: []Mode{{"tidy", "整理口语"}}}
+	}
+	if w := request(h, http.MethodGet, "/takes/api/modes", nil); strings.TrimSpace(w.Body.String()) != `{"on":true,"mode":"tidy","agent_copy":"both","modes":[{"name":"tidy","label":"整理口语"}]}` {
+		t.Fatalf("modes: %s", w.Body)
+	}
+}
+
+// A held take whose chunks failed keeps no .txt: run again reads its text
+// as recognised off its hold line.
+func TestRunAgainReadsTheHoldLinesText(t *testing.T) {
+	dir := t.TempDir()
+	base := filepath.Join(dir, "20200314-092653")
+	at := time.Date(2020, 3, 14, 9, 26, 53, 0, time.Local)
+	for _, e := range []store.Event{
+		{At: at, Ev: "start", Trigger: "tap", Target: &store.Target{Kind: "herdr", Pane: "w1:p2"}},
+		{At: at.Add(time.Second), Ev: "stop", Kind: "tap", DurS: 1},
+		{At: at.Add(2 * time.Second), Ev: "text", Engine: "funasr", Chars: 13, FailedChunks: 1},
+		{At: at.Add(3 * time.Second), Ev: "refine", Mode: "fix-words", Model: "m", Why: "http", Err: "status 529"},
+		{At: at.Add(3 * time.Second), Ev: "hold", Why: session.HoldRefineFailed, Text: "用海库跑一下 Python"},
+	} {
+		if err := store.Append(base, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h, _, th := actionsOf(t, dir, &fakeDeliverer{}, []Pane{{ID: "w1:p2"}}, nil)
+	var calls []string
+	th.Step = stepIn(&calls)
+	w := post(h, "/takes/api/rerefine", `{"id":"20200314-092653","mode":"fix-words"}`, nil)
+	var line store.Event
+	if err := json.Unmarshal(w.Body.Bytes(), &line); err != nil || w.Code != http.StatusOK || line.Text != "fix-words: 用海库跑一下 Python" || len(calls) != 1 {
+		t.Fatalf("%d %s, calls %v (%v)", w.Code, w.Body, calls, err)
 	}
 }

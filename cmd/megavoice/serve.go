@@ -65,6 +65,7 @@ type server struct {
 	lifetime *serverLifetime
 	exit     func(int)
 	dlv      deliver.Deliverer // the controller's, for the targets a resend names
+	refine   *app.RefineStage  // the controller's model step, for the takes page's run again
 	ov       *mac.Overlay
 	taps     chan tapIn
 
@@ -216,6 +217,7 @@ func (s *server) ready() {
 	}
 	stage := s.cfg.RefineStage(s.opts)
 	stage.Display = mac.Screen{}
+	s.refine = stage
 	s.dlv = deliver.Deliverer{
 		Pane:      s.flag.pane,
 		Agents:    stage.NotesAgent,
@@ -367,6 +369,10 @@ func (s *server) servePanel() net.Listener {
 	if s.ctrl != nil {
 		th.Ctrl, th.Resolve, th.Engine = s.ctrl, s.dlv.Resolve, s.cfg.Retranscriber(s.opts)
 		th.Panes, th.Apps = s.panes, appsFrom(mac.RunningApps)
+	}
+	if s.ctrl != nil && s.refine != nil {
+		th.Step = s.refine.StepIn
+		th.Modes = func() takes.Modes { return takesModes(s.refine.Config()) }
 	}
 	bound := ln.Addr().String()
 	log.Printf("serve: the Takes page on http://%s/takes/, labels in %s", bound, s.cfg.Store.Labels)

@@ -9,12 +9,15 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/post"
+	"github.com/caoer/mega-asr/internal/session"
+	"github.com/caoer/mega-asr/internal/store"
 )
 
 // fixtureTake is 30 s of dictation, the chunker's own test take.
@@ -133,4 +136,21 @@ func readTSV(t *testing.T, path string) []map[string]string {
 		rows = append(rows, m)
 	}
 	return rows
+}
+
+// megavoice transcribe with the model step on: a take the step holds,
+// having no usable answer, is an error that says why, never an empty text.
+func TestTranscribeSaysWhyATakeIsHeld(t *testing.T) {
+	cfg := app.Default()
+	d := &decoder{r: newOffline(cfg, nameASR{}, post.Chain{}, filepath.Join(t.TempDir(), "data"), ""), ui: &flashes{}}
+	d.r.ctrl.UI = d.ui
+	d.r.ctrl.Refine = func() *session.RefineStep {
+		return &session.RefineStep{Run: func(_ context.Context, in session.RefineInput) (string, *store.Event) {
+			return in.Text, &store.Event{Ev: "refine", Model: "m", Why: "http", Err: "status 529: overloaded"}
+		}}
+	}
+	text, err := d.text(fixtureTake)
+	if err == nil || text != "" || !strings.Contains(err.Error(), "http: status 529") {
+		t.Fatalf("text %q, err %v", text, err)
+	}
 }

@@ -61,6 +61,10 @@ type Handler struct {
 	Engine  func(name string) (session.Engine, error)
 	Panes   func() ([]Pane, error) // herdr's panes; an error when herdr does not answer
 	Apps    func() []App           // the running apps
+	// The model step's run again and send. Unset, they answer 503 and
+	// modes lists none.
+	Step  func(mode string) (*session.RefineStep, error) // the step in mode, one call
+	Modes func() Modes                                   // read at each request
 
 	index *Index
 	mux   *http.ServeMux
@@ -87,8 +91,11 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("GET /takes/api/peaks/{id}", h.peaks)
 	h.mux.HandleFunc("GET /takes/api/engines", h.engines)
 	h.mux.HandleFunc("GET /takes/audio/{file}", h.audio)
+	h.mux.HandleFunc("GET /takes/screen/{file}", h.screen)
 	h.mux.HandleFunc("GET /takes/api/targets", h.targets)
-	for path, f := range map[string]http.HandlerFunc{"/takes/api/seen": h.seen, "/takes/api/dismiss": h.dismiss, "/takes/api/resend": h.resend, "/takes/api/retranscribe": h.retranscribe, "/takes/api/label": h.label} {
+	h.mux.HandleFunc("GET /takes/api/modes", h.modes)
+	for path, f := range map[string]http.HandlerFunc{"/takes/api/seen": h.seen, "/takes/api/dismiss": h.dismiss, "/takes/api/resend": h.resend, "/takes/api/retranscribe": h.retranscribe, "/takes/api/label": h.label,
+		"/takes/api/rerefine": h.rerefine, "/takes/api/send": h.send} {
 		h.mux.HandleFunc("POST "+path, f)
 		// GET /takes/ would serve it as a page file: a GET answers 405
 		h.mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +192,16 @@ func (h *Handler) audio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.ServeFile(w, r, h.wav(id))
+}
+
+// screen is the picture a take's model step was sent, <id>.screen.jpg.
+func (h *Handler) screen(w http.ResponseWriter, r *http.Request) {
+	id, ok := strings.CutSuffix(r.PathValue("file"), ".screen.jpg")
+	if !ok || !takeID.MatchString(id) {
+		http.NotFound(w, r)
+		return
+	}
+	http.ServeFile(w, r, filepath.Join(h.Dir, id+".screen.jpg"))
 }
 
 // seen marks a take as opened on the page: a seen line in its record, which

@@ -31,7 +31,7 @@ var takeID = regexp.MustCompile(`^\d{8}-\d{6}(-\d+)?$`)
 
 // exts are the files of a take the page reads, in the order Take.Files
 // lists them.
-var exts = []string{".wav", ".txt", ".raw.txt", ".compare.json", ".input.json", ".events.jsonl"}
+var exts = []string{".wav", ".txt", ".raw.txt", ".compare.json", ".input.json", ".events.jsonl", ".screen.jpg"}
 
 // Row is a take as the list shows it.
 type Row struct {

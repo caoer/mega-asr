@@ -15,6 +15,7 @@ import (
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/l10n"
+	"github.com/caoer/mega-asr/internal/refine"
 )
 
 // The meeting menu: MegaVoice's menu bar item drives megameet serve over
@@ -395,8 +396,9 @@ type refineSettings struct {
 	Effort   string
 	Keyed    bool // refine.provider names a provider table: the step can be switched on
 	Context  app.RefineContextConfig
-	Prompt   string // the mode's prompt file
-	Glossary string // glossary.txt
+	Modes    []string // the modes refine.mode can name: fix-words, then the text modes
+	Prompt   string   // the mode's prompt file
+	Glossary string   // glossary.txt
 }
 
 // named is a config value and its name in the menu.
@@ -405,11 +407,13 @@ type named struct {
 	label l10n.Pair
 }
 
-// refineModes are refine.mode's values as the menu names them.
-var refineModes = []named{
-	{"fix-words", l10n.Pair{"Fix Mis-heard Words", "纠正听错的词"}},
-	{"tidy", l10n.Pair{"Tidy", "整理口语"}},
-	{"translate", l10n.Pair{"Translate", "按意思翻译"}},
+// modeLabel is how the menu names a mode in a title: fix-words alone, a
+// text mode after the usage it is.
+func modeLabel(mode string) string {
+	if refine.OutputOf(mode) == refine.EditList {
+		return refine.ModeName(mode)
+	}
+	return l10n.T("Model Writes", "模型写") + " · " + refine.ModeName(mode)
 }
 
 // refineModels are the models the menu offers; Other… takes any id.
@@ -439,16 +443,23 @@ func (v voiceState) refineRow() row {
 	pick := func(title string, on bool, key, val string) row {
 		return row{title: title, enabled: ok, checked: on, act: &act{kind: actSet, key: key, arg: val}}
 	}
-	toggle := func(title string, on bool, key string) row { return pick(title, on, key, strconv.FormatBool(!on)) }
 	colon := l10n.T(": ", "：")
 
-	var modes []row
-	for _, m := range refineModes {
-		modes = append(modes, pick(m.label.String(), m.key == r.Mode, "refine.mode", strconv.Quote(m.key)))
+	modes := []row{pick(refine.ModeName(refine.FixWords), r.Mode == refine.FixWords, "refine.mode", strconv.Quote(refine.FixWords)),
+		{title: l10n.T("the glossary is shown; only mis-heard words change", "把词表给模型看，只改听错的词")},
+		{sep: true},
+		{title: l10n.T("Model Writes: the model's text goes on screen", "模型写：模型写的字直接上屏")}}
+	for _, m := range r.Modes {
+		if m != refine.FixWords {
+			modes = append(modes, pick(refine.ModeName(m), m == r.Mode, "refine.mode", strconv.Quote(m)))
+		}
+	}
+	if refine.OutputOf(r.Mode) == refine.FullText && !slices.Contains(r.Modes, r.Mode) { // its prompt file is gone: a take is held until it is back
+		modes = append(modes, row{title: r.Mode, checked: true})
 	}
 	modes = append(modes, row{sep: true},
-		row{title: l10n.T("Tidy and Translate return the whole text;", "整理和翻译交回整段文字；")},
-		row{title: l10n.T("one that fails its length check delivers what you said", "过不了长度检查的，按你说的原文送出")},
+		row{title: l10n.T("held only when the answer is blank", "回答是空白的才不上屏")},
+		row{title: l10n.T("a file added to modes.d is one more mode", "在 modes.d 里加一份提示词，这里就多一个")},
 		row{title: l10n.T("Translate's language is in its prompt", "翻译成哪种语言写在它的提示词里")})
 
 	var models []row
@@ -465,12 +476,9 @@ func (v voiceState) refineRow() row {
 		efforts = append(efforts, pick(e.label.String(), e.key == r.Effort, "refine.effort", strconv.Quote(e.key)))
 	}
 
+	// the sources this build reads: the screen
 	c := r.Context
 	ctx := []row{
-		toggle(l10n.T("App and Window Title", "应用和窗口标题"), c.App, "refine.context.app"),
-		toggle(l10n.T("Text of the Field", "输入框里的文字"), c.Field, "refine.context.field"),
-		toggle(l10n.T("Clipboard", "剪贴板"), c.Clipboard, "refine.context.clipboard"),
-		{sep: true},
 		pick(l10n.T("Screen: Off", "屏幕：不发"), c.Screen == "off", "refine.context.screen", `"off"`),
 		pick(l10n.T("Screen: Its Text (OCR)", "屏幕：识别出的文字"), c.Screen == "ocr", "refine.context.screen", `"ocr"`),
 		pick(l10n.T("Screen: Image", "屏幕：截图"), c.Screen == "image", "refine.context.screen", `"image"`),
@@ -482,7 +490,7 @@ func (v voiceState) refineRow() row {
 		sub = append(sub, row{title: l10n.T("Set API Key… first", "先设置 API Key…"), indent: 1})
 	}
 	sub = append(sub, row{sep: true},
-		row{title: l10n.T("Mode", "模式") + colon + pairLabel(refineModes, r.Mode), enabled: true, sub: modes},
+		row{title: l10n.T("Mode", "模式") + colon + modeLabel(r.Mode), enabled: true, sub: modes},
 		row{title: l10n.T("Model", "模型") + colon + r.Model, enabled: true, sub: models},
 		row{title: l10n.T("Effort", "思考") + colon + pairLabel(refineEfforts, r.Effort), enabled: true, sub: efforts},
 		row{title: l10n.T("Context", "上下文"), enabled: true, sub: ctx},
@@ -495,7 +503,7 @@ func (v voiceState) refineRow() row {
 	)
 	state := l10n.T("Off", "关")
 	if r.On {
-		state = pairLabel(refineModes, r.Mode)
+		state = modeLabel(r.Mode)
 	}
 	return row{title: l10n.T("Model Step", "模型纠错") + colon + state, enabled: true, sub: sub}
 }
@@ -505,7 +513,7 @@ func (v voiceState) refineRow() row {
 func refineOf(r app.RefineConfig) refineSettings {
 	_, keyed := r.Providers[r.Provider]
 	return refineSettings{On: r.On, Mode: r.Mode, Model: r.Model, Effort: r.Effort, Keyed: keyed, Context: r.Context,
-		Prompt: r.PromptPath(), Glossary: app.GlossaryPath()}
+		Modes: app.RefineModeNames(), Prompt: r.PromptPath(), Glossary: app.GlossaryPath()}
 }
 
 // voiceTake is the dictation take recording now, if one does.

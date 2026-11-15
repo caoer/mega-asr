@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/BurntSushi/toml"
 
@@ -264,7 +265,7 @@ type NamesConfig struct {
 // stays in Recordings.
 type RefineConfig struct {
 	On        bool                            `toml:"on"`
-	Mode      string                          `toml:"mode"`       // what the model is asked to do: fix-words, tidy or translate
+	Mode      string                          `toml:"mode"`       // fix-words (an edit list), or a text mode: tidy, translate or any modes.d/<name>.md
 	Provider  string                          `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
 	Model     string                          `toml:"model"`      // the provider's model id
 	Effort    string                          `toml:"effort"`     // off, low, medium or high: how much the model thinks
@@ -297,8 +298,31 @@ type RefineProviderConfig struct {
 	KeyFile string `toml:"key_file"` // the file holding the key
 }
 
-// RefineModes are the modes refine.mode can name.
+// RefineModes are the modes the app comes with, each with a built-in prompt
+// seeded as modes.d/<mode>.md. refine.mode also names any other prompt file
+// there (RefineModeNames).
 var RefineModes = refine.Modes
+
+// RefineModeNames are the modes refine.mode can name now: RefineModes, then
+// each other modes.d/<name>.md beside the config in name order, a text mode.
+func RefineModeNames() []string {
+	names := slices.Clone(RefineModes)
+	files, _ := os.ReadDir(filepath.Join(ConfigDir(), "modes.d")) // sorted by name
+	for _, f := range files {
+		n, ok := strings.CutSuffix(f.Name(), ".md")
+		if ok && !f.IsDir() && validMode(n) && !slices.Contains(names, n) {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// validMode reports whether a mode's name can be its prompt file's name in
+// modes.d: not empty, not hidden, no path separator or control character.
+func validMode(name string) bool {
+	return name != "" && name[0] != '.' && !strings.ContainsAny(name, `/\`) &&
+		!strings.ContainsFunc(name, unicode.IsControl)
+}
 
 type DeliverConfig struct {
 	HerdrApps []string `toml:"herdr_apps"` // bundle ids of herdr's host terminals
@@ -718,7 +742,9 @@ func (c Config) validate() []string {
 		bad("names.timeout", "must be above 0")
 	}
 	r := c.Refine
-	oneOf("refine.mode", r.Mode, RefineModes...)
+	if !validMode(r.Mode) {
+		bad("refine.mode", "%q is not a mode: fix-words, or the name of a prompt file in modes.d without .md", r.Mode)
+	}
 	oneOf("refine.effort", r.Effort, "off", "low", "medium", "high")
 	oneOf("refine.agent_copy", r.AgentCopy, "refined", "both", "raw")
 	oneOf("refine.context.screen", r.Context.Screen, "off", "ocr", "image")
@@ -916,10 +942,14 @@ func (p RefineProviderConfig) Key() (string, error) { return readKey(p.KeyFile, 
 func (r RefineConfig) PromptPath() string { return filepath.Join(ConfigDir(), "modes.d", r.Mode+".md") }
 
 // Prompt is the mode's instruction to the model: modes.d/<mode>.md beside
-// the config when the user keeps one, else the built-in.
+// the config when the user keeps one, else the built-in of a mode the app
+// comes with.
 func (r RefineConfig) Prompt() (string, error) {
 	b, err := os.ReadFile(r.PromptPath())
 	if errors.Is(err, fs.ErrNotExist) {
+		if !slices.Contains(RefineModes, r.Mode) {
+			return "", fmt.Errorf("mode %s has no prompt file %s", r.Mode, r.PromptPath())
+		}
 		b, err = defaults.ReadFile("defaults/modes/" + r.Mode + ".md")
 	}
 	if err != nil {

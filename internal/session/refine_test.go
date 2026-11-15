@@ -351,8 +351,8 @@ func TestRefineAsideDeliversAtOnce(t *testing.T) {
 	for r.del.got() == "" && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if d := r.del.got(); !strings.HasSuffix(d, "|用海库跑一下 Python") || r.c.Waiting() || !r.c.Busy() {
-		t.Fatalf("before the answer: delivered %q, waiting %v, busy %v", d, r.c.Waiting(), r.c.Busy())
+	if d := r.del.got(); !strings.HasSuffix(d, "|用海库跑一下 Python") || r.c.Waiting() {
+		t.Fatalf("before the answer: delivered %q, waiting %v", d, r.c.Waiting())
 	}
 	if refine, _ := refineLines(t, base); refine != nil {
 		t.Fatalf("a refine line before the answer: %+v", refine)
@@ -620,5 +620,105 @@ func TestAPhoneTakeCapturesNoScreen(t *testing.T) {
 	}
 	if _, err := os.Stat(base + ".screen.jpg"); err == nil {
 		t.Error("a picture was kept for a phone take")
+	}
+}
+
+// fixedStep is a model step that answers with text in mode and counts its
+// calls.
+func fixedStep(mode, text string, calls *atomic.Int32) *RefineStep {
+	return &RefineStep{Run: func(_ context.Context, in RefineInput) (string, *store.Event) {
+		calls.Add(1)
+		return text, &store.Event{Ev: "refine", Mode: mode, Model: "m", LatencyMS: 300, Copy: "both"}
+	}}
+}
+
+// A take cancelled while it waited on the model is run again from the
+// takes page: one call, its refine line numbered after the take's own and
+// carrying the model's text, nothing delivered and the take still
+// cancelled. Sent, the model's text goes out once; a second send, and a
+// run again on the take now delivered, are refused and append nothing.
+func TestCancelledTakeRunAgainThenSent(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	u := newUnanswered()
+	r.c.Refine = step(u.run)
+	r.c.Toggle()
+	r.c.Toggle()
+	<-u.asked
+	r.c.CancelFrom("", "")
+	r.wait(t)
+	if state(base) != "cancelled/" {
+		t.Fatalf("state %s", state(base))
+	}
+	var calls atomic.Int32
+	line, err := r.c.Rerefine(context.Background(), "20200417-104200", fixedStep("tidy", "用 Haiku 跑一下 Python。", &calls), "page")
+	if err != nil || calls.Load() != 1 || line.N != 2 || line.Via != "page" || line.Mode != "tidy" || line.Text != "用 Haiku 跑一下 Python。" ||
+		line.Copy != "" || r.del.got() != "" || state(base) != "cancelled/" {
+		t.Fatalf("run again: %v, %d calls, line %+v, delivered %q, state %s", err, calls.Load(), line, r.del.got(), state(base))
+	}
+	de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true, Via: "page"})
+	if err != nil || !de.OK || de.Source != "model" || de.Text != "用 Haiku 跑一下 Python。" || r.del.got() != "telegram|用 Haiku 跑一下 Python。" ||
+		state(base) != "pasted/" {
+		t.Fatalf("send: %v, line %+v, delivered %q, state %s", err, de, r.del.got(), state(base))
+	}
+	lines := lineNames(t, base)
+	if _, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true, Via: "page"}); !errors.Is(err, ErrDelivered) {
+		t.Fatalf("a second send: %v", err)
+	}
+	if _, err := r.c.Rerefine(context.Background(), "20200417-104200", fixedStep("tidy", "x", &calls), "page"); !errors.Is(err, ErrDelivered) || calls.Load() != 1 {
+		t.Fatalf("a run again on a delivered take: %v, %d calls", err, calls.Load())
+	}
+	if r.del.got() != "telegram|用 Haiku 跑一下 Python。" || lineNames(t, base) != lines {
+		t.Fatalf("delivered %q, record %s, was %s", r.del.got(), lineNames(t, base), lines)
+	}
+}
+
+// A take held because the call gave no answer to use, sent as recognised,
+// delivers its text as recognised, once: a second send is refused.
+func TestHeldTakeSentAsRecognised(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+		return in.Text, &store.Event{Ev: "refine", Model: "m", Why: "http", Err: "status 529"}
+	})
+	r.c.Toggle()
+	r.c.Toggle()
+	r.wait(t)
+	if state(base) != "undelivered/refine_failed" {
+		t.Fatalf("state %s", state(base))
+	}
+	if _, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true}); !errors.Is(err, ErrNoText) {
+		t.Fatalf("a model text with none: %v", err)
+	}
+	de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "delivered", Once: true, Via: "page"})
+	if err != nil || !de.OK || de.Text != "" || r.del.got() != "telegram|用海库跑一下 Python" || state(base) != "pasted/" {
+		t.Fatalf("send: %v, line %+v, delivered %q, state %s", err, de, r.del.got(), state(base))
+	}
+	if _, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "delivered", Once: true}); !errors.Is(err, ErrDelivered) || r.del.got() != "telegram|用海库跑一下 Python" {
+		t.Fatalf("a second send: %v, delivered %q", err, r.del.got())
+	}
+}
+
+// A model text sent toward an agent's target follows refine.agent_copy as a
+// live take does: both sends the model's text and the recognised one under
+// its mark, and the deliver line keeps the model's text as the take's.
+func TestSentModelTextFollowsAgentCopy(t *testing.T) {
+	const heard, fixed = "用海库跑一下 Python", "用Haiku跑一下 Python"
+	agent := &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}
+	for _, tc := range []struct{ copy, got, sent string }{
+		{"both", fixed + marked(heard), fixed + marked(heard)},
+		{"refined", fixed, ""},
+		{"raw", heard, ""},
+	} {
+		r, _ := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+		r.c.Toggle()
+		r.c.Cancel()
+		r.wait(t)
+		var calls atomic.Int32
+		if _, err := r.c.Rerefine(context.Background(), "20200417-104200", fixedStep("fix-words", fixed, &calls), "page"); err != nil {
+			t.Fatal(err)
+		}
+		de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true, Copy: tc.copy, For: agent})
+		if err != nil || r.del.got() != "telegram|"+tc.got || de.Sent != tc.sent || de.Chars != len([]rune(tc.got)) {
+			t.Errorf("%s: %v, delivered %q, line %+v", tc.copy, err, r.del.got(), de)
+		}
 	}
 }

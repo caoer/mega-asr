@@ -91,11 +91,12 @@
 #                            # that fails or is refused, or an answer that cannot be used, holds the take: nothing
 #                            # is delivered, and the take stays in Recordings with its text as recognised. The step
 #                            # is a take's one model call: the names gate asks nothing about a take it runs on
-# mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else; tidy: drop
-#                            # fillers and repeats, fix punctuation; translate: render it by meaning (into English;
-#                            # the language is in its prompt). Tidy and translate return the whole text, kept only
-#                            # when it passes a length check. Each mode's prompt is modes.d/<mode>.md beside this
-#                            # file, written once and then yours to edit; without it, the built-in
+# mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else. Any other
+#                            # mode is a text mode: the model writes the text that is delivered, kept unless it is
+#                            # blank. tidy: what you said as you would write it; translate: by meaning (into English;
+#                            # the language is in its prompt). Each mode's prompt is modes.d/<mode>.md beside this
+#                            # file, written once and then yours to edit; without it, the built-in. A file you add
+#                            # there, modes.d/<name>.md, is one more text mode, named <name>
 #                            # The model is told your terms: the hot words, what the corrections table corrects to,
 #                            # and glossary.txt and glossary.d/*.txt beside this file (one term per line, the ones
 #                            # you say most first; the first 350 terms count), with the table's rules as known

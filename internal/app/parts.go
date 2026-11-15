@@ -186,6 +186,22 @@ func (s *RefineStage) Take() *session.RefineStep {
 	}
 }
 
+// Config is [refine] as the file reads now.
+func (s *RefineStage) Config() RefineConfig { return s.current() }
+
+// StepIn is the model step of [refine] as the file reads now, in mode: a
+// person's run again on a kept take from the takes page, one call, made
+// whether refine.on is on or off. A mode refine.mode cannot name now
+// (RefineModeNames) is refused. Its line carries no agent copy: the send settles that.
+func (s *RefineStage) StepIn(mode string) (*session.RefineStep, error) {
+	if names := RefineModeNames(); !slices.Contains(names, mode) {
+		return nil, fmt.Errorf("refine.mode %q: want one of %s", mode, strings.Join(names, ", "))
+	}
+	r := s.current()
+	r.Mode = mode
+	return &session.RefineStep{Run: r.RunTake}, nil
+}
+
 // Screen is session.Controller.Screen: as a take starts it sets the screen
 // source to work on the window in front and gives the call that waits for
 // what it got. nil while refine.on or refine.context.screen is off: nothing
@@ -298,6 +314,9 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 	}
 	if res.Err != nil {
 		return fail(res.Why, res.Err)
+	}
+	if refine.OutputOf(r.Mode) == refine.FullText {
+		ev.Text = res.Text // what the model wrote; the take's .txt stays as recognised
 	}
 	ev.At = time.Now()
 	return res.Text, ev

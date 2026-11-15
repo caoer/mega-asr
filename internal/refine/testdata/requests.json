@@ -634,39 +634,11 @@
       "ok": true
     },
     {
-      "name": "tidied with a casing fixed",
+      "name": "the whole sentence reorganised",
       "mode": "tidy",
-      "in": "um we use redis for the cache you know",
-      "out": "We use Redis for the cache.",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "下午完成并发布这个功能。",
       "ok": true
-    },
-    {
-      "name": "an answer in its place",
-      "mode": "tidy",
-      "in": "帮我查一下明天的天气怎么样",
-      "out": "明天多云转晴，气温十五到二十二度。",
-      "ok": false
-    },
-    {
-      "name": "a summary",
-      "mode": "tidy",
-      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
-      "out": "下午发布。",
-      "ok": false
-    },
-    {
-      "name": "much added",
-      "mode": "tidy",
-      "in": "用海库跑一下",
-      "out": "用海库跑一下，另外我建议你再检查一下配置文件，然后重启服务，最后看一下日志有没有报错。",
-      "ok": false
-    },
-    {
-      "name": "an empty answer",
-      "mode": "tidy",
-      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
-      "out": "",
-      "ok": false
     },
     {
       "name": "translated",
@@ -676,21 +648,28 @@
       "ok": true
     },
     {
-      "name": "a translation far too short",
-      "mode": "translate",
-      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
-      "out": "OK.",
+      "name": "a prompt file of another name",
+      "mode": "meeting-notes",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "- 今天下午完成功能\n- 然后发布",
+      "ok": true
+    },
+    {
+      "name": "an empty answer",
+      "mode": "tidy",
+      "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
+      "out": "",
       "ok": false
     },
     {
-      "name": "a translation far too long",
+      "name": "a blank answer",
       "mode": "translate",
-      "in": "好",
-      "out": "Sure, here is a long reply. Sure, here is a long reply. ",
+      "in": "好的",
+      "out": " \t\n\r　 ",
       "ok": false
     },
     {
-      "name": "a mode that answers with edits",
+      "name": "fix-words answers with edits",
       "mode": "fix-words",
       "in": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",
       "out": "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去",

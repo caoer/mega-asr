@@ -16,6 +16,7 @@ import (
 	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/ctl"
 	"github.com/caoer/mega-asr/internal/mac"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 )
 
@@ -30,10 +31,11 @@ func TestVoiceMenu(t *testing.T) {
 		Capture: app.CaptureConfig{Source: "local", Mic: "default"},
 		Inputs:  []inputView{{"builtin-mic", "Built-in Microphone", 1, true}, {"stage-interface", "Stage Interface", 3, false}},
 		Refine: refineSettings{Mode: "fix-words", Model: "claude-haiku-5-5", Effort: "low", Context: app.RefineContextConfig{Screen: "off"},
-			Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.txt"}} // the shipped defaults: no key yet
+			Modes: app.RefineModes, Prompt: "/c/modes.d/fix-words.md", Glossary: "/c/glossary.txt"}} // the shipped defaults: no key yet
 	refineOn := base
 	refineOn.Refine = refineSettings{On: true, Keyed: true, Mode: "translate", Model: "a-typed-model", Effort: "off",
-		Context: app.RefineContextConfig{App: true, Clipboard: true, Screen: "image"}, Prompt: "/c/modes.d/translate.md", Glossary: "/c/glossary.txt"}
+		Context: app.RefineContextConfig{App: true, Clipboard: true, Screen: "image"}, Modes: append(slices.Clone(app.RefineModes), "meeting-notes"),
+		Prompt: "/c/modes.d/translate.md", Glossary: "/c/glossary.txt"}
 	pending := base
 	pending.File = voiceSettings{TapKey: "right_shift", WholeMax: 90 * time.Second, LLM: build, Engine: "doubao"}
 	pending.Compare = compareSettings{On: true}
@@ -174,6 +176,82 @@ func TestVoiceMenu(t *testing.T) {
 		got := acts[title]
 		if got.kind != want.kind || got.key != want.key || got.arg != want.arg || !slices.Equal(got.argv, want.argv) {
 			t.Errorf("%s: %+v, want %+v", title, got, want)
+		}
+	}
+}
+
+// subRows is the submenu of the row titled title, searched depth first.
+func subRows(rs []row, title string) ([]row, bool) {
+	for _, r := range rs {
+		if r.title == title {
+			return r.sub, true
+		}
+		if sub, ok := subRows(r.sub, title); ok {
+			return sub, true
+		}
+	}
+	return nil, false
+}
+
+// A prompt file dropped in modes.d is one more mode in the menu, under
+// Model Writes beside the seeded ones; picking it writes refine.mode, and a
+// take in that mode sends the file and asks for the whole text.
+func TestModeMenuListsPromptFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("MEGAVOICE_CONFIG", "")
+	modes := filepath.Join(dir, "megavoice", "modes.d")
+	os.MkdirAll(filepath.Join(modes, "notes.md"), 0o755) // a directory is no prompt
+	for name, body := range map[string]string{"meeting-notes.md": "整理成会议纪要\n", "fix-words.md": "my fix-words prompt\n", ".draft.md": "x", "readme.txt": "x"} {
+		if err := os.WriteFile(filepath.Join(modes, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := app.RefineConfig{Mode: "fix-words", Model: "m", Effort: "low", Context: app.RefineContextConfig{Screen: "off"}}
+	v := voiceState{Refine: refineOf(r)}
+	sub, ok := subRows([]row{v.refineRow()}, "Mode: Fix Words Only")
+	if !ok {
+		t.Fatalf("no mode row in:\n%s", titles([]row{v.refineRow()}))
+	}
+	var picks []string
+	var pick *act
+	for _, r := range sub {
+		if r.act != nil {
+			picks = append(picks, r.title)
+			if r.title == "meeting-notes" {
+				pick = r.act
+			}
+		}
+	}
+	if want := []string{"Fix Words Only", "Rewrite", "Translate", "meeting-notes"}; !slices.Equal(picks, want) {
+		t.Fatalf("the modes offered are %q, want %q", picks, want)
+	}
+	if pick.kind != actSet || pick.key != "refine.mode" || pick.arg != `"meeting-notes"` {
+		t.Fatalf("meeting-notes writes %+v", *pick)
+	}
+	r.Mode = "meeting-notes"
+	if prompt, err := r.Prompt(); err != nil || prompt != "整理成会议纪要" || refine.OutputOf(r.Mode) != refine.FullText {
+		t.Fatalf("a take in meeting-notes sends %q (err %v) and asks for %q; want the file and the whole text", prompt, err, refine.OutputOf(r.Mode))
+	}
+	if _, ok := subRows([]row{voiceState{Refine: refineOf(r)}.refineRow()}, "Mode: Model Writes · meeting-notes"); !ok {
+		t.Error("the mode row does not name the mode picked")
+	}
+}
+
+// The Context submenu offers only the sources this build sends with the
+// dictation: the screen. App, field and clipboard are not read yet.
+func TestContextMenuListsWhatTheBuildReads(t *testing.T) {
+	reads := map[string]bool{"refine.context.screen": true}
+	for _, c := range []app.RefineContextConfig{{Screen: "off"}, {App: true, Field: true, Clipboard: true, Screen: "image"}} {
+		v := voiceState{Refine: refineSettings{Mode: "fix-words", Context: c, Modes: app.RefineModes}}
+		sub, ok := subRows([]row{v.refineRow()}, "Context")
+		if !ok || len(sub) == 0 {
+			t.Fatal("no Context submenu")
+		}
+		for _, r := range sub {
+			if r.act == nil || !reads[r.act.key] {
+				t.Errorf("Context offers %q (%+v), which this build does not read", r.title, r.act)
+			}
 		}
 	}
 }

@@ -43,8 +43,8 @@ type applyVector struct {
 	Rejected bool   `json:"rejected"`
 }
 
-// textVector is a full-text mode's answer to a dictation, and whether
-// CheckText lets it be delivered.
+// textVector is a text mode's answer to a dictation, and whether CheckText
+// lets it be delivered.
 type textVector struct {
 	Name string `json:"name"`
 	Mode string `json:"mode"`
@@ -62,8 +62,8 @@ type vectors struct {
 // makeVectors is fixed inputs with what this package does with them: the
 // request bodies (the characters JSON escapes, each way of thinking, the
 // two kinds of answer, a closing tag inside the dictation, the glossary's
-// blocks), the edit lists the guards pass and reject, and the full-text
-// answers theirs do.
+// blocks), the edit lists the guards pass and reject, and the text-mode
+// answers the blank check passes and holds.
 func makeVectors() vectors {
 	rs := []requestVector{
 		{Name: "the default setting", Model: "claude-haiku-5-5", Effort: "low", System: []string{"prompt"}, Dictation: "用海库跑一下"},
@@ -151,15 +151,12 @@ func makeVectors() vectors {
 	said := "嗯，那个，我们今天下午，下午要把这个功能做完，然后发布出去"
 	ts := []textVector{
 		{Name: "tidied", Mode: "tidy", In: said, Out: "我们今天下午要把这个功能做完，然后发布出去。"},
-		{Name: "tidied with a casing fixed", Mode: "tidy", In: "um we use redis for the cache you know", Out: "We use Redis for the cache."},
-		{Name: "an answer in its place", Mode: "tidy", In: "帮我查一下明天的天气怎么样", Out: "明天多云转晴，气温十五到二十二度。"},
-		{Name: "a summary", Mode: "tidy", In: said, Out: "下午发布。"},
-		{Name: "much added", Mode: "tidy", In: "用海库跑一下", Out: "用海库跑一下，另外我建议你再检查一下配置文件，然后重启服务，最后看一下日志有没有报错。"},
-		{Name: "an empty answer", Mode: "tidy", In: said, Out: ""},
+		{Name: "the whole sentence reorganised", Mode: "tidy", In: said, Out: "下午完成并发布这个功能。"},
 		{Name: "translated", Mode: "translate", In: said, Out: "This afternoon we need to finish this feature and then release it."},
-		{Name: "a translation far too short", Mode: "translate", In: strings.Repeat(said, 3), Out: "OK."},
-		{Name: "a translation far too long", Mode: "translate", In: "好", Out: strings.Repeat("Sure, here is a long reply. ", 2)},
-		{Name: "a mode that answers with edits", Mode: "fix-words", In: said, Out: said},
+		{Name: "a prompt file of another name", Mode: "meeting-notes", In: said, Out: "- 今天下午完成功能\n- 然后发布"},
+		{Name: "an empty answer", Mode: "tidy", In: said, Out: ""},
+		{Name: "a blank answer", Mode: "translate", In: "好的", Out: " \t\n\r\u3000\u00a0"},
+		{Name: "fix-words answers with edits", Mode: "fix-words", In: said, Out: said},
 	}
 	for i, v := range ts {
 		ts[i].OK = CheckText(v.Mode, v.In, v.Out) == nil
@@ -208,7 +205,7 @@ func TestClientVectors(t *testing.T) {
 			ok++
 		}
 	}
-	if passed < 8 || rejected < 6 || ok != 3 {
+	if passed < 8 || rejected < 6 || ok != 4 {
 		t.Fatalf("%d edit lists pass and %d are rejected, %d texts pass: the cases no longer say what their names do", passed, rejected, ok)
 	}
 }

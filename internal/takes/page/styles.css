@@ -1773,3 +1773,24 @@ details.more-box pre {
     animation: none !important;
   }
 }
+
+/* the model step's stages: its edits, and what the call was given */
+section.block.step .edits {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--fs-13);
+}
+section.block.step pre.ctx {
+  white-space: pre-wrap;
+}
+section.block.step img.screen {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 8px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--rule);
+}
+section.block.step .step-run {
+  margin-top: 12px;
+}

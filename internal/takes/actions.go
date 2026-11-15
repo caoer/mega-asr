@@ -372,6 +372,164 @@ func (h *Handler) retranscribe(w http.ResponseWriter, r *http.Request) {
 	reply(w, re, nil)
 }
 
+// Modes is the model step as the takes page offers it: the modes a run
+// again can pick, the menu's own list, and [refine] as the file reads now.
+type Modes struct {
+	On    bool   `json:"on"`         // refine.on
+	Mode  string `json:"mode"`       // refine.mode, the one picked first
+	Copy  string `json:"agent_copy"` // refine.agent_copy, which a send toward an agent follows
+	Modes []Mode `json:"modes"`
+}
+
+// Mode is one mode by its config value and its name in the menu.
+type Mode struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
+// modes answers GET /takes/api/modes: Modes, with no mode where the step
+// is not wired.
+func (h *Handler) modes(w http.ResponseWriter, r *http.Request) {
+	m := Modes{Modes: []Mode{}}
+	if h.Modes != nil {
+		m = h.Modes()
+	}
+	reply(w, m, nil)
+}
+
+// rerefine answers POST /takes/api/rerefine {"id", "mode"}: the model step
+// run again on a take held or cancelled, one call in mode, through the
+// controller's Rerefine, via page. The answer is the refine line, a call
+// with no answer to use a line with its why. The call has no time limit: it
+// ends when the page goes away (the request's context), and the line then
+// says cancelled.
+func (h *Handler) rerefine(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID   string `json:"id"`
+		Mode string `json:"mode"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if h.Ctrl == nil || h.Step == nil {
+		fail(w, http.StatusServiceUnavailable, "unavailable", errors.New("megavoice runs no model step here"))
+		return
+	}
+	step, err := h.Step(in.Mode)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "unknown_mode", err)
+		return
+	}
+	ev, err := h.Ctrl.Rerefine(r.Context(), in.ID, step, "page")
+	if err != nil && !errors.Is(err, session.ErrNotRecorded) {
+		refuse(w, err)
+		return
+	}
+	h.index.Take(in.ID)
+	reply(w, notRecorded(ev, err), nil)
+}
+
+// errNoTarget refuses a send of a take whose record names no target.
+var errNoTarget = errors.New("the take's record names no target: pick one with resend")
+
+// send answers POST /takes/api/send {"id", "text"}: a take held or
+// cancelled sent once to where it would have gone, its own target, with
+// Enter when the take ended with Enter; text is model (the newest run
+// again's answer, settled for an agent by refine.agent_copy as on a live
+// take) or recognised (.txt). A take that has reached a target is refused
+// with 409 delivered, so neither text goes out twice; so is an own target
+// that cannot be reached now, as a resend's is (reachable). The answer is
+// the deliver line, as resend's.
+func (h *Handler) send(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ID   string `json:"id"`
+		Text string `json:"text"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if h.Ctrl == nil || h.Resolve == nil || h.Panes == nil || h.Apps == nil {
+		fail(w, http.StatusServiceUnavailable, "unavailable", errors.New("megavoice sends nothing here"))
+		return
+	}
+	kind := map[string]string{"model": "model", "recognised": "delivered"}[in.Text]
+	if kind == "" {
+		fail(w, http.StatusBadRequest, "bad_request", errors.New("text: want model or recognised"))
+		return
+	}
+	t, ok := h.index.Take(in.ID)
+	if !ok {
+		refuse(w, fmt.Errorf("%w: %s", session.ErrNoTake, in.ID))
+		return
+	}
+	if t.Target == nil {
+		refuse(w, errNoTarget)
+		return
+	}
+	to, err := h.ownTo(t.Target)
+	if err == nil {
+		err = h.reachable(to)
+	}
+	if err != nil {
+		refuse(w, err)
+		return
+	}
+	target, err := h.Resolve(to)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "bad_request", err)
+		return
+	}
+	q := session.Resend{ID: in.ID, To: target, Text: kind, Once: true, For: t.Target, Via: "page", Send: to != "clipboard" && endedWithEnter(t.Events)}
+	if h.Modes != nil {
+		q.Copy = h.Modes().Copy
+	}
+	de, err := h.Ctrl.Resend(q)
+	if err != nil && !errors.Is(err, session.ErrNotRecorded) {
+		refuse(w, err)
+		return
+	}
+	h.index.Take(in.ID)
+	reply(w, notRecorded(de, err), nil)
+}
+
+// ownTo is a take's own target as a resend's to, as it can be reached now
+// (live); an app that shows this page is refused as a resend to it is.
+func (h *Handler) ownTo(own *store.Target) (string, error) {
+	panes, perr := h.Panes()
+	var apps, page []App
+	for _, a := range h.Apps() {
+		switch {
+		case a.showsPage():
+			page = append(page, a)
+		case a.BundleID != "":
+			apps = append(apps, a)
+		}
+	}
+	if t, ok := live(own, panes, apps); ok {
+		return t.To, nil
+	}
+	switch {
+	case own.Pane != "" && perr != nil:
+		return "", errNoHerdr
+	case own.Pane == "":
+		if _, ok := live(own, nil, page); ok {
+			return "", errPageWindow
+		}
+	}
+	return "", errTargetGone
+}
+
+// endedWithEnter reports whether a take was ended with Enter, or had Enter
+// pressed while it was transcribed: its own delivery would have sent it.
+func endedWithEnter(evs []store.Event) bool {
+	for _, e := range evs {
+		if e.Ev == "stop" && e.Kind == "enter" || e.Ev == "send_on" {
+			return true
+		}
+	}
+	return false
+}
+
 // label answers POST /takes/api/label {"id", "ref", "note", "correct",
 // "clear"} (compare.Label): the take's label appended to the label file,
 // answered with the row it got.
@@ -423,6 +581,9 @@ var refusals = []struct {
 	{session.ErrResending, http.StatusConflict, "resending"},
 	{session.ErrRetranscribing, http.StatusConflict, "retranscribing"},
 	{session.ErrDeliveryBusy, http.StatusConflict, "delivery_busy"},
+	{session.ErrDelivered, http.StatusConflict, "delivered"},
+	{session.ErrRefining, http.StatusConflict, "refining"},
+	{errNoTarget, http.StatusConflict, "no_target"},
 	{errTargetGone, http.StatusConflict, "target_gone"},
 	{errNoHerdr, http.StatusConflict, "no_herdr"},
 	{errFrontApp, http.StatusConflict, "front_app"},

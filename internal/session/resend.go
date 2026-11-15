@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/l10n"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -28,6 +30,10 @@ var (
 	ErrRetranscribing = l10n.Err("这条正在重新识别", "This take is being re-transcribed")
 	ErrNoText         = errors.New("no text")
 	ErrNotNamed       = errors.New("the config does not name this cloud engine")
+	// ErrDelivered refuses a send of a take that has reached a target
+	// already, and the model step run again on it.
+	ErrDelivered = l10n.Err("这条已经送达", "This take was delivered")
+	ErrRefining  = l10n.Err("这条正在转译", "The model step is running on this take")
 )
 
 // ErrNotRecorded is Resend's and Retranscribe's error when the line they
@@ -76,10 +82,19 @@ type Resend struct {
 	// Send presses Enter after the paste; off, the Enter is the user's.
 	Send bool
 	// Text picks the text: "" or "delivered" (the take's .txt, or the partial
-	// text its own delivery carried), "raw" (.raw.txt), an engine's name (its
-	// answer in .compare.json), or "retranscription N" (the answer of the
-	// take's Nth retranscribe line).
-	Text   string
+	// text its own delivery carried), "raw" (.raw.txt), "model" (the text of
+	// the take's newest refine line that has one: a run again's answer), an
+	// engine's name (its answer in .compare.json), or "retranscription N"
+	// (the answer of the take's Nth retranscribe line).
+	Text string
+	// Once refuses a take that has reached a target (ErrDelivered): a held
+	// or cancelled take is sent once, and a delivered one not by accident.
+	Once bool
+	// Copy is refine.agent_copy for a model text toward an agent's target:
+	// what goes out is settled as on a live take (agentCopy), for the target
+	// For names; nil is To's record.
+	Copy   string
+	For    *store.Target
 	Via    string        // cli, page or hotkey: the deliver line's via
 	Caller *store.Caller // the process that asked, for a command
 	// Where names the target in the overlay's flash; "" is To's String.
@@ -91,8 +106,9 @@ type Resend struct {
 // Resend delivers a kept take's text to q.To, under the delivery lock, and
 // appends a deliver line with the next n. It returns an error, and appends
 // nothing, when the take is unknown, still records or transcribes, is being
-// resent already, has no text of the kind asked for, or the lock stays held
-// for q.Wait. Otherwise it returns the line it appended: a delivery that
+// resent already, has no text of the kind asked for, the lock stays held
+// for q.Wait, or q.Once and the take has reached a target (read under the
+// lock). Otherwise it returns the line it appended: a delivery that
 // failed has OK false and its Err, leaves the text on the clipboard, and is
 // followed by hold deliver_failed when the take has never reached a target
 // (one that has keeps its state). The target is read back after the lock
@@ -146,16 +162,29 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 	defer unlock()
 
 	evs, _ = store.Read(base)
-	n, reached := 1, false
+	n, reached := 1, reachedOf(evs)
 	for _, e := range evs {
 		if e.Ev == "deliver" {
 			n++
-			reached = reached || e.OK
 		}
 	}
+	if q.Once && reached {
+		return store.Event{}, ErrDelivered
+	}
+	heard, herr := os.ReadFile(base + ".txt")
+	out, sent := text, ""
+	if source == "model" {
+		ev := &store.Event{Copy: q.Copy}
+		recognised, _, _ := textOf(base, evs, "delivered")
+		text, sent = agentCopy(cmp.Or(q.For, StoreTarget(q.To)), recognised, text, ev)
+		if ev.Copy == "raw" { // the agent gets the text as heard
+			source = "delivered"
+		}
+		out = cmp.Or(sent, text)
+	}
 	de := store.Event{V: 1, At: time.Now(), Ev: "deliver", N: n, Via: q.Via, Caller: q.Caller, Target: StoreTarget(q.To),
-		Chars: chars(text), Submit: "none", Source: source}
-	if txt, err := os.ReadFile(base + ".txt"); err != nil || strings.TrimSuffix(string(txt), "\n") != text {
+		Chars: chars(out), Submit: "none", Source: source, Sent: sent}
+	if herr != nil || strings.TrimSuffix(string(heard), "\n") != text {
 		de.Text = text
 	}
 	where := q.Where
@@ -163,7 +192,7 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 		where = q.To.String()
 	}
 	name := filepath.Base(base)
-	if err := c.Deliver.Deliver(q.To, text); err != nil {
+	if err := c.Deliver.Deliver(q.To, out); err != nil {
 		log.Printf("session: resend %s to %s: %v; text left on the clipboard", name, q.To, err)
 		de.At, de.Err = time.Now(), err.Error()
 		rerr := c.Record(base, de)
@@ -211,7 +240,7 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 	if unconfirmed && rerr == nil {
 		rerr = c.Record(base, store.Event{Ev: "hold", Why: "delivery_cut"})
 	}
-	c.readBack(base, n, q.To, text)
+	c.readBack(base, n, q.To, out)
 	log.Printf("session: resent %s to %s (%s, %d characters, n %d)", name, q.To, source, de.Chars, n)
 	if unconfirmed {
 		c.UI.Alert(msgUnconfirmedSend())
@@ -221,6 +250,95 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 		c.UI.Flash(resentMsg(verb, evs, text, where))
 	}
 	return de, unrecorded(rerr, "the text went to "+where)
+}
+
+// reachedOf reports whether a take's record says its text reached a target:
+// a deliver line with ok.
+func reachedOf(evs []store.Event) bool {
+	for _, e := range evs {
+		if e.Ev == "deliver" && e.OK {
+			return true
+		}
+	}
+	return false
+}
+
+// Rerefine runs the model step again on a kept take that never reached a
+// target — held, cancelled — at a person's ask: one call of step on the
+// take's text as recognised (.txt, else its hold line's), bound for the target its start line
+// names, and its refine line appended with via and n, the line's place
+// among the take's refine lines. A line with no why carries the model's
+// text, which Resend's "model" sends. Nothing is delivered and the take's
+// state stays. The call has no time limit: it ends on the answer, a
+// failure or ctx, and a cancel is recorded as the call's why. It returns an
+// error, and appends nothing, when the take is unknown, still records or
+// transcribes, has reached a target, has no text, or the step runs on it
+// already. While it runs the controller is Busy.
+func (c *Controller) Rerefine(ctx context.Context, id string, step *RefineStep, via string) (store.Event, error) {
+	base, err := c.Base(id)
+	if err != nil {
+		return store.Event{}, err
+	}
+	c.mu.Lock()
+	if err := c.closedLocked(); err != nil {
+		c.mu.Unlock()
+		return store.Event{}, err
+	}
+	if err := c.onItsWayLocked(base); err != nil {
+		c.mu.Unlock()
+		return store.Event{}, err
+	}
+	if c.rerefining[base] {
+		c.mu.Unlock()
+		return store.Event{}, ErrRefining
+	}
+	if c.rerefining == nil {
+		c.rerefining = map[string]bool{}
+	}
+	c.rerefining[base] = true
+	c.inflight.Add(1)
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.rerefining, base)
+		c.inflight.Add(-1)
+		c.mu.Unlock()
+	}()
+
+	evs, _ := store.Read(base)
+	if reachedOf(evs) {
+		return store.Event{}, ErrDelivered
+	}
+	heard, _, err := textOf(base, evs, "delivered") // .txt, else the hold line's text
+	if err != nil {
+		return store.Event{}, err
+	}
+	in := RefineInput{Text: heard}
+	for _, e := range evs {
+		if e.Ev == "start" && e.Target != nil {
+			in.Target = e.Target
+		}
+	}
+	text, ev := step.Run(ctx, in)
+	if ev == nil {
+		ev = &store.Event{Ev: "refine", Why: refine.WhyError, Err: "the step gave no line"}
+	}
+	ev.Copy = "" // nothing went out: a send settles the agent's copy
+	if ev.Why == "" {
+		ev.Text = text
+	}
+	c.rmu.Lock()
+	defer c.rmu.Unlock()
+	evs, _ = store.Read(base)
+	ev.V, ev.At, ev.Via, ev.N = 1, time.Now(), via, 1
+	for _, e := range evs {
+		if e.Ev == "refine" {
+			ev.N++
+		}
+	}
+	rerr := c.Record(base, *ev)
+	log.Printf("session: model step again on %s in %s (n %d, %d ms, why %q)", id, ev.Mode, ev.N, ev.LatencyMS, ev.Why)
+	return *ev, unrecorded(rerr, "the answer is not kept")
 }
 
 // unrecorded is ErrNotRecorded for an append that failed with err, saying
@@ -272,9 +390,10 @@ func textOf(base string, evs []store.Event, kind string) (text, source string, e
 		source = "delivered"
 		if text, err = read(".txt"); err != nil {
 			// a take whose chunks failed keeps no .txt; its own delivery
-			// carried the partial text in its line
+			// carried the partial text in its line, or its hold line did
+			// when it was held before delivery (heldText)
 			for _, e := range evs {
-				if e.Ev == "deliver" && e.Via == "auto" && e.Text != "" {
+				if (e.Ev == "deliver" && e.Via == "auto" || e.Ev == "hold") && e.Text != "" {
 					text, err = e.Text, nil
 				}
 			}
@@ -282,6 +401,14 @@ func textOf(base string, evs []store.Event, kind string) (text, source string, e
 	case kind == "raw":
 		source = "raw"
 		text, err = read(".raw.txt")
+	case kind == "model":
+		source = "model"
+		err = fmt.Errorf("%w: no model text: run the step again first", ErrNoText)
+		for _, e := range evs {
+			if e.Ev == "refine" && e.Why == "" && e.Text != "" {
+				text, err = e.Text, nil
+			}
+		}
 	case strings.HasPrefix(kind, "retranscription"):
 		n, perr := strconv.Atoi(strings.TrimLeft(strings.TrimPrefix(kind, "retranscription"), " :"))
 		if perr != nil || n < 1 {

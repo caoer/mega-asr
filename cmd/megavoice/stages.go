@@ -192,7 +192,8 @@ func newDecoder(c app.Config, engine string, plain bool) (*decoder, error) {
 	return d, nil
 }
 
-// text is wav's delivered text; "" when the take holds no speech.
+// text is wav's delivered text; "" when the take holds no speech. A take
+// the model step held, having no usable answer, is an error that says why.
 func (d *decoder) text(wav string) (string, error) {
 	if _, err := audio.ReadWAV(wav); err != nil {
 		return "", err
@@ -202,7 +203,31 @@ func (d *decoder) text(wav string) (string, error) {
 	if msg := d.ui.take(); msg == session.MsgASRFailed() || msg == session.MsgIncomplete() {
 		return "", fmt.Errorf("%s: %s", filepath.Base(wav), msg)
 	}
+	if err := heldByStep(d.r.ctrl.Store); err != nil {
+		return "", fmt.Errorf("%s: %w", filepath.Base(wav), err)
+	}
 	return text, nil
+}
+
+// heldByStep is why the newest take in s was held for want of a usable
+// answer from the model step (session.HoldRefineFailed), from its refine
+// line; nil when it was not held so.
+func heldByStep(s store.Store) error {
+	recs, err := s.Latest(1)
+	if err != nil || len(recs) == 0 {
+		return nil
+	}
+	evs := recs[0].Events
+	if st := store.State(evs); st.State != "undelivered" || st.Why != session.HoldRefineFailed {
+		return nil
+	}
+	why := "no refine line"
+	for _, e := range evs {
+		if e.Ev == "refine" {
+			why = e.Why + ": " + e.Err
+		}
+	}
+	return fmt.Errorf("held, not delivered: the model step gave no usable answer (%s)", why)
 }
 
 func (d *decoder) close() {

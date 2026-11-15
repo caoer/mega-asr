@@ -44,9 +44,12 @@ const atLayout = "2006-01-02T15:04:05.000Z07:00"
 //	              and err when the call gave no answer to use (hold
 //	              refine_failed follows, or hold cancelled): the model step
 //	              ran; .txt keeps the text before it. context: the call's
-//	              <context> as sent. screen: the screen source (Screen)
+//	              <context> as sent. screen: the screen source (Screen).
+//	              A run again from the takes page adds via page, n (the
+//	              line's place among the take's refine lines) and text (the
+//	              model's text, when the call gave one to use)
 //	deliver       n, via auto/hotkey/page/cli, caller, target, ok, err, chars,
-//	              submit none/ok/err, source delivered/raw/<engine>/retranscription <n>;
+//	              submit none/ok/err, source delivered/raw/model/<engine>/retranscription <n>;
 //	              text only when it differs from .txt; at is when the text
 //	              went out
 //	received      n (the deliver line read back), received whole/short/unknown,

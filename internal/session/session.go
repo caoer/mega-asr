@@ -137,8 +137,12 @@ type View struct {
 	// Refining says a take's text is recognised and waits on the model step,
 	// however long that takes: Started is then that take's stop and Live
 	// gives its text as recognised, unless a take records. Nothing of the
-	// take is delivered before the answer; Esc cancels the wait.
+	// take is delivered before the answer.
 	Refining bool
+	// EscCancels says Esc cancels that take's wait (Controller.Waiting): it
+	// is the Mac's own and no take of the Mac's records. A take a phone
+	// streams waits with it false.
+	EscCancels bool
 	// Target names a locked destination; empty for an ordinary Mac take.
 	Target string
 	// Estimate is the time left until that take's text is ready; 0 when it
@@ -284,6 +288,7 @@ type Controller struct {
 
 	resending      map[string]bool // takes a resend is delivering, by base
 	retranscribing map[string]bool // takes a re-transcription is decoding, by base
+	rerefining     map[string]bool // takes the model step runs on again, by base
 	hotkeying      atomic.Bool     // a hotkey paste is under way
 	rmu            sync.Mutex      // a re-transcription's count of the record's lines and its append
 
@@ -653,8 +658,8 @@ func (c *Controller) Published() (phase State, id string, elapsed time.Duration,
 // that take into a send. It never waits for the controller's mutex.
 func (c *Controller) KeyPhase() State { return c.published().keys }
 
-// Waiting reports whether Esc is a take's: no take records and one of the
-// Mac's own waits on the model step, which Cancel then cancels. Like
+// Waiting reports whether Esc is a take's: no take of the Mac's records and
+// one of the Mac's own waits on the model step, which Cancel then cancels. Like
 // KeyPhase it never waits for the controller's mutex, and OnState runs after
 // it is stored.
 func (c *Controller) Waiting() bool { return c.published().waits }
@@ -728,11 +733,11 @@ func (c *Controller) EnterWhy() (used bool, why string) {
 // Cancel ends the recording take without delivering it; its audio and text
 // are still kept, and it ends cancelled once its stream has drained. It is
 // in flight (Busy) until its text is saved, but not in State: no key is
-// taken for it. Earlier takes carry on. With no take recording it cancels
-// the newest take waiting on the model step, the one the overlay shows: the
-// call is dropped and the take ends cancelled, its audio and text kept. It
-// is the key's, and leaves a take a phone streams as it is; CancelFrom
-// names another source.
+// taken for it. Earlier takes carry on. With no take of the Mac's recording
+// it cancels the newest take of the Mac's waiting on the model step, the
+// one the overlay shows: the call is dropped and the take ends cancelled,
+// its audio and text kept. It is the key's, and leaves a take a phone
+// streams as it is; CancelFrom names another source.
 func (c *Controller) Cancel() { c.CancelFrom("", "") }
 
 // CancelFrom is Cancel from via ("menu", "ctl"), which its stop line
@@ -767,10 +772,11 @@ func (c *Controller) CancelFrom(via, id string) bool {
 }
 
 // waitingLocked is the newest take waiting on the model step that a cancel
-// from via may end: id's when id is set, else, with no take recording, any;
-// nil when there is none.
+// from via may end: id's when id is set, else any, unless a take records
+// that the same cancel ends instead (a take a phone streams leaves the
+// Mac's Esc to a waiting take); nil when there is none.
 func (c *Controller) waitingLocked(via, id string) *take {
-	if id == "" && c.rec != nil {
+	if id == "" && c.rec != nil && mayEnd(c.rec, via, true) {
 		return nil
 	}
 	for i := len(c.finished) - 1; i >= 0; i-- {
@@ -1574,7 +1580,7 @@ func (c *Controller) finish(r *take, total int) {
 			}
 			switch {
 			case cancelled:
-				c.Record(r.base, store.Event{Ev: "hold", Why: "cancelled"})
+				c.Record(r.base, heldText(store.Event{Ev: "hold", Why: "cancelled"}, text, failed))
 				if r.sink != nil {
 					c.UI.Flash(l10n.T("iPhone 录音已取消 · 已存入历史", "iPhone recording cancelled · saved in Recordings"))
 				} else {
@@ -1604,9 +1610,9 @@ func (c *Controller) finish(r *take, total int) {
 		c.UI.Alert(l10n.T("iPhone 录音中断 · 已存入历史", "iPhone recording cut off · saved in Recordings"))
 		return
 	case unusable != nil:
-		// No answer to use: the take is held. Its text as recognised is in
-		// its .txt, for Recordings to run the step again or send as it is.
-		c.Record(r.base, store.Event{Ev: "hold", Why: HoldRefineFailed})
+		// No answer to use: the take is held, its text as recognised kept
+		// (heldText) for Recordings to send as it is.
+		c.Record(r.base, heldText(store.Event{Ev: "hold", Why: HoldRefineFailed}, text, failed))
 		c.UI.Alert(c.refineFailedMsg(unusable))
 		return
 	case text == "" && failed > 0:
@@ -1704,6 +1710,17 @@ func (c *Controller) finish(r *take, total int) {
 	}
 }
 
+// heldText is the hold line e of a take held with its text as recognised
+// and never delivered: a take whose chunks all have text keeps it in its
+// .txt; one with failed chunks keeps no .txt, so the line carries the text,
+// as a deliver line does, and a resend reads it there (textOf).
+func heldText(e store.Event, text string, failed int) store.Event {
+	if failed > 0 {
+		e.Text = text
+	}
+	return e
+}
+
 // HoldRefineFailed is the why of the hold line of a take the model step
 // gave no usable answer for; the take's refine line says what went wrong.
 const HoldRefineFailed = "refine_failed"
@@ -1735,14 +1752,14 @@ func (c *Controller) refine(r *take, step *RefineStep, in RefineInput) (string, 
 // refineAside makes the model step's call for a take that does not wait on
 // it, on its own goroutine: r is delivered as recognised meanwhile, and
 // when the call returns its refine line is appended to the take's record
-// and the overlay flashes what it would have changed. Until then the
-// controller is Busy.
+// and the overlay flashes what it would have changed. The call is not in
+// flight for Busy: nothing waits on it, so a restart or quit never waits for
+// it, and an exit before it returns leaves the take delivered with no refine
+// line. Wait still waits for it.
 func (c *Controller) refineAside(r *take, step *RefineStep, in RefineInput) {
 	c.wg.Add(1)
-	end := c.begin()
 	go func() {
 		defer c.wg.Done()
-		defer end()
 		if r.screen != nil {
 			in.Screen = r.screen(c.ctx())
 		}
@@ -1835,9 +1852,13 @@ func keepScreen(base string, sc *refine.Screen, ev *store.Event) {
 	ev.Screen.Image = name
 }
 
-// stepNote is the words the step changed.
+// stepNote is the words the step changed, or for a text mode that the
+// model wrote the text.
 func stepNote(ev *store.Event) string {
 	var parts []string
+	if refine.OutputOf(ev.Mode) == refine.FullText {
+		parts = append(parts, l10n.T("模型写 · ", "Model wrote · ")+refine.ModeName(ev.Mode))
+	}
 	for i, e := range ev.Edits {
 		if i == 3 {
 			parts = append(parts, fmt.Sprintf("+%d", len(ev.Edits)-i))
@@ -2185,7 +2206,8 @@ func (c *Controller) updateLocked() {
 	case len(live) > 0:
 		owner = OwnerStream
 	}
-	waits := c.waitingLocked("", "") != nil
+	esc := c.waitingLocked("", "") // the take Esc cancels
+	waits := esc != nil
 	p := &published{takes: c.rec != nil || len(c.finished) > 0, phase: st, owner: owner, keys: keys, waits: waits}
 	if c.rec != nil {
 		p.id, p.recAt = filepath.Base(c.rec.base), c.rec.recAt
@@ -2215,15 +2237,19 @@ func (c *Controller) updateLocked() {
 		}
 	}
 	if n := len(live); n > 0 {
-		t := live[n-1]
-		// The newest take waiting on the model step is the one shown: its
-		// wait has no end of its own, and Esc is its.
-		for i := n - 1; i >= 0; i-- {
+		// The take Esc cancels is the one shown: its wait has no end of its
+		// own. With none, the newest take waiting on the model step is, one
+		// a phone streams or one behind a recording, which Esc leaves be.
+		t := esc
+		for i := n - 1; t == nil && i >= 0; i-- {
 			if live[i].refining {
 				t = live[i]
-				break
 			}
 		}
+		if t == nil {
+			t = live[n-1]
+		}
+		v.EscCancels = esc != nil
 		v.Delivering = t.delivering && t.send && t.targetLabel != ""
 		v.Started = t.stopAt
 		if v.Refining = t.refining; v.Refining && c.rec == nil {
@@ -2243,7 +2269,7 @@ func (c *Controller) updateLocked() {
 			return c.est.left(p)
 		}
 	}
-	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send, v.Target, v.Delivering, v.Refining}); k != c.shown {
+	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send, v.Target, v.Delivering, v.Refining, v.EscCancels}); k != c.shown {
 		c.shown = k
 		c.UI.Show(v)
 	}
@@ -2278,6 +2304,7 @@ type viewKey struct {
 	target     string
 	delivering bool
 	refining   bool
+	escCancels bool
 }
 
 func (c *Controller) newChunker() Chunker {

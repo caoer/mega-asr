@@ -337,7 +337,7 @@ func TestPolicyOnEveryResponse(t *testing.T) {
 	}
 	for name, w := range cases {
 		csp := w.Header().Get("Content-Security-Policy")
-		if !strings.HasPrefix(csp, "default-src 'self'; script-src 'self'; style-src 'self';") || !strings.Contains(csp, "; media-src 'self' blob:;") || strings.Contains(csp, "http") || strings.Contains(csp, "*") {
+		if !strings.HasPrefix(csp, "default-src 'self'; script-src 'self'; style-src 'self';") || !strings.Contains(csp, "; media-src 'self' blob:; img-src 'self' blob:;") || strings.Contains(csp, "http") || strings.Contains(csp, "*") {
 			t.Errorf("%s (%d): Content-Security-Policy %q", name, w.Code, csp)
 		}
 		if rp := w.Header().Get("Referrer-Policy"); rp != "no-referrer" {

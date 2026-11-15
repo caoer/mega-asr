@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -160,7 +162,7 @@ func TestRefineStageReadsTheFileOnlyWhenItChanged(t *testing.T) {
 		t.Fatalf("3 takes with the step off read the config %d times, want the first take's once:\n%s", n, logged.String())
 	}
 	logged.Reset()
-	writeConfig(t, dir, "[refine]\nmode = \"rewrite\"\n")
+	writeConfig(t, dir, "[refine]\nmode = \"../rewrite\"\n")
 	takes()
 	if n := strings.Count(logged.String(), "keeping refine.on = false"); n != 1 {
 		t.Fatalf("a file that does not load is reported %d times in 3 takes, want once:\n%s", n, logged.String())
@@ -303,7 +305,8 @@ key_file = "/keys/other.key"
 		{"[refine.providers.gateway]\nkind = \"anthropic\"\nbase_url = \"https://g.example\"\nkey_file = \"/k\"\nkey = \"sk\"\n", "unknown key refine.providers.gateway.key"},
 		{"[refine]\non = true\n", "refine.provider: \"\" is not a [refine.providers.<name>] table"},
 		{"[refine]\non = true\nprovider = \"o\"\n[refine.providers.o]\nkind = \"openai\"\nbase_url = \"https://o.example/v1\"\nkey_file = \"/k\"\n", "refine.provider: o is kind openai"},
-		{"[refine]\nmode = \"rewrite\"\n", "refine.mode: \"rewrite\" is not one of fix-words"},
+		{"[refine]\nmode = \"../rewrite\"\n", "refine.mode: \"../rewrite\" is not a mode"},
+		{"[refine]\nmode = \"\"\n", "refine.mode: \"\" is not a mode"},
 		{"[refine]\neffort = \"max\"\n", "refine.effort"},
 		// the step has no time limit to set: a file that names one is refused
 		{"[refine]\ntimeout = \"6s\"\n", "unknown key refine.timeout"},
@@ -528,5 +531,138 @@ func TestOneModelCallPerTake(t *testing.T) {
 			t.Errorf("refine.on = %v: %d Jev requests, %d provider requests, delivered %q; want %d, %d, %q",
 				tc.on, jev.Load(), p.requests.Load(), got, tc.jev, tc.step, tc.delivered)
 		}
+	}
+}
+
+// flashes keeps what the overlay flashes.
+type flashes struct {
+	noUI
+	mu  sync.Mutex
+	got []string
+}
+
+func (f *flashes) Flash(msg string) { f.mu.Lock(); f.got = append(f.got, msg); f.mu.Unlock() }
+
+// A prompt file dropped in modes.d is a text mode: a take in it sends the
+// file, asks for the whole text, and delivers what the model wrote however
+// much it reorganised; the record keeps the recognised text, the model's
+// text and the mode, and the overlay says the model wrote it.
+func TestATextModeFromAPromptFile(t *testing.T) {
+	const heard, wrote = "就是那个上线的事情我觉得明天早上评审完了以后吧可以发", "评审结束后，明天上午发版。"
+	p := newProvider(t)
+	var system, schema string
+	p.answer = func(w http.ResponseWriter, body map[string]any) {
+		system = body["system"].([]any)[0].(map[string]any)["text"].(string)
+		b, _ := json.Marshal(body["output_config"])
+		schema = string(b)
+		out, _ := json.Marshal(map[string]any{
+			"content":     []map[string]string{{"type": "text", "text": `{"text":"` + wrote + `"}`}},
+			"stop_reason": "end_turn",
+			"usage":       map[string]int{"input_tokens": 900, "output_tokens": 20},
+		})
+		w.Write(out)
+	}
+	dir := isolate(t)
+	refineConfig(t, dir, p.URL, "mode = \"meeting-notes\"\n")
+	os.MkdirAll(filepath.Join(dir, "modes.d"), 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "modes.d", "meeting-notes.md"), []byte("写成会议纪要里的一句\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, ui, takes := &pasted{}, &flashes{}, t.TempDir()
+	c := &session.Controller{
+		NewSource: func() audio.Source { return &heardSource{} },
+		ASR:       said(heard),
+		Refine:    l.RefineStage(LoadOpts{}).Take,
+		Deliver:   out,
+		UI:        ui,
+		Store:     store.Store{Dir: takes},
+		ChunkDir:  t.TempDir(),
+	}
+	c.Toggle()
+	c.Toggle()
+	c.Wait()
+	if got := strings.Join(out.text, ";"); got != wrote || system != "写成会议纪要里的一句" || !strings.Contains(schema, `"required":["text"]`) {
+		t.Fatalf("delivered %q, system %q, format %s; want the model's text, the file and the text schema", got, system, schema)
+	}
+	if !slices.Contains(ui.got, "模型写 · meeting-notes") {
+		t.Errorf("flashes %q, want the model wrote it", ui.got)
+	}
+	var record []string
+	filepath.WalkDir(takes, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || strings.HasSuffix(path, ".wav") {
+			return err
+		}
+		b, _ := os.ReadFile(path)
+		record = append(record, filepath.Base(path)+": "+strings.TrimSpace(string(b)))
+		return nil
+	})
+	all := strings.Join(record, "\n")
+	t.Logf("the take's record:\n%s", all)
+	var refineLine store.Event
+	for _, line := range strings.Split(all, "\n") {
+		if strings.Contains(line, `"ev":"refine"`) {
+			json.Unmarshal([]byte(line[strings.Index(line, "{"):]), &refineLine)
+		}
+	}
+	if !strings.Contains(all, ".txt: "+heard) || refineLine.Mode != "meeting-notes" || refineLine.Text != wrote || refineLine.Why != "" {
+		t.Errorf("the record lacks the recognised text in .txt, or the refine line the mode and the model's text:\n%s", all)
+	}
+	// a mode whose file is gone loads, and its take is held naming the file
+	os.Remove(filepath.Join(dir, "modes.d", "meeting-notes.md"))
+	if l, err = Load(LoadOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if text, ev := l.Refine.Run(context.Background(), heard, nil); text != heard || ev.Why != refine.WhyError || !strings.Contains(ev.Err, filepath.Join("modes.d", "meeting-notes.md")) {
+		t.Errorf("with the file gone: text %q, refine line %+v; want the take held naming the file", text, ev)
+	}
+}
+
+// A run again from the takes page is one call in the mode it names, made
+// with the step off as well: the provider gets one request, its system
+// prompt is that mode's, and the line names the mode. A mode refine.mode
+// cannot name is refused before any request.
+func TestStepInMakesOneRequestInThatMode(t *testing.T) {
+	p := newProvider(t)
+	var system string
+	p.answer = func(w http.ResponseWriter, body map[string]any) {
+		b, _ := json.Marshal(body["system"])
+		system = string(b)
+		b, _ = json.Marshal(map[string]any{
+			"content":     []map[string]string{{"type": "text", "text": `{"text":"用海库跑一下 Python。"}`}},
+			"stop_reason": "end_turn",
+		})
+		w.Write(b)
+	}
+	dir := isolate(t)
+	path := refineConfig(t, dir, p.URL, "mode = \"fix-words\"\n")
+	b, _ := os.ReadFile(path)
+	if err := os.WriteFile(path, []byte(strings.Replace(string(b), "on = true", "on = false", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := l.RefineStage(LoadOpts{})
+	if _, err := stage.StepIn("poem"); err == nil || p.requests.Load() != 0 {
+		t.Fatalf("an unknown mode: %v, %d requests", err, p.requests.Load())
+	}
+	step, err := stage.StepIn("tidy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ev := step.Run(context.Background(), session.RefineInput{Text: "用海库跑一下 Python"})
+	prompt, err := RefineConfig{Mode: "tidy"}.Prompt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(prompt)
+	if n := p.requests.Load(); n != 1 || ev == nil || ev.Mode != "tidy" || ev.Why != "" || got != "用海库跑一下 Python。" ||
+		!strings.Contains(system, strings.Trim(string(want), `"`)[:40]) || ev.Copy != "" {
+		t.Fatalf("%d requests, text %q, line %+v, system %.120s", n, got, ev, system)
 	}
 }

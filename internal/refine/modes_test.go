@@ -8,26 +8,26 @@ import (
 	"testing"
 )
 
-// Tidy and translate ask for the whole text and deliver it when it passes
-// their guard; an answer past it, or an empty one, delivers the dictation
-// as it stood and says why.
-func TestFullTextModesUnderTheirGuards(t *testing.T) {
+// A text mode — tidy, translate, or any prompt file of another name — asks
+// for the whole text and delivers what the model wrote, however much it
+// reorganised the sentence; a blank answer delivers nothing of it and says
+// why.
+func TestTextModesDeliverWhatTheModelWrote(t *testing.T) {
 	const spoken = "嗯那个我们明天就是说开会讨论一下那个 Redis 的问题"
 	for _, tc := range []struct {
 		mode, in, answer string
 		delivered        bool
 	}{
 		{"tidy", spoken, "我们明天开会，讨论一下 Redis 的问题。", true},
-		{"tidy", "um so I think we we should ship it tomorrow", "So I think we should ship it tomorrow.", true},
-		// a reply in place of the dictation keeps too little of it
-		{"tidy", "Redis 的持久化怎么配置", "Redis 的持久化可以用 RDB 快照或者 AOF 日志两种方式来配置，在 redis.conf 里设置 save 和 appendonly。", false},
-		{"tidy", "我们明天开会讨论一下", "明天", false},
-		{"tidy", spoken, "", false},
+		// the whole sentence reorganised: little of it left in order
+		{"tidy", "就是那个上线的事情我觉得明天早上评审完了以后吧可以发", "评审结束后，明天上午发版。", true},
+		{"tidy", "um so I think we we should ship it tomorrow", "Ship it tomorrow, I think.", true},
 		{"translate", "我们明天开会讨论一下 Redis 的问题", "We meet tomorrow to discuss the Redis issue.", true},
-		{"translate", "Let's ship the release tomorrow morning after the review", "评审之后明天上午发版", true},
-		{"translate", "好的", "Okay.", true},
-		{"translate", "我们明天开会讨论一下 Redis 的问题", strings.Repeat("We meet tomorrow to discuss the Redis issue. ", 6), false},
-		{"translate", strings.Repeat("我们明天开会讨论一下 Redis 的问题。", 4), "Yes.", false},
+		{"translate", strings.Repeat("我们明天开会讨论一下 Redis 的问题。", 4), "Meeting tomorrow on Redis.", true},
+		{"meeting-notes", spoken, "- 明天开会\n- 议题：Redis", true},
+		{"tidy", spoken, "", false},
+		{"translate", "好的", " ", false},
+		{"meeting-notes", spoken, "\n\t\u3000 \r\n", false},
 	} {
 		var got Request
 		p := fake(func(_ context.Context, req Request) (Reply, error) { got = req; return Reply{Text: tc.answer}, nil })
@@ -38,18 +38,38 @@ func TestFullTextModesUnderTheirGuards(t *testing.T) {
 		switch {
 		case tc.delivered && (r.Text != tc.answer || r.Why != "" || r.Err != nil):
 			t.Errorf("%s %q: delivered %q, why %q, err %v; want the answer", tc.mode, tc.answer, r.Text, r.Why, r.Err)
-		case !tc.delivered && (r.Text != tc.in || r.Why != WhyGuard || r.Err == nil):
-			t.Errorf("%s %q: delivered %q, why %q, err %v; want the dictation and the guard", tc.mode, tc.answer, r.Text, r.Why, r.Err)
+		case !tc.delivered && (r.Text != tc.in || r.Why != WhyGuard || r.Err == nil || !strings.Contains(r.Err.Error(), "blank")):
+			t.Errorf("%s %q: text %q, why %q, err %v; want the dictation kept and the answer called blank", tc.mode, tc.answer, r.Text, r.Why, r.Err)
 		}
 	}
-	// fix-words, and a step with no mode, ask for an edit list as before
-	for _, mode := range []string{"", "fix-words"} {
-		var got Request
-		p := fake(func(_ context.Context, req Request) (Reply, error) { got = req; return Reply{Text: "ignored"}, nil })
-		r := Step{Provider: p, Mode: mode}.Run(context.Background(), "用海库")
-		if got.Output != EditList || r.Text != "用海库" || r.Why != "" {
-			t.Errorf("mode %q: asked for %q, delivered %q, why %q", mode, got.Output, r.Text, r.Why)
+}
+
+// fix-words, and a step with no mode, ask for an edit list and apply it
+// under its guards as before: the same lists apply, the same are refused.
+func TestFixWordsIsUnchanged(t *testing.T) {
+	const long = "我们今天下午要把这个功能做完然后发布出去。我们今天下午要把这个功能做完然后发布出去。"
+	for _, tc := range []struct {
+		in    string
+		edits []Edit
+		want  string
+		why   string
+	}{
+		{"用海库跑一下", []Edit{{From: "海库", To: "Haiku"}}, "用Haiku跑一下", ""},
+		{"用海库跑一下", nil, "用海库跑一下", ""},
+		{long, []Edit{{From: long, To: "今天下午发布。"}}, long, WhyGuard},
+		{"现在几点了", []Edit{{From: "现在几点了", To: "下午三点整"}}, "现在几点了", WhyGuard},
+	} {
+		for _, mode := range []string{"", FixWords} {
+			var got Request
+			p := fake(func(_ context.Context, req Request) (Reply, error) { got = req; return Reply{Edits: tc.edits}, nil })
+			r := Step{Provider: p, Mode: mode}.Run(context.Background(), tc.in)
+			if got.Output != EditList || r.Text != tc.want || r.Why != tc.why {
+				t.Errorf("mode %q, %v on %q: asked for %q, delivered %q, why %q; want %q, why %q", mode, tc.edits, tc.in, got.Output, r.Text, r.Why, tc.want, tc.why)
+			}
 		}
+	}
+	if err := CheckText(FixWords, "好", "好"); err == nil {
+		t.Error("CheckText passed a text for fix-words, which answers with an edit list")
 	}
 }
 

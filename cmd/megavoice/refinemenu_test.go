@@ -89,7 +89,7 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 	if _, ev := take(); ev == nil || ev.Mode != "fix-words" || ev.Model != "claude-haiku-5-5" || ev.Effort != "low" || ev.Why != "" {
 		t.Fatalf("on: %+v", ev)
 	}
-	click("Tidy")
+	click("Rewrite")
 	if text, ev := take(); ev == nil || ev.Mode != "tidy" || text != "我们明天开会。" {
 		t.Errorf("tidy: %q, %+v", text, ev)
 	}
@@ -98,14 +98,12 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 	if _, ev := take(); ev == nil || ev.Model != "claude-sonnet-5-5" || ev.Effort != "high" {
 		t.Errorf("model and effort: %+v", ev)
 	}
-	for _, title := range []string{"App and Window Title", "Text of the Field", "Clipboard", "Screen: Its Text (OCR)"} {
-		click(title)
-	}
+	click("Screen: Its Text (OCR)")
 	l, _ = load(o)
-	if c := l.Refine.Context; !c.App || !c.Field || !c.Clipboard || c.Screen != "ocr" {
+	if c := l.Refine.Context; c.Screen != "ocr" {
 		t.Errorf("context: %+v", c)
 	}
-	if got := titles(menu()); !strings.Contains(got, "Model Step: Tidy") || !strings.Contains(got, "✓claude-sonnet-5-5") {
+	if got := titles(menu()); !strings.Contains(got, "Model Step: Model Writes · Rewrite") || !strings.Contains(got, "✓claude-sonnet-5-5") {
 		t.Errorf("the menu after the clicks:\n%s", got)
 	}
 	click("On")

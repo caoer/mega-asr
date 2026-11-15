@@ -130,7 +130,7 @@ const (
 // Step is the model step as one take runs it.
 type Step struct {
 	Provider Provider
-	Mode     string // what the model is asked to do (Modes); "" is fix-words
+	Mode     string // what the model is asked to do: FixWords or a text mode; "" is fix-words
 	Model    string
 	Effort   string
 	System   []string // Request.System

@@ -3,8 +3,9 @@ package refine
 import (
 	"errors"
 	"fmt"
-	"unicode"
-	"unicode/utf8"
+	"strings"
+
+	"github.com/caoer/mega-asr/internal/l10n"
 )
 
 // What a mode's answer is (Request.Output).
@@ -13,88 +14,49 @@ const (
 	FullText = "text"  // the whole text to deliver in its place
 )
 
-// Modes are the modes the step knows: fix-words swaps mis-heard words and
-// answers with an edit list; tidy (fillers, repeats, punctuation) and
-// translate (by meaning) answer with the whole text, under CheckText.
-var Modes = []string{"fix-words", "tidy", "translate"}
+// FixWords is the mode that changes mis-heard words alone: the model
+// answers with an edit list and the rest stays as said. Every other mode is
+// a text mode: the model writes the text that is delivered.
+const FixWords = "fix-words"
 
-// OutputOf is what mode asks the model for: FullText for tidy and
-// translate, else an EditList.
-func OutputOf(mode string) string {
+// Modes are the modes the app comes with: fix-words, then the text modes
+// tidy (the dictation written as meant: fillers, repeats, punctuation) and
+// translate (by meaning). A prompt file of any other name is a text mode
+// too.
+var Modes = []string{FixWords, "tidy", "translate"}
+
+// ModeName is how the app names a mode to the person: the names of the
+// modes it comes with, else the prompt file's name.
+func ModeName(mode string) string {
 	switch mode {
-	case "tidy", "translate":
-		return FullText
+	case "", FixWords:
+		return l10n.T("Fix Words Only", "只改词")
+	case "tidy":
+		return l10n.T("Rewrite", "转译")
+	case "translate":
+		return l10n.T("Translate", "按意思翻译")
 	}
-	return EditList
+	return mode
 }
 
-// The full-text guards: past them an answer is not the dictation tidied or
-// translated but something in its place, such as a reply to it, and the
-// dictation is delivered as it stood.
-const (
-	// tidyKeep: tidy keeps this share of the dictation's characters, in
-	// order; removing fillers and repeats takes out less.
-	tidyKeep = 0.6
-	// tidyAdd: tidy adds at most this share of the dictation's characters,
-	// plus tidySlack, for punctuation and a fixed casing.
-	tidyAdd   = 0.25
-	tidySlack = 8
-	// A translation is at least an eighth of the dictation's length and at
-	// most six times it plus translateSlack, in characters: English to
-	// Chinese runs to about a sixth, Chinese to English to about four.
-	translateMin   = 8
-	translateMax   = 6
-	translateSlack = 16
-	// maxCells bounds the comparison tidy makes (characters in × out).
-	maxCells = 64 << 20
-)
-
-// CheckText is the guard of a full-text mode over its answer out for the
-// dictation in: nil when out may be delivered.
-func CheckText(mode, in, out string) error {
-	n, m := utf8.RuneCountInString(in), utf8.RuneCountInString(out)
-	if m == 0 {
-		return errors.New("the answer is empty")
+// OutputOf is what mode asks the model for: an EditList for fix-words (and
+// ""), the FullText for any other mode.
+func OutputOf(mode string) string {
+	if mode == "" || mode == FixWords {
+		return EditList
 	}
-	switch mode {
-	case "tidy":
-		if n*m > maxCells {
-			return fmt.Errorf("%d and %d characters are too long to compare", n, m)
-		}
-		kept := common(in, out)
-		if float64(kept) < tidyKeep*float64(n) {
-			return fmt.Errorf("the answer keeps %d of %d characters, under %.0f%%", kept, n, tidyKeep*100)
-		}
-		if added := m - kept; float64(added) > tidyAdd*float64(n)+tidySlack {
-			return fmt.Errorf("the answer adds %d characters to %d", added, n)
-		}
-	case "translate":
-		if m*translateMin < n || m > translateMax*n+translateSlack {
-			return fmt.Errorf("the answer is %d characters for %d, outside an eighth to six times", m, n)
-		}
-	default:
+	return FullText
+}
+
+// CheckText is the check on a text mode's answer out for the dictation in:
+// nil when out may be delivered, which is when it is not blank. What the
+// model writes goes on screen as it wrote it, however much it reorganised.
+func CheckText(mode, in, out string) error {
+	if OutputOf(mode) != FullText {
 		return fmt.Errorf("mode %q answers with an edit list, not a text", mode)
 	}
-	return nil
-}
-
-// common is the length of the longest common subsequence of a and b in
-// characters, letter case aside: what of a is still in b, in order.
-func common(a, b string) int {
-	x, y := []rune(a), []rune(b)
-	prev, cur := make([]int, len(y)+1), make([]int, len(y)+1)
-	for i := range x {
-		for j := range y {
-			switch {
-			case unicode.ToLower(x[i]) == unicode.ToLower(y[j]):
-				cur[j+1] = prev[j] + 1
-			case prev[j+1] >= cur[j]:
-				cur[j+1] = prev[j+1]
-			default:
-				cur[j+1] = cur[j]
-			}
-		}
-		prev, cur = cur, prev
+	if strings.TrimSpace(out) == "" {
+		return errors.New("the answer is blank")
 	}
-	return prev[len(y)]
+	return nil
 }

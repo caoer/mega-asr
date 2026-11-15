@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/app"
 	"github.com/caoer/mega-asr/internal/ctl"
 	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/takes"
@@ -62,6 +63,17 @@ func phonePageURL(addr string, _ error) string {
 		return ""
 	}
 	return keyedURL(addr, "/takes/pair.html")
+}
+
+// takesModes is the model step as the Takes page offers it: the modes the
+// menu lists (app.RefineModeNames) by their names in the menu, and [refine]
+// as r reads.
+func takesModes(r app.RefineConfig) takes.Modes {
+	m := takes.Modes{On: r.On, Mode: r.Mode, Copy: r.AgentCopy, Modes: []takes.Mode{}}
+	for _, n := range app.RefineModeNames() {
+		m.Modes = append(m.Modes, takes.Mode{Name: n, Label: modeLabel(n)})
+	}
+	return m
 }
 
 // takesCmd is `megavoice takes url [--rotate]`: the Takes page's address,
