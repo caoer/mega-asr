@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"strconv"
 	"strings"
 
 	"github.com/caoer/mega-asr/internal/app"
@@ -39,6 +41,11 @@ func refineCmd(o app.LoadOpts, args []string, in io.Reader, out io.Writer) error
 	}
 	stage := c.RefineStage(o)
 	stage.Display = display()
+	if d := stage.Display; d != nil {
+		if why := askScreen(d, "refine.context.screen", strconv.Quote(c.Refine.Context.Screen)); why != nil {
+			log.Print(why)
+		}
+	}
 	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
 	sc := bufio.NewScanner(in)

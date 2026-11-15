@@ -455,9 +455,9 @@ func (m *meetMenu) do(a act) {
 		}
 		m.readLocal()
 		m.note(err)
-		if err == nil && a.key == "refine.context.screen" && a.arg != `"off"` {
+		if err == nil && a.key == "refine.context.screen" {
 			go func() {
-				if why := askScreen(); why != nil {
+				if why := askScreen(display(), a.key, a.arg); why != nil {
 					m.note(why)
 				}
 			}()

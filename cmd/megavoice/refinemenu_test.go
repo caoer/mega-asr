@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/caoer/mega-asr/internal/app"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -110,5 +111,43 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 	click("On")
 	if _, ev := take(); ev != nil {
 		t.Errorf("off again: a take ran the step: %+v", ev)
+	}
+}
+
+// grant is a refine.Display that counts the requests for the grant.
+type grant struct {
+	on    bool
+	asked int
+}
+
+func (g *grant) Access() bool                              { return g.on }
+func (g *grant) Request() bool                             { g.asked++; return g.on }
+func (g *grant) Front() (refine.Front, error)              { return refine.Front{}, nil }
+func (g *grant) Capture(refine.Front) (refine.Shot, error) { return nil, nil }
+
+// Switching the screen source on from the menu, to its text or its
+// picture, asks for the Screen Recording grant once while it is off;
+// switching it off, or on with the grant given, asks nothing.
+func TestSwitchingTheScreenOnFromTheMenuAsks(t *testing.T) {
+	rows := []row{voiceState{Refine: refineOf(app.RefineConfig{Mode: "fix-words", Context: app.RefineContextConfig{Screen: "off"}})}.refineRow()}
+	for _, tc := range []struct {
+		title string
+		on    bool
+		asked int
+	}{
+		{"Screen: Its Text (OCR)", false, 1},
+		{"Screen: Image", false, 1},
+		{"Screen: Off", false, 0},
+		{"Screen: Image", true, 0},
+	} {
+		a := rowAct(rows, tc.title)
+		if a == nil || a.kind != actSet {
+			t.Fatalf("no setting row %q in\n%s", tc.title, titles(rows))
+		}
+		g := &grant{on: tc.on}
+		err := askScreen(g, a.key, a.arg)
+		if g.asked != tc.asked || (err != nil) != (tc.asked == 1) {
+			t.Errorf("%s with the grant %v: asked %d times, %v", tc.title, tc.on, g.asked, err)
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -199,14 +200,24 @@ func (s *RefineStage) Screen() func(context.Context) *refine.Screen {
 	got := make(chan *refine.Screen, 1)
 	go func() { got <- src.Take() }()
 	return func(ctx context.Context) *refine.Screen {
+		late := time.NewTimer(screenWait)
+		defer late.Stop()
 		select {
 		case sc := <-got:
 			return sc
+		case <-late.C:
+			log.Printf("refine: the screen was not ready %s after the take; it goes without it", screenWait)
 		case <-ctx.Done():
-			return &refine.Screen{Mode: mode, Withheld: refine.WithheldLate}
 		}
+		return &refine.Screen{Mode: mode, Withheld: refine.WithheldLate}
 	}
 }
+
+// screenWait is the most a take waits, once it has stopped, for the
+// capture its start set going; a capture later than that is left behind
+// (refine.WithheldLate) and the take runs without the screen. Reading the
+// text of a full Retina window took about 1.4 s on an M1 Max.
+var screenWait = 2 * time.Second
 
 // NotesAgent reports whether a take's capture should note the agent in its
 // herdr pane: only while the step is on with agent_copy both or raw, the
@@ -273,8 +284,9 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 	step := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
 		System: append([]string{prompt}, Glossary().Blocks()...)}
 	if sc := in.Screen; sc != nil {
+		sc = r.screenNow(sc)
 		step.Context, step.Image = sc.Context(), sc.Image
-		ev.Context, ev.Screen = step.Context, ScreenRecord(sc)
+		ev.Context, ev.Screen = refine.InTag(step.Context), ScreenRecord(sc)
 	}
 	res := step.Run(ctx, text)
 	ev.LatencyMS, ev.Dropped = res.Wall.Milliseconds(), res.Dropped
@@ -289,6 +301,24 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 	}
 	ev.At = time.Now()
 	return res.Text, ev
+}
+
+// screenNow is what the call may carry of sc, captured as the take
+// started, under the config as it is at the take's end (r): nothing once
+// the screen source is switched off or the application is excluded.
+func (r RefineConfig) screenNow(sc *refine.Screen) *refine.Screen {
+	why := ""
+	switch {
+	case sc.Withheld != "":
+		return sc
+	case r.Context.Screen != refine.ScreenOCR && r.Context.Screen != refine.ScreenImage:
+		why = refine.WithheldOff
+	case slices.Contains(r.Context.Exclude, sc.App):
+		why = refine.WithheldExcluded
+	default:
+		return sc
+	}
+	return &refine.Screen{Mode: sc.Mode, App: sc.App, Withheld: why}
 }
 
 // ScreenRecord is sc as a refine line records it.

@@ -58,18 +58,20 @@ type Image struct {
 func (r Request) UserContent() string {
 	var b strings.Builder
 	if r.Context != "" {
-		b.WriteString("<context>\n" + inTag(r.Context) + "\n</context>\n")
+		b.WriteString("<context>\n" + InTag(r.Context) + "\n</context>\n")
 	}
-	b.WriteString("<dictation>\n" + inTag(r.Dictation) + "\n</dictation>")
+	b.WriteString("<dictation>\n" + InTag(r.Dictation) + "\n</dictation>")
 	return b.String()
 }
 
 // closingTag is the end of a tag the request puts material in: the
 // dictation and the context, and the glossary's about line, terms and
-// mis-hearings. inTag keeps material from ending its own tag.
+// mis-hearings. InTag keeps material from ending its own tag.
 var closingTag = regexp.MustCompile(`(?i)[<＜]([\s\p{Z}]*[/／][\s\p{Z}]*(?:dictation|context|about|terms|hints))`)
 
-func inTag(s string) string { return closingTag.ReplaceAllString(s, "&lt;$1") }
+// InTag is s as a request sends it inside one of its tags: a closing tag
+// written in it has its < sent as &lt;. A second pass changes nothing.
+func InTag(s string) string { return closingTag.ReplaceAllString(s, "&lt;$1") }
 
 // Edit is one change the model asks for: From, a stretch of the dictation
 // as it stands, becomes To; Why is the model's one-line reason.

@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"io"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"time"
 
 	"github.com/caoer/mega-asr/internal/app"
-	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/mac"
 	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/store"
@@ -20,23 +18,6 @@ import (
 
 // display is this Mac's screen for the model step's screen source.
 func display() refine.Display { return mac.Screen{} }
-
-// askScreen asks for the Screen Recording grant when it is off, as the
-// screen source is switched on: the system's prompt the first time. It
-// returns what to tell the user while the grant stays off.
-func askScreen() error {
-	d := mac.Screen{}
-	if d.Access() {
-		return nil
-	}
-	granted := d.Request()
-	log.Printf("menu: Screen Recording asked for as the screen source was switched on: granted %v", granted)
-	if granted {
-		return nil
-	}
-	return errors.New(l10n.T("请在系统设置里允许 Mega Voice 录制屏幕，然后重启它；在那之前转译不带屏幕",
-		"Allow Screen Recording for Mega Voice in System Settings, then restart it"))
-}
 
 // screenLine is `megavoice screen`'s line: the screen source as a refine
 // line records it, and the <context> a call would carry.
@@ -61,6 +42,9 @@ func screenCmd(o app.LoadOpts, args []string, out io.Writer) error {
 		return err
 	}
 	time.Sleep(*after)
+	if why := askGrant(display()); why != nil {
+		log.Print(why)
+	}
 	sc := refine.ScreenSource{Mode: *mode, Exclude: c.Refine.Context.Exclude, Edge: *edge, Display: mac.Screen{}}.Take()
 	if *file != "" && sc.Withheld == "" {
 		data := []byte(sc.Text + "\n")

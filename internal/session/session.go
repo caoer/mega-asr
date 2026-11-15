@@ -212,10 +212,12 @@ type Controller struct {
 	// Warm, when set, is called on its own goroutine as each take starts:
 	// it opens what the take's end will use, the model step's connection.
 	Warm func()
-	// Screen, when set, is asked as each dictated take starts: nil when the
-	// model step's screen source is off, else the capture of the window in
-	// front, already running while the take records, as the call that waits
-	// for it. What it got goes to the take's model step (RefineInput.Screen).
+	// Screen, when set, is asked as each take dictated at the Mac starts:
+	// nil when the model step's screen source is off, else the capture of
+	// the window in front, already running while the take records, as the
+	// call that waits for it. What it got goes to the take's model step
+	// (RefineInput.Screen). A take spoken on the phone (StartStream) is not
+	// made at the Mac's screen and never asks.
 	Screen      func() func(context.Context) *refine.Screen
 	Deliver     Deliverer
 	UI          UI
@@ -1097,7 +1099,7 @@ func (c *Controller) startWithLocked(trigger string, tapAt time.Time, src audio.
 	if c.Warm != nil {
 		go c.Warm()
 	}
-	if c.Screen != nil && c.OnChunks == nil {
+	if c.Screen != nil && c.OnChunks == nil && sink == nil {
 		r.screen = c.Screen()
 	}
 	c.seq++

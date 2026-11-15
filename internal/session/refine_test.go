@@ -587,3 +587,38 @@ func TestTakeCarriesItsScreen(t *testing.T) {
 		t.Error("a picture was kept for a take that sent none")
 	}
 }
+
+// A take spoken on the phone is not made at the Mac's screen: with the
+// screen source on it captures nothing, and its record says nothing of a
+// screen.
+func TestAPhoneTakeCapturesNoScreen(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下")
+	started := 0
+	r.c.Screen = func() func(context.Context) *refine.Screen {
+		started++
+		return func(context.Context) *refine.Screen {
+			return &refine.Screen{Mode: refine.ScreenOCR, App: "com.example.term", Text: "the Mac's front window"}
+		}
+	}
+	var got *refine.Screen
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+		got = in.Screen
+		return in.Text, &store.Event{Ev: "refine", Model: "m"}
+	})
+	sink := &fakeDeliverer{front: "iPhone 键盘"}
+	id, err := r.c.StartStream(&fakeSource{n: audio.Rate}, sink, "keyboard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !r.c.StopFrom("keyboard", id) {
+		t.Fatal("stop failed")
+	}
+	r.wait(t)
+	line, _ := refineLines(t, base)
+	if started != 0 || got != nil || line == nil || line.Screen != nil || line.Context != "" {
+		t.Fatalf("screen asked for %d times, the step got %+v, refine line %+v", started, got, line)
+	}
+	if _, err := os.Stat(base + ".screen.jpg"); err == nil {
+		t.Error("a picture was kept for a phone take")
+	}
+}

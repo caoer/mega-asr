@@ -100,7 +100,7 @@ const (
 func (g Glossary) Blocks() []string {
 	var blocks []string
 	block := func(head, tag string, lines ...string) {
-		blocks = append(blocks, head+"\n<"+tag+">\n"+inTag(strings.Join(lines, "\n"))+"\n</"+tag+">")
+		blocks = append(blocks, head+"\n<"+tag+">\n"+InTag(strings.Join(lines, "\n"))+"\n</"+tag+">")
 	}
 	if g.About != "" {
 		block(aboutHead, "about", g.About)

@@ -60,21 +60,23 @@ func TestScreenSendsNothingFromAPasswordFieldOrAnExcludedApp(t *testing.T) {
 	}
 }
 
-func TestScreenAsksForTheGrantAndGoesWithoutIt(t *testing.T) {
+// A take never asks for the grant: without it nothing is captured and the
+// screen is withheld for that reason; the grant is only read.
+func TestATakeNeverAsksForTheGrant(t *testing.T) {
 	front := Front{Bundle: "com.example.term", Name: "Term", Title: "build"}
-	d := &display{front: front, text: "make test"}
-	sc := ScreenSource{Mode: ScreenOCR, Display: d}.Take()
-	if d.asked != 1 || d.shots != 0 || sc.Withheld != WithheldPermission || sc.Context() != "" {
-		t.Errorf("refused: asked %d, captured %d, %+v", d.asked, d.shots, sc)
+	d := &display{grant: true, front: front, text: "make test"}
+	for range 3 {
+		sc := ScreenSource{Mode: ScreenOCR, Display: d}.Take()
+		if d.shots != 0 || sc.Withheld != WithheldPermission || sc.Context() != "" {
+			t.Errorf("no grant: captured %d, %+v", d.shots, sc)
+		}
 	}
-	d = &display{grant: true, front: front, text: "make test"}
-	sc = ScreenSource{Mode: ScreenOCR, Display: d}.Take()
-	if d.asked != 1 || d.shots != 1 || sc.Withheld != "" || sc.Text != "make test" {
-		t.Errorf("granted at the prompt: asked %d, captured %d, %+v", d.asked, d.shots, sc)
+	if d.asked != 0 {
+		t.Errorf("the takes asked for the grant %d times", d.asked)
 	}
 	d = &display{access: true, front: front, text: "make test"}
-	if (ScreenSource{Mode: ScreenOCR, Display: d}).Take(); d.asked != 0 {
-		t.Errorf("asked %d times with the grant on", d.asked)
+	if sc := (ScreenSource{Mode: ScreenOCR, Display: d}).Take(); d.asked != 0 || d.shots != 1 || sc.Text != "make test" {
+		t.Errorf("granted: asked %d, captured %d, %+v", d.asked, d.shots, sc)
 	}
 }
 

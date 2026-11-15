@@ -35,6 +35,8 @@ type Display interface {
 	Access() bool
 	// Request asks for the grant: the first time the system prompts and
 	// lists the app in its settings. It reports the grant as it is now.
+	// The menu's switch and the commands that run the source once ask;
+	// a take never does (Take).
 	Request() bool
 	Front() (Front, error)
 	// Capture takes the picture of f's front window.
@@ -70,6 +72,7 @@ const (
 	WithheldExcluded   = "excluded"   // the application is on the exclude list
 	WithheldEmpty      = "empty"      // the window holds no text
 	WithheldLate       = "late"       // the capture was not ready when the step ran
+	WithheldOff        = "off"        // the source was switched off while the take recorded
 	WithheldError      = "error"      // no window, or the capture failed
 )
 
@@ -90,6 +93,8 @@ type Screen struct {
 
 // Take captures the window in front. Nothing is captured without the
 // grant, from an excluded application, or while what is typed is secret.
+// Take never asks for the grant: a take runs without the screen and says
+// why (WithheldPermission).
 func (s ScreenSource) Take() *Screen {
 	sc := &Screen{Mode: s.Mode}
 	withhold := func(why string, err error) *Screen {
@@ -97,7 +102,7 @@ func (s ScreenSource) Take() *Screen {
 		return sc
 	}
 	d := s.Display
-	if !d.Access() && !d.Request() {
+	if !d.Access() {
 		return withhold(WithheldPermission, nil)
 	}
 	f, err := d.Front()

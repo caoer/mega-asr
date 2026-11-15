@@ -7,34 +7,51 @@ import (
 	"encoding/hex"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
+	"github.com/caoer/mega-asr/internal/store"
 )
 
-// screen is a refine.Display that counts every call made to it.
+// screen is a refine.Display that counts every call made to it. With
+// stuck set its capture returns only once stuck is closed.
 type screen struct {
-	calls  atomic.Int32
-	denied bool
-	front  refine.Front
-	text   string
-	jpeg   []byte
+	calls, requests atomic.Int32
+	denied          bool
+	front           refine.Front
+	text            string
+	jpeg            []byte
+	stuck           chan struct{}
 }
 
-func (s *screen) Access() bool  { s.calls.Add(1); return !s.denied }
-func (s *screen) Request() bool { s.calls.Add(1); return !s.denied }
+func (s *screen) Access() bool { s.calls.Add(1); return !s.denied }
+func (s *screen) Request() bool {
+	s.calls.Add(1)
+	s.requests.Add(1)
+	return !s.denied
+}
 func (s *screen) Front() (refine.Front, error) {
 	s.calls.Add(1)
 	return s.front, nil
 }
-func (s *screen) Capture(refine.Front) (refine.Shot, error) { s.calls.Add(1); return s, nil }
-func (s *screen) Size() (int, int)                          { return 2400, 1600 }
-func (s *screen) Text() (string, error)                     { return s.text, nil }
-func (s *screen) JPEG(edge int) ([]byte, int, int, error)   { return s.jpeg, edge, edge * 2 / 3, nil }
-func (s *screen) Release()                                  {}
+func (s *screen) Capture(refine.Front) (refine.Shot, error) {
+	s.calls.Add(1)
+	if s.stuck != nil {
+		<-s.stuck
+	}
+	return s, nil
+}
+func (s *screen) Size() (int, int)                        { return 2400, 1600 }
+func (s *screen) Text() (string, error)                   { return s.text, nil }
+func (s *screen) JPEG(edge int) ([]byte, int, int, error) { return s.jpeg, edge, edge * 2 / 3, nil }
+func (s *screen) Release()                                {}
 
 // With the step off, or on with refine.context.screen off, a take's start
 // gets no screen source and nothing of the screen's code runs.
@@ -117,10 +134,10 @@ func TestRefineLineHoldsWhatWasSent(t *testing.T) {
 		} else if ev.Screen.Chars != len([]rune(d.text)) || ev.Screen.SHA256 != "" {
 			t.Errorf("ocr: screen %+v", ev.Screen)
 		}
-		// The call's user text is <context>, the line's context with a
-		// closing tag in it defused, then the dictation.
-		want := "<context>\n" + strings.ReplaceAll(ev.Context, "</context>", "&lt;/context>") + "\n</context>\n<dictation>\n" + text + "\n</dictation>"
-		if sent != want || ev.Context == "" {
+		// The call's user text is <context>, the line's context as it is,
+		// then the dictation: the line keeps the closing tag defused as sent.
+		want := "<context>\n" + ev.Context + "\n</context>\n<dictation>\n" + text + "\n</dictation>"
+		if sent != want || ev.Context == "" || mode == "ocr" && !strings.Contains(ev.Context, "&lt;/context> ready") {
 			t.Errorf("%s: sent\n%q\nthe line's context gives\n%q", mode, sent, want)
 		}
 	}
@@ -151,7 +168,124 @@ func TestRefineWithoutTheGrantRunsWithoutTheScreen(t *testing.T) {
 	if content != "<dictation>\n用海库跑一下\n</dictation>" {
 		t.Errorf("sent %q", content)
 	}
-	if d.calls.Load() != 2 { // the grant read, then asked for; nothing captured
-		t.Errorf("%d calls to the display", d.calls.Load())
+	if d.calls.Load() != 1 || d.requests.Load() != 0 { // the grant read, never asked for; nothing captured
+		t.Errorf("%d calls to the display, %d requests for the grant", d.calls.Load(), d.requests.Load())
+	}
+}
+
+// A capture that never returns does not hold the take: it is delivered
+// without the screen, its line says late, and the take behind it is not
+// held either. Through the controller as serve wires it.
+func TestALateScreenHoldsNoTake(t *testing.T) {
+	defer func(w time.Duration) { screenWait = w }(screenWait)
+	screenWait = 50 * time.Millisecond
+	p := newProvider(t)
+	var contents []any
+	var mu sync.Mutex
+	p.answer = func(w http.ResponseWriter, body map[string]any) {
+		mu.Lock()
+		contents = append(contents, body["messages"].([]any)[0].(map[string]any)["content"])
+		mu.Unlock()
+		edits(`[{"from":"海库","why":"","to":"Haiku"}]`)(w, body)
+	}
+	dir := isolate(t)
+	refineConfig(t, dir, p.URL, "[refine.context]\nscreen = \"ocr\"\n")
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &screen{front: refine.Front{Bundle: "com.example.term", Name: "Term"}, stuck: make(chan struct{})}
+	defer close(d.stuck)
+	stage := l.RefineStage(LoadOpts{})
+	stage.Display = d
+	out := &pasted{}
+	takes := t.TempDir()
+	c := &session.Controller{
+		NewSource: func() audio.Source { return &heardSource{} },
+		ASR:       said("用海库跑一下"),
+		Refine:    stage.Take,
+		Screen:    stage.Screen,
+		Deliver:   out,
+		UI:        noUI{},
+		Store:     store.Store{Dir: takes},
+		ChunkDir:  t.TempDir(),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 2 {
+			c.Toggle()
+			c.Toggle()
+			c.Wait()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the takes are held behind a capture that never returns; delivered %q", out.text)
+	}
+	if got := strings.Join(out.text, ";"); got != "用Haiku跑一下;用Haiku跑一下" {
+		t.Errorf("delivered %q", got)
+	}
+	evs, _ := filepath.Glob(filepath.Join(takes, "*.events.jsonl"))
+	if len(evs) != 2 {
+		t.Fatalf("%d take records", len(evs))
+	}
+	for _, f := range evs {
+		recs, err := store.Read(strings.TrimSuffix(f, ".events.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var line *store.Event
+		for i := range recs {
+			if recs[i].Ev == "refine" {
+				line = &recs[i]
+			}
+		}
+		if line == nil || line.Screen == nil || line.Screen.Withheld != refine.WithheldLate || line.Context != "" {
+			t.Errorf("%s: refine line %+v", filepath.Base(f), line)
+		}
+	}
+	for _, sent := range contents {
+		if sent != "<dictation>\n用海库跑一下\n</dictation>" {
+			t.Errorf("sent %q", sent)
+		}
+	}
+}
+
+// Switching the screen off, or excluding the application, while a take
+// records: what its start captured is not sent, and the line keeps only why.
+func TestTheScreenSwitchedOffDuringATakeIsNotSent(t *testing.T) {
+	front := refine.Front{Bundle: "com.example.chat", Name: "Chat", Title: "general"}
+	for _, tc := range []struct{ now, why string }{
+		{"[refine.context]\nscreen = \"off\"\n", refine.WithheldOff},
+		{"[refine.context]\nscreen = \"image\"\nexclude = [\"com.example.chat\"]\n", refine.WithheldExcluded},
+	} {
+		p := newProvider(t)
+		var content any
+		p.answer = func(w http.ResponseWriter, body map[string]any) {
+			content = body["messages"].([]any)[0].(map[string]any)["content"]
+			edits(`[]`)(w, body)
+		}
+		dir := isolate(t)
+		refineConfig(t, dir, p.URL, "[refine.context]\nscreen = \"image\"\n")
+		l, err := Load(LoadOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := &screen{front: front, jpeg: []byte{0xff, 0xd8, 0xff}}
+		stage := l.RefineStage(LoadOpts{})
+		stage.Display = d
+		wait := stage.Screen() // the take starts
+		path := refineConfig(t, dir, p.URL, tc.now)
+		future := time.Now().Add(2 * time.Second)
+		os.Chtimes(path, future, future)
+		_, ev := stage.Take().Run(context.Background(), session.RefineInput{Text: "用海库", Screen: wait(context.Background())})
+		if content != "<dictation>\n用海库\n</dictation>" {
+			t.Errorf("%s: sent %v", tc.why, content)
+		}
+		if ev == nil || ev.Context != "" || ev.Screen == nil || ev.Screen.Withheld != tc.why || ev.Screen.SHA256 != "" || ev.Screen.Bytes != 0 {
+			t.Errorf("%s: refine line %+v, screen %+v", tc.why, ev, ev.Screen)
+		}
 	}
 }
