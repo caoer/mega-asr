@@ -37,6 +37,11 @@ const atLayout = "2006-01-02T15:04:05.000Z07:00"
 //	names         n (spans judged), names (from, to, person, p: each span
 //	              written as a listed name), latency_ms, err: the dictation
 //	              names gate fired; .txt keeps the text before it
+//	refine        mode, provider, model, effort, latency_ms, edits (from, to, why:
+//	              each change made), dropped (edits left out), usage (the
+//	              call's tokens); why timeout/http/refusal/parse/guard/key/error
+//	              and err when the text stands as it was: the model step
+//	              ran; .txt keeps the text before it
 //	deliver       n, via auto/hotkey/page/cli, caller, target, ok, err, chars,
 //	              submit none/ok/err, source delivered/raw/<engine>/retranscription <n>;
 //	              text only when it differs from .txt; at is when the text
@@ -93,6 +98,29 @@ type Event struct {
 	Raw      string  `json:"raw,omitempty"`
 
 	Names []NameEdit `json:"names,omitempty"`
+
+	Mode     string       `json:"mode,omitempty"`
+	Provider string       `json:"provider,omitempty"`
+	Effort   string       `json:"effort,omitempty"`
+	Edits    []RefineEdit `json:"edits,omitempty"`
+	Dropped  int          `json:"dropped,omitempty"`
+	Usage    *RefineUsage `json:"usage,omitempty"`
+}
+
+// RefineEdit is a change the model step made: every From in the text became
+// To, for the model's reason Why.
+type RefineEdit struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Why  string `json:"why,omitempty"`
+}
+
+// RefineUsage is what the model step's call cost, in tokens.
+type RefineUsage struct {
+	Input      int `json:"input_tokens"`
+	CacheWrite int `json:"cache_creation_input_tokens,omitempty"`
+	CacheRead  int `json:"cache_read_input_tokens,omitempty"`
+	Output     int `json:"output_tokens"`
 }
 
 // NameEdit is a span the names gate wrote as a listed person's name, with

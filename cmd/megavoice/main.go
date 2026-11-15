@@ -66,6 +66,10 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
                             candidates, whether it fired, the edits, the text it
                             delivers and the Jev request's time; --scan asks
                             nothing; --ungated asks on any candidate
+  refine                    the model step ([refine]) over stdin, one JSON line
+                            {"id","text"} or one text a line, one call at a time:
+                            per line the text it delivers and the take's refine
+                            line; refine.on must be true (--set refine.on=true)
   spike                     taps the agent has seen
   record [--seconds N] OUT.wav
                             capture from capture.source into a WAV
@@ -82,7 +86,9 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
                             ([remote.relay]); every phone pairs again to use it
   transcribe [--plain] [--engine funasr|doubao] WAV
                             print a WAV's transcript with hotwords and corrections,
-                            by asr.engine or the engine named
+                            by asr.engine or the engine named; while refine.on,
+                            the model step runs on it and its refine line goes
+                            to stderr
   script [--plain] [DIR]    the script check: the scripted takes DIR/script.tsv names (DIR
                             default store.data) transcribed and scored, errors per clip
   replay [-data DIR] [-out DIR] [-chunks DIR] WAV...
@@ -158,6 +164,8 @@ func main() {
 		err = eventsCmd(args)
 	case "names":
 		err = namesCmd(o, args, os.Stdin, os.Stdout)
+	case "refine":
+		err = refineCmd(o, args, os.Stdin, os.Stdout)
 	case "resend":
 		err = resendCmd(args)
 	case "retranscribe":

@@ -39,6 +39,24 @@ func TestOverlayShowsPendingTelegramDelivery(t *testing.T) {
 	}
 }
 
+// While a take waits on the model step the label says so, in place of the
+// transcribing label.
+func TestOverlaySaysRefining(t *testing.T) {
+	u, ov, _ := newTestUI()
+	u.Show(session.View{Started: time.Now()})
+	if strings.Contains(ov.label, "转译中…") {
+		t.Fatal(ov.label)
+	}
+	u.Show(session.View{Started: time.Now(), Refining: true, Live: func() string { return "用海库" }})
+	if !strings.HasPrefix(ov.label, "转译中…") || strings.Contains(ov.label, "识别中") {
+		t.Fatal(ov.label)
+	}
+	u.Show(session.View{Started: time.Now(), Refining: true, Send: true})
+	if !strings.HasPrefix(ov.label, "转译中… → ") {
+		t.Fatal(ov.label)
+	}
+}
+
 // fakeOverlay keeps what the overlay shows: the label, "" once hidden, and
 // whether a waveform is drawn under it.
 type fakeOverlay struct {

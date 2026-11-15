@@ -43,6 +43,7 @@ type Config struct {
 	Compare     CompareConfig `toml:"compare"`
 	Meeting     MeetingConfig `toml:"meeting"`
 	Names       NamesConfig   `toml:"names"`
+	Refine      RefineConfig  `toml:"refine"`
 	// MicServer is the Linux build's `mic serve`: this host's input, served
 	// to paired Macs.
 	MicServer MicServerConfig `toml:"mic_server"`
@@ -109,7 +110,7 @@ func relayKey(path string) ([]byte, error) {
 }
 
 // VoiceTables are megavoice's own tables, the ones its `config show` prints.
-var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "names", "deliver", "keypad", "update", "store", "compare", "remote"}
+var VoiceTables = []string{"tap", "capture", "take", "asr", "post", "names", "refine", "deliver", "keypad", "update", "store", "compare", "remote"}
 
 type TapConfig struct {
 	Key    string   `toml:"key"`    // the modifier whose lone tap starts and stops a take
@@ -251,6 +252,44 @@ type NamesConfig struct {
 	Threshold float64  `toml:"threshold"` // an option Jev gives this probability or more is applied
 	Timeout   Duration `toml:"timeout"`   // past this the take is delivered as decoded
 }
+
+// RefineConfig is dictation's model step, read from the file at every take:
+// after the post chain and the names gate, one call to the model of a
+// provider returns the mis-heard words to put right, and the delivered text
+// carries them. A call that is slow, fails or is refused, or an answer past
+// the mode's guards, leaves the text as it was.
+type RefineConfig struct {
+	On        bool                            `toml:"on"`
+	Mode      string                          `toml:"mode"`       // what the model is asked to do: fix-words
+	Provider  string                          `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
+	Model     string                          `toml:"model"`      // the provider's model id
+	Effort    string                          `toml:"effort"`     // off, low, medium or high: how much the model thinks
+	Timeout   Duration                        `toml:"timeout"`    // past this the take is delivered as it stood; 0s follows wait (Limit)
+	Wait      bool                            `toml:"wait"`       // hold every take until the model answers
+	AgentCopy string                          `toml:"agent_copy"` // what an agent pane or chat gets: refined, both or raw
+	Context   RefineContextConfig             `toml:"context"`
+	Providers map[string]RefineProviderConfig `toml:"providers"`
+}
+
+// RefineContextConfig is what travels with the dictation, as what was in
+// front of the speaker.
+type RefineContextConfig struct {
+	App       bool   `toml:"app"`       // the application and its window's title
+	Field     bool   `toml:"field"`     // the text of the field or pane dictated into
+	Clipboard bool   `toml:"clipboard"` // what was copied just before the take
+	Screen    string `toml:"screen"`    // the front window: off, ocr (its text) or image
+}
+
+// RefineProviderConfig is one provider: a kind of API, where it answers and
+// the file that holds its key. The key stays in its own file.
+type RefineProviderConfig struct {
+	Kind    string `toml:"kind"`     // anthropic (the Messages API) or openai (chat completions)
+	BaseURL string `toml:"base_url"` // https://api.anthropic.com, or a gateway's route for that API
+	KeyFile string `toml:"key_file"` // the file holding the key
+}
+
+// RefineModes are the modes refine.mode can name.
+var RefineModes = []string{"fix-words"}
 
 type DeliverConfig struct {
 	HerdrApps []string `toml:"herdr_apps"` // bundle ids of herdr's host terminals
@@ -415,6 +454,8 @@ func Default() Config {
 		Postprocess: PostConfig{JoinWords: []string{}},
 		Names: NamesConfig{On: true, People: filepath.Join(ConfigDir(), "people.json"),
 			KeyFile: filepath.Join(ConfigDir(), "typesafe.key"), Threshold: 0.5, Timeout: MS(1500)},
+		Refine: RefineConfig{Mode: "fix-words", Model: "claude-haiku-5-5", Effort: "low",
+			AgentCopy: "refined", Context: RefineContextConfig{Screen: "off"}, Providers: map[string]RefineProviderConfig{}},
 		Deliver: DeliverConfig{HerdrApps: []string{"com.github.wez.wezterm"}},
 		Keypad:  KeypadConfig{Sender: "user", State: filepath.Join(stateHome(), "megavoice", "keypad.json"), Send: []string{}},
 		Update:  UpdateConfig{Command: []string{}},
@@ -535,6 +576,10 @@ func Load(o LoadOpts) (Loaded, error) {
 	}
 	for _, p := range []*string{&l.Store.Data, &l.Store.Labels, &l.ASR.Doubao.KeyFile, &l.Names.People, &l.Names.KeyFile, &l.ASR.FunASR.Root, &l.ASR.FunASR.LLM, &l.Meeting.Data, &l.Meeting.Align.FeishuArchive, &l.Meeting.Ingest.Wiki, &l.Meeting.Page.TokenFile, &l.Meeting.Ingest.Repos, &l.Meeting.Ingest.Assets, &l.MicServer.State, &l.MicServer.Socket, &l.Remote.State, &l.Remote.Relay.ProvisionKey, &l.Remote.Relay.RoomTagKey, &l.Keypad.State} {
 		*p = expandHome(*p)
+	}
+	for name, p := range l.Refine.Providers {
+		p.KeyFile = expandHome(p.KeyFile)
+		l.Refine.Providers[name] = p
 	}
 	errs := l.validate()
 	if o.Check != nil {
@@ -662,6 +707,38 @@ func (c Config) validate() []string {
 	}
 	if c.Names.Timeout <= 0 {
 		bad("names.timeout", "must be above 0")
+	}
+	r := c.Refine
+	oneOf("refine.mode", r.Mode, RefineModes...)
+	oneOf("refine.effort", r.Effort, "off", "low", "medium", "high")
+	oneOf("refine.agent_copy", r.AgentCopy, "refined", "both", "raw")
+	oneOf("refine.context.screen", r.Context.Screen, "off", "ocr", "image")
+	if r.Timeout < 0 {
+		bad("refine.timeout", "must not be negative")
+	}
+	for name, p := range r.Providers {
+		key := "refine.providers." + name
+		if !slugRE.MatchString(name) {
+			bad(key, "%q: want lowercase letters, digits and -", name)
+		}
+		oneOf(key+".kind", p.Kind, "anthropic", "openai")
+		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			bad(key+".base_url", "%q is not an http(s) URL", p.BaseURL)
+		}
+		if p.KeyFile == "" {
+			bad(key+".key_file", "empty: the file holding the provider's key")
+		}
+	}
+	if r.On {
+		switch p, ok := r.Providers[r.Provider]; {
+		case !ok:
+			bad("refine.provider", "%q is not a [refine.providers.<name>] table; the step needs one, with your own key", r.Provider)
+		case p.Kind == "openai":
+			bad("refine.provider", "%s is kind openai, which this build has no client for", r.Provider)
+		}
+		if r.Model == "" {
+			bad("refine.model", "empty while on is true")
+		}
 	}
 	for i, e := range c.Compare.Engines {
 		oneOf("compare.engines", e, Engines...)
@@ -823,6 +900,25 @@ func (c Config) Uses(engine string) bool {
 // key_var. An error never quotes the file.
 func (d DoubaoConfig) Key() (string, error) { return readKey(d.KeyFile, d.KeyVar) }
 
+// Key reads the provider's key from key_file, the whole file.
+func (p RefineProviderConfig) Key() (string, error) { return readKey(p.KeyFile, "") }
+
+// Prompt is the mode's instruction to the model: modes.d/<mode>.md beside
+// the config when the user keeps one, else the built-in.
+func (r RefineConfig) Prompt() (string, error) {
+	b, err := os.ReadFile(filepath.Join(ConfigDir(), "modes.d", r.Mode+".md"))
+	if errors.Is(err, fs.ErrNotExist) {
+		b, err = defaults.ReadFile("defaults/modes/" + r.Mode + ".md")
+	}
+	if err != nil {
+		return "", err
+	}
+	if s := strings.TrimSpace(string(b)); s != "" {
+		return s, nil
+	}
+	return "", fmt.Errorf("the prompt of mode %s is empty", r.Mode)
+}
+
 // Key reads the TypeSafe key from key_file, as DoubaoConfig.Key reads its.
 func (n NamesConfig) Key() (string, error) { return readKey(n.KeyFile, n.KeyVar) }
 
@@ -898,11 +994,15 @@ func (l Loaded) WriteEffective(w io.Writer, prog string, tables ...string) {
 
 func writeTable(w io.Writer, v reflect.Value, path []string, source func(string) string) {
 	t := v.Type()
-	var tables []int
+	var tables, maps []int
 	for i := range t.NumField() {
 		f := t.Field(i)
 		if f.Type.Kind() == reflect.Struct {
 			tables = append(tables, i)
+			continue
+		}
+		if f.Type.Kind() == reflect.Map { // a table per key
+			maps = append(maps, i)
 			continue
 		}
 		name := f.Tag.Get("toml")
@@ -913,6 +1013,16 @@ func writeTable(w io.Writer, v reflect.Value, path []string, source func(string)
 		p := append(slices.Clone(path), t.Field(i).Tag.Get("toml"))
 		fmt.Fprintf(w, "\n[%s]\n", strings.Join(p, "."))
 		writeTable(w, v.Field(i), p, source)
+	}
+	for _, i := range maps {
+		m := v.Field(i)
+		keys := m.MapKeys()
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(a.String(), b.String()) })
+		for _, k := range keys {
+			p := append(slices.Clone(path), t.Field(i).Tag.Get("toml"), k.String())
+			fmt.Fprintf(w, "\n[%s]\n", strings.Join(p, "."))
+			writeTable(w, m.MapIndex(k), p, source)
+		}
 	}
 }
 

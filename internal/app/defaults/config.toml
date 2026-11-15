@@ -84,6 +84,36 @@
 # threshold = 0.5            # an option Jev gives this probability or more is applied
 # timeout = "1500ms"         # past this the take is delivered as decoded
 
+[refine]                     # the model step: after recognition, one call to a model puts mis-heard words right
+#                            # before the text is delivered. It needs a provider table and your own key
+# on = false                 # off: no call is made. On, a call that is slow, fails or is refused leaves the text as it was
+# mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else. Its prompt is
+#                            # modes.d/fix-words.md beside this file when you keep one, else the built-in
+# provider = ""              # the [refine.providers.<name>] table the call goes to
+# model = "claude-haiku-5-5"   # the provider's model id
+# effort = "low"             # off, low, medium, high: how much the model thinks first; off is no thinking
+#                            # where the model allows it
+# timeout = "0s"             # how long a take waits for the model before it is delivered as it stood. "0s": 20s for
+#                            # a take toward an agent pane or a Telegram chat, which nobody waits on, and 10s for
+#                            # one held for the answer: any other take, and every take while wait = true
+# wait = false               # true: every take is held for the model's answer. false: a take toward an agent pane
+#                            # or a Telegram chat is delivered when the answer is ready; a take for an
+#                            # application window is held as well
+#                            # agent_copy and [refine.context] are accepted and change nothing in this build:
+#                            # the corrected text is what is delivered, and the dictation travels alone
+# agent_copy = "refined"     # what an agent pane or chat gets: refined (the corrected text), both, raw
+# providers = {}             # one table per provider, in place of this line:
+#                            #   [refine.providers.anthropic]
+#                            #   kind = "anthropic"                        # anthropic: the Messages API; openai: chat completions
+#                            #   base_url = "https://api.anthropic.com"    # or a gateway's route for that API
+#                            #   key_file = "~/.config/megavoice/anthropic.key"   # the file holding the key (the key never goes in this file)
+
+[refine.context]             # what travels with the dictation, as what was in front of you
+# app = false                # the application and its window's title
+# field = false              # the text of the field or pane you dictate into
+# clipboard = false          # what you copied just before the take
+# screen = "off"             # the front window: off, ocr (its text, read on this Mac) or image
+
 [deliver]
 # herdr_apps = ["com.github.wez.wezterm"]   # bundle ids of the terminals herdr runs in
 

@@ -44,6 +44,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,7 @@ import (
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/post"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -132,11 +134,22 @@ type View struct {
 	// Send says that take presses Enter after its paste.
 	Send       bool
 	Delivering bool
+	// Refining says that take's text is recognised and waits on the model
+	// step; Live then gives the text as recognised, unless a take records.
+	Refining bool
 	// Target names a locked destination; empty for an ordinary Mac take.
 	Target string
 	// Estimate is the time left until that take's text is ready; 0 when it
 	// cannot be estimated yet.
 	Estimate func() time.Duration
+}
+
+// RefineInput is a take as the model step gets it: its text after the post
+// chain and the names gate, and where it will be delivered, as its record
+// names that (nil when the target does not say).
+type RefineInput struct {
+	Text   string
+	Target *store.Target
 }
 
 // UI shows the controller's state; the overlay implements it. Flash shows a
@@ -169,7 +182,16 @@ type Controller struct {
 	// Names, when set, runs on a dictated take's text after Post and gives
 	// the text to deliver, and the names line to record when it fired (nil:
 	// none). The take's .txt keeps the text before it.
-	Names       func(ctx context.Context, text string) (string, *store.Event)
+	Names func(ctx context.Context, text string) (string, *store.Event)
+	// Refine, when set, is asked for each dictated take once its text is
+	// ready, after Names: nil when the model step is off for this take, else
+	// the call that gives the text to deliver and the refine line to record.
+	// While the call runs the take waits, as it does for its turn, and the
+	// view says so (View.Refining). The take's .txt keeps the text before it.
+	Refine func() func(ctx context.Context, in RefineInput) (string, *store.Event)
+	// Warm, when set, is called on its own goroutine as each take starts:
+	// it opens what the take's end will use, the model step's connection.
+	Warm        func()
 	Deliver     Deliverer
 	UI          UI
 	Store       store.Store
@@ -340,7 +362,9 @@ type take struct {
 	send        bool      // press Enter after delivery
 	sealed      bool      // delivery has decided on send
 	delivering  bool
-	cancelled   bool // Esc: transcribed and kept as cancelled, never delivered
+	refining    bool   // the model step's call is under way (View.Refining)
+	heard       string // the text that call works on
+	cancelled   bool   // Esc: transcribed and kept as cancelled, never delivered
 	stopAt      time.Time
 	why         string // non-empty when the stream ended on its own
 }
@@ -993,6 +1017,9 @@ func (c *Controller) startWithLocked(trigger string, tapAt time.Time, src audio.
 	if c.Tee != nil {
 		r.tee = c.Tee(r.base)
 	}
+	if c.Warm != nil {
+		go c.Warm()
+	}
 	c.seq++
 	r.seq = c.seq
 	if r.turn == nil {
@@ -1422,6 +1449,32 @@ func (c *Controller) finish(r *take, total int) {
 			log.Printf("session: names %d ms, %d spans judged, %d written: %q", ev.LatencyMS, ev.N, len(ev.Names), text)
 		}
 	}
+	c.mu.Lock()
+	cancelled = r.cancelled
+	c.mu.Unlock()
+	var note string // what the model step did, for the overlay once the text is out
+	// endTarget is where the take goes: the recording's stop chooses the
+	// destination. Enter during processing can only add Enter after an
+	// already chosen paste.
+	endTarget := func() Target {
+		target := r.target.get()
+		if et, ok := target.(EndTarget); ok {
+			target = et.ForEnd(r.kind == "enter" && failed == 0 && captureErr == nil)
+		}
+		return target
+	}
+	if c.Refine != nil && c.OnChunks == nil && text != "" && !cancelled {
+		if run := c.Refine(); run != nil {
+			c.refining(r, text)
+			var ev *store.Event
+			if text, ev = run(c.ctx(), RefineInput{Text: text, Target: StoreTarget(endTarget())}); ev != nil {
+				c.Record(r.base, *ev)
+				note = refineNote(ev)
+				log.Printf("session: refine %d ms, %d edits: %q", ev.LatencyMS, len(ev.Edits), text)
+			}
+			c.refining(r, "")
+		}
+	}
 	<-r.turn
 	unlock, _ := c.LockDelivery(0)
 	defer unlock()
@@ -1448,12 +1501,7 @@ func (c *Controller) finish(r *take, total int) {
 	r.delivering = true
 	c.updateLocked()
 	c.mu.Unlock()
-	target := r.target.get()
-	if et, ok := target.(EndTarget); ok {
-		// The recording's stop chooses the destination. Enter during
-		// processing can only add Enter after an already chosen paste.
-		target = et.ForEnd(r.kind == "enter" && failed == 0 && captureErr == nil)
-	}
+	target := endTarget()
 	de := store.Event{Ev: "deliver", N: 1, Via: "auto", Target: StoreTarget(target), Chars: chars(text), Submit: "none", Source: "delivered"}
 	if failed > 0 || text != saved { // no .txt, or not its text: the record keeps what went out
 		de.Text = text
@@ -1526,7 +1574,42 @@ func (c *Controller) finish(r *take, total int) {
 		c.UI.Alert(MsgIncomplete())
 	case why != "":
 		c.UI.Flash(why)
+	case note != "":
+		c.UI.Flash(note)
 	}
+}
+
+// refining marks r as waiting on the model step with heard, the text the
+// call works on, and shows it; "" ends the wait.
+func (c *Controller) refining(r *take, heard string) {
+	c.mu.Lock()
+	r.refining, r.heard = heard != "", heard
+	c.updateLocked()
+	c.mu.Unlock()
+}
+
+// refineNote is what the overlay says once a take the model step ran on is
+// out: the words it changed, or that the text went out as it stood.
+func refineNote(ev *store.Event) string {
+	switch {
+	case ev.Why == refine.WhyTimeout:
+		return l10n.T("转译超时 · 已按原文", "Model too slow · text as recognised")
+	case ev.Why != "":
+		return l10n.T("转译未成 · 已按原文", "Model step failed · text as recognised")
+	}
+	var parts []string
+	for i, e := range ev.Edits {
+		if i == 3 {
+			parts = append(parts, fmt.Sprintf("+%d", len(ev.Edits)-i))
+			break
+		}
+		from, to := refine.Changed(e.From, e.To)
+		if from == "" || to == "" {
+			from, to = e.From, e.To
+		}
+		parts = append(parts, from+" → "+to)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // readBack has the Deliverer read the target back after the delivery the
@@ -1893,6 +1976,10 @@ func (c *Controller) updateLocked() {
 		t := live[n-1]
 		v.Delivering = t.delivering && t.send && t.targetLabel != ""
 		v.Started = t.stopAt
+		if v.Refining = t.refining; v.Refining && c.rec == nil {
+			heard := t.heard
+			v.Live = func() string { return heard }
+		}
 		if c.rec == nil {
 			v.Send = t.send
 			v.Target = t.targetLabel
@@ -1906,7 +1993,7 @@ func (c *Controller) updateLocked() {
 			return c.est.left(p)
 		}
 	}
-	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send, v.Target, v.Delivering}); k != c.shown {
+	if k := (viewKey{c.rec, v.Warming, v.NoSignal, v.Started, v.Send, v.Target, v.Delivering, v.Refining}); k != c.shown {
 		c.shown = k
 		c.UI.Show(v)
 	}
@@ -1940,6 +2027,7 @@ type viewKey struct {
 	send       bool
 	target     string
 	delivering bool
+	refining   bool
 }
 
 func (c *Controller) newChunker() Chunker {

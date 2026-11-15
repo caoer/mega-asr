@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"github.com/caoer/mega-asr/internal/audio"
 	"github.com/caoer/mega-asr/internal/score"
 	"github.com/caoer/mega-asr/internal/session"
+	"github.com/caoer/mega-asr/internal/store"
 	"github.com/caoer/mega-asr/internal/takes"
 )
 
@@ -99,11 +101,30 @@ func transcribe(o app.LoadOpts, args []string) error {
 		return err
 	}
 	defer d.close()
+	var refined *store.Event
+	if !*plain {
+		take := c.RefineStage(o).Take
+		d.r.ctrl.Refine = func() func(context.Context, session.RefineInput) (string, *store.Event) {
+			run := take()
+			if run == nil {
+				return nil
+			}
+			return func(ctx context.Context, in session.RefineInput) (text string, ev *store.Event) {
+				text, ev = run(ctx, in)
+				refined = ev
+				return text, ev
+			}
+		}
+	}
 	text, err := d.text(fs.Arg(0))
 	if err != nil {
 		return err
 	}
 	fmt.Println(text)
+	if refined != nil {
+		line, _ := json.Marshal(refined)
+		fmt.Fprintf(os.Stderr, "refine %s\n", line)
+	}
 	if id := d.logid(); id != "" {
 		fmt.Fprintln(os.Stderr, "doubao logid", id)
 	}

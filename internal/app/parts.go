@@ -16,6 +16,7 @@ import (
 	"github.com/caoer/mega-asr/internal/l10n"
 	"github.com/caoer/mega-asr/internal/names"
 	"github.com/caoer/mega-asr/internal/post"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 	"github.com/caoer/mega-asr/internal/takes"
@@ -106,6 +107,110 @@ func (c Config) NamesStage() func(ctx context.Context, text string) (string, *st
 		}
 		return r.Text, ev
 	}
+}
+
+// RefineStage is the model step of [refine] (RefineConfig) for a
+// controller: Take is session.Controller.Refine and Warm its Warm. Each
+// reads the config file (o) as it is called, so the menu's switch and
+// `config set refine.on` apply at the next take.
+type RefineStage struct {
+	o    LoadOpts
+	mu   sync.Mutex
+	last RefineConfig
+}
+
+func (c Config) RefineStage(o LoadOpts) *RefineStage {
+	o.Check = nil
+	return &RefineStage{o: o, last: c.Refine}
+}
+
+// current is [refine] as the file reads now; as it last loaded when the
+// file no longer does.
+func (s *RefineStage) current() RefineConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if l, err := Load(s.o); err != nil {
+		log.Printf("refine: %v; keeping refine.on = %v", err, s.last.On)
+	} else {
+		s.last = l.Refine
+	}
+	return s.last
+}
+
+// Take gives a take's model step; nil while refine.on is off: no call is
+// made and no line written.
+func (s *RefineStage) Take() func(context.Context, session.RefineInput) (string, *store.Event) {
+	r := s.current()
+	if !r.On {
+		return nil
+	}
+	return func(ctx context.Context, in session.RefineInput) (string, *store.Event) {
+		return r.Run(ctx, in.Text, in.Target)
+	}
+}
+
+// Warm opens the provider's connection as a take starts, so the call at
+// its end does not wait for the handshake; nothing while refine.on is off.
+func (s *RefineStage) Warm() {
+	r := s.current()
+	if !r.On {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), r.Limit(nil))
+	defer cancel()
+	if err := (refine.Anthropic{BaseURL: r.Providers[r.Provider].BaseURL}).Warm(ctx); err != nil {
+		log.Printf("refine: opening the connection: %v", err)
+	}
+}
+
+// Limit is how long a take for target waits for the model: timeout when
+// it is set; else 20 s for a take nobody waits on, one for an agent pane
+// or a Telegram chat while wait is off, and 10 s for a take held for the
+// answer.
+func (r RefineConfig) Limit(target *store.Target) time.Duration {
+	switch {
+	case r.Timeout > 0:
+		return time.Duration(r.Timeout)
+	case !r.Wait && target != nil && (target.Kind == "herdr" || target.Kind == "telegram"):
+		return 20 * time.Second
+	}
+	return 10 * time.Second
+}
+
+// Run is the model step on one text bound for target: the text to deliver
+// and the take's refine line. Whatever keeps the step from an answer it
+// can apply — no key, a slow or failed call, a refusal, an answer past the
+// guards — the text comes back as it was, and the line says why.
+func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target) (string, *store.Event) {
+	ev := &store.Event{V: 1, Ev: "refine", Mode: r.Mode, Provider: r.Provider, Model: r.Model, Effort: r.Effort}
+	fail := func(why string, err error) (string, *store.Event) {
+		ev.At, ev.Why, ev.Err = time.Now(), why, err.Error()
+		log.Printf("refine: %s: %v; delivering the text as it stood", why, err)
+		return text, ev
+	}
+	p := r.Providers[r.Provider]
+	key, err := p.Key()
+	if err != nil {
+		return fail("key", err)
+	}
+	prompt, err := r.Prompt()
+	if err != nil {
+		return fail(refine.WhyError, err)
+	}
+	res := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Model: r.Model, Effort: r.Effort,
+		System: []string{prompt}, Timeout: r.Limit(target)}.Run(ctx, text)
+	ev.LatencyMS, ev.Dropped = res.Wall.Milliseconds(), res.Dropped
+	if u := res.Usage; u != (refine.Usage{}) {
+		ev.Usage = &store.RefineUsage{Input: u.Input, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead, Output: u.Output}
+	}
+	for _, e := range res.Edits {
+		ev.Edits = append(ev.Edits, store.RefineEdit{From: e.From, To: e.To, Why: e.Why})
+	}
+	if res.Err != nil {
+		return fail(res.Why, res.Err)
+	}
+	ev.At = time.Now()
+	return res.Text, ev
 }
 
 // Doubao is the Doubao ASR 2.0 client; its key is read from key_file at

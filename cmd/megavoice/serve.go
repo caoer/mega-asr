@@ -254,6 +254,7 @@ func (s *server) ready() {
 		deskRouter = s.desk.router(s.dlv, send)
 		dlv = deskRouter
 	}
+	stage := s.cfg.RefineStage(s.opts)
 	s.ctrl = &session.Controller{
 		Engine:      engine,
 		Model:       model,
@@ -266,6 +267,8 @@ func (s *server) ready() {
 		Tee:         s.cfg.Fanout(s.opts, tr).Tee,
 		Post:        s.cfg.Post(),
 		Names:       s.cfg.NamesStage(),
+		Refine:      stage.Take,
+		Warm:        stage.Warm,
 		Deliver:     dlv,
 		UI:          ui,
 		Store:       store.Store{Dir: s.cfg.Store.Data},
