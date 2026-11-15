@@ -176,6 +176,24 @@ func topMatches(ms []match, max int) []int {
 	return ix
 }
 
+// PerTake is how many of g's Blocks, the last ones, change from take to
+// take when g is what reach carries for a dictation: under ReachMatching
+// the terms and the mis-hearings, which Matching picks by the dictation;
+// none under the other reaches. The about line is the same each take.
+func (g Glossary) PerTake(reach string) int {
+	if reach != ReachMatching {
+		return 0
+	}
+	n := 0
+	if len(g.Terms) > 0 {
+		n++
+	}
+	if len(g.Hints) > 0 {
+		n++
+	}
+	return n
+}
+
 // hintArrow stands between the two sides of a mis-hearing in its block; an
 // entry that holds it would read as one more mis-hearing.
 const hintArrow = "→"

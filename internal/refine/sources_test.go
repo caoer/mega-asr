@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -34,15 +35,29 @@ func (s *spot) PaneText(_ context.Context, lines int) (string, bool, error) {
 
 // board is a Pasteboard whose copies the test makes.
 type board struct {
-	count int
-	own   bool
-	text  string
-	none  bool // holds no text, or a concealed copy
-	reads int
+	mu     sync.Mutex
+	count  int
+	own    bool
+	text   string
+	none   bool // holds no text, or a concealed copy
+	counts int  // Count calls
+	looks  int  // Read calls
+	reads  int  // texts Read gave out
 }
 
-func (b *board) Count() (int, bool) { return b.count, b.own }
-func (b *board) Text() (string, bool) {
+func (b *board) Count() (int, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.counts++
+	return b.count, b.own
+}
+func (b *board) Read(want func(int, bool) bool) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.looks++
+	if !want(b.count, b.own) {
+		return "", false
+	}
 	b.reads++
 	return b.text, !b.none
 }
@@ -250,9 +265,122 @@ func TestTheClipboardOnlyWhenCopiedForTheTake(t *testing.T) {
 	off := true
 	w.On = func() bool { return !off }
 	w.look(time.Now())
-	if _, at := w.Last(); !at.IsZero() {
-		t.Errorf("a watcher switched off dates a copy: %v", at)
+	if _, at, known := w.Last(); known || !at.IsZero() {
+		t.Errorf("a watcher switched off dates a copy: %v, known %v", at, known)
 	}
+	// A take started while the watcher had not looked: no copy is dated, so
+	// none is sent, even one made during the take.
+	ts = clip.Start()
+	b.copy("during, unwatched")
+	if p := byName(ts.Read(context.Background(), slack, nil))[SourceClipboard]; p.Withheld != WithheldStale {
+		t.Errorf("a copy while the watcher was off: %+v", p)
+	}
+}
+
+// A take's start asks the clipboard nothing (it may start under a lock),
+// and its stop looks at it once: the count, whether it is Mega Voice's own
+// copy, and the text, in one call, so no own copy lands between them.
+func TestTheClipboardInOneLook(t *testing.T) {
+	b := &board{}
+	w := &ClipWatch{Board: b}
+	w.look(time.Now())
+	clip := TextSources{Clipboard: true, Clip: w}
+	b.counts = 0
+	ts := clip.Start()
+	if b.counts != 0 || b.looks != 0 {
+		t.Errorf("the start asked the clipboard %d times, looked %d", b.counts, b.looks)
+	}
+	b.copy("during")
+	if p := byName(ts.Read(context.Background(), slack, nil))[SourceClipboard]; !strings.HasSuffix(p.Text, "\nduring") {
+		t.Errorf("a copy during the take: %+v", p)
+	}
+	if b.counts != 0 || b.looks != 1 {
+		t.Errorf("the stop asked the count %d times beside its %d looks", b.counts, b.looks)
+	}
+}
+
+// A source switched off during the take is not read at its stop, and an
+// application excluded during it sends nothing; a switch turned on during
+// it waits for the next take.
+func TestASourceSwitchedOffDuringTheTake(t *testing.T) {
+	b := &board{}
+	w := &ClipWatch{Board: b}
+	w.look(time.Now())
+	b.copy("secret plan")
+	s := &spot{field: "draft", hasField: true}
+	ts := TextSources{App: true, Field: true, Clipboard: true, Clip: w}.Start()
+	got := byName(ts.Within(TextSources{App: true, Pane: true, Clip: w}).Read(context.Background(), slack, s))
+	if len(got) != 1 || got[SourceApp].Text == "" || s.reads != 0 || b.looks != 0 {
+		t.Errorf("field and clipboard off at the stop: %+v, field read %d, clipboard looked %d", got, s.reads, b.looks)
+	}
+	excluded := TextSources{App: true, Field: true, Clipboard: true, Exclude: []string{slack.BundleID}, Clip: w}
+	for _, p := range ts.Within(excluded).Read(context.Background(), slack, s) {
+		if p.Withheld != WithheldExcluded {
+			t.Errorf("excluded at the stop: %+v", p)
+		}
+	}
+	if parts := ts.Within(TextSources{}).Read(context.Background(), slack, s); len(parts) != 0 {
+		t.Errorf("all off at the stop: %+v", parts)
+	}
+	if s.reads != 0 || b.looks != 0 {
+		t.Errorf("field read %d, clipboard looked %d", s.reads, b.looks)
+	}
+}
+
+// A take sent to Telegram reads none of them: it is dictated into nothing
+// on the Mac, and the clipboard's guards have nothing to look at.
+func TestATakeSentToTelegramReadsNoTextSource(t *testing.T) {
+	b := &board{}
+	w := &ClipWatch{Board: b}
+	w.look(time.Now())
+	b.copy("hunter2")
+	chat := &store.Target{Kind: "telegram", App: "Build chat", Title: "releases"}
+	parts := TextSources{App: true, Field: true, Pane: true, Clipboard: true, Clip: w}.Start().Read(context.Background(), chat, nil)
+	if len(parts) != 4 || b.looks != 0 || Compose(parts, nil) != "" {
+		t.Errorf("%d parts, clipboard looked %d, context %q", len(parts), b.looks, Compose(parts, nil))
+	}
+	for _, p := range parts {
+		if p.Withheld != WithheldNone {
+			t.Errorf("%+v", p)
+		}
+	}
+}
+
+// While the clipboard source is off its watcher waits with no timer and
+// asks the clipboard nothing; Wake has it look again.
+func TestTheWatcherWaitsWhileTheClipboardIsOff(t *testing.T) {
+	b := &board{}
+	var mu sync.Mutex
+	on, asked := false, 0
+	w := &ClipWatch{Board: b, Every: time.Millisecond, On: func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		asked++
+		return on
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { w.Run(ctx); close(done) }()
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	if asked != 1 {
+		t.Errorf("off: On asked %d times in 50 ms at a 1 ms period", asked)
+	}
+	on = true
+	mu.Unlock()
+	w.Wake()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, _, known := w.Last(); known {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("woken, the watcher never looked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
 }
 
 func TestComposeSendsTheScreenOnlyWhereTheFieldOrPaneGiveNothing(t *testing.T) {

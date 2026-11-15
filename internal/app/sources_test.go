@@ -113,3 +113,39 @@ func TestTextSourcesOffReadNothing(t *testing.T) {
 		}
 	}
 }
+
+// A source switched off while the take records is not read at its stop,
+// and the step switched off reads none: the read keeps to the config as it
+// stands then.
+func TestASourceSwitchedOffMidTakeIsNotRead(t *testing.T) {
+	p := newProvider(t)
+	dir := isolate(t)
+	path := refineConfig(t, dir, p.URL, "[refine.context]\napp = true\nfield = true\n")
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := l.RefineStage(LoadOpts{})
+	edit := func(from, to string) {
+		b, _ := os.ReadFile(path)
+		if err := os.WriteFile(path, []byte(strings.Replace(string(b), from, to, 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	slack := store.Target{Kind: "app", App: "Slack", BundleID: "com.tinyspeck.slackmacgap", Title: "#infra"}
+
+	read := stage.Sources()
+	edit("field = true", "field = false")
+	target := &field{rec: slack, text: "draft"}
+	parts := read(context.Background(), target)
+	if len(parts) != 1 || parts[0].Source != refine.SourceApp || target.reads != 0 {
+		t.Errorf("field off mid-take: %+v, field read %d", parts, target.reads)
+	}
+
+	edit("field = false", "field = true")
+	read = stage.Sources()
+	edit("on = true", "on = false ")
+	if parts := read(context.Background(), target); len(parts) != 0 || target.reads != 0 {
+		t.Errorf("step off mid-take: %+v, field read %d", parts, target.reads)
+	}
+}

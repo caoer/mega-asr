@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -334,6 +335,58 @@ func TestAnthropicRequest(t *testing.T) {
 		if _, ok := m.got[key]; ok {
 			t.Errorf("request sends %s", key)
 		}
+	}
+}
+
+// A text mode carries the glossary entries its dictation sounds like, so
+// those blocks change from take to take: the cache breakpoint is on the
+// about line before them, and two takes send the same bytes up to it, so
+// the second reads what the first wrote. With all of the glossary it stays
+// on the last block.
+func TestCacheBreakpointBeforeThePerTakeBlocks(t *testing.T) {
+	g := NewGlossaryUncut("写后端的工程师", []string{"Haiku", "Opus", "Claude", "Redis"},
+		[]Hint{{"海库", "Haiku"}, {"欧普斯", "Opus"}, {"瑞迪斯", "Redis"}})
+	type sys struct {
+		Text  string `json:"text"`
+		Cache *cache `json:"cache_control"`
+	}
+	system := func(reach, text string) []sys {
+		gl, _ := g.Reach(reach, text)
+		b, err := Anthropic{}.body(Request{Model: "claude-haiku-5-5", Effort: "low", Dictation: text, Output: FullText,
+			System: append([]string{"prompt"}, gl.Blocks()...), PerTake: gl.PerTake(reach)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct{ System []sys }
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m.System
+	}
+	marked := func(s []sys) int {
+		at := -1
+		for i, b := range s {
+			if b.Cache != nil {
+				if at >= 0 {
+					t.Fatalf("two cache marks: %+v", s)
+				}
+				at = i
+			}
+		}
+		return at
+	}
+	a, b := system(ReachMatching, "用海库跑一下"), system(ReachMatching, "让欧普斯和瑞迪斯接上")
+	if len(a) != 4 || len(b) != 4 || reflect.DeepEqual(a[2:], b[2:]) {
+		t.Fatalf("matching blocks do not differ by dictation:\n%+v\n%+v", a, b)
+	}
+	if marked(a) != 1 || marked(b) != 1 || !strings.Contains(a[1].Text, "<about>") || !reflect.DeepEqual(a[:2], b[:2]) {
+		t.Errorf("breakpoint is not on the same about block in both takes:\n%+v\n%+v", a, b)
+	}
+	if all := system(ReachAll, "用海库跑一下"); marked(all) != len(all)-1 {
+		t.Errorf("all of the glossary: breakpoint not on the last block: %+v", all)
+	}
+	if gl := (Glossary{About: "x"}); gl.PerTake(ReachMatching) != 0 {
+		t.Errorf("a matching glossary with no entries changes %d blocks", gl.PerTake(ReachMatching))
 	}
 }
 

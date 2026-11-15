@@ -193,7 +193,11 @@ func (c *Controller) Resend(q Resend) (store.Event, error) {
 		where = q.To.String()
 	}
 	name := filepath.Base(base)
-	if err := c.Deliver.Deliver(q.To, out); err != nil {
+	deliver := func() error { return c.Deliver.Deliver(q.To, out) }
+	if cd, ok := c.Deliver.(ClipDeliverer); ok && sent != "" { // a both copy: the clipboard keeps the take's text
+		deliver = func() error { return cd.DeliverClip(q.To, out, text) }
+	}
+	if err := deliver(); err != nil {
 		log.Printf("session: resend %s to %s: %v; text left on the clipboard", name, q.To, err)
 		de.At, de.Err = time.Now(), err.Error()
 		rerr := c.Record(base, de)

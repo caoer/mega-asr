@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -711,5 +712,28 @@ func TestDismiss(t *testing.T) {
 	}
 	if m, s, d, _, _ := counts(); m != 2 || s != 2 || d != 2 {
 		t.Errorf("after the undo of one: menu %d strip %d dismissed %d; want 2 2 2", m, s, d)
+	}
+}
+
+// A take that kept its backup track lists it and the record of its input
+// among its files, whichever track its text came from.
+func TestKeptBackupFiles(t *testing.T) {
+	dir := t.TempDir()
+	take(t, dir, "20200314-092653", "a take written for the test", "A take written for the test.")
+	bdir := filepath.Join(dir, store.BackupDir)
+	if err := os.MkdirAll(bdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := audio.SaveWAV(filepath.Join(bdir, "20200314-092653.wav"), make([]int16, audio.Rate)); err != nil {
+		t.Fatal(err)
+	}
+	if err := (store.Store{Dir: bdir}).SaveInput(filepath.Join(bdir, "20200314-092653"), audio.TakeInput{Source: "local", Name: "Podium Condenser", UID: "podium-uid"}); err != nil {
+		t.Fatal(err)
+	}
+	var tk Take
+	json.Unmarshal(request(listener(t, dir), http.MethodGet, "/takes/api/take/20200314-092653", nil).Body.Bytes(), &tk)
+	want := []string{filepath.Join(bdir, "20200314-092653.wav"), filepath.Join(bdir, "20200314-092653.input.json")}
+	if tk.Track != "main" || len(tk.Files) < 2 || !slices.Equal(tk.Files[len(tk.Files)-2:], want) {
+		t.Fatalf("track %q, files %v; want main, ending in %v", tk.Track, tk.Files, want)
 	}
 }

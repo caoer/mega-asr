@@ -664,8 +664,10 @@ func stepIn(calls *[]string) func(string) (*session.RefineStep, error) {
 // Run again from the page on a held take is one call in the mode picked:
 // its line is the answer and joins the record, nothing is delivered and the
 // take stays held. Send then delivers the model's text to the take's own
-// pane, once: a second send is 409 delivered and delivers nothing.
+// pane, once, under agent_copy both with the recognised text under its mark,
+// as to every target: a second send is 409 delivered and delivers nothing.
 func TestRunAgainFromPageThenSend(t *testing.T) {
+	const sent = "pane:w1:p2|tidy: 用海库跑一下 Python\n\n[Mega Voice · as heard]\n用海库跑一下 Python"
 	dir := t.TempDir()
 	base := heldTake(t, dir, "20200314-092653", "tap")
 	del := &fakeDeliverer{}
@@ -688,7 +690,7 @@ func TestRunAgainFromPageThenSend(t *testing.T) {
 		t.Fatalf("calls %v, line %+v, delivered %q, state %+v", calls, line, del.String(), store.State(mustEvents(t, base)))
 	}
 	w = post(h, "/takes/api/send", `{"id":"20200314-092653","text":"model"}`, nil)
-	if w.Code != http.StatusOK || del.String() != "pane:w1:p2|tidy: 用海库跑一下 Python" {
+	if w.Code != http.StatusOK || del.String() != sent {
 		t.Fatalf("send: %d %s, delivered %q", w.Code, w.Body, del.String())
 	}
 	evs := mustEvents(t, base)
@@ -705,7 +707,7 @@ func TestRunAgainFromPageThenSend(t *testing.T) {
 	if code, why := refusal(t, post(h, "/takes/api/rerefine", `{"id":"20200314-092653","mode":"tidy"}`, nil)); code != http.StatusConflict || why != "delivered" || len(calls) != 1 {
 		t.Errorf("run again on the delivered take: %d %s, calls %v", code, why, calls)
 	}
-	if del.String() != "pane:w1:p2|tidy: 用海库跑一下 Python" || record(t, base) != before {
+	if del.String() != sent || record(t, base) != before {
 		t.Fatalf("delivered %q; record changed: %v", del.String(), record(t, base) != before)
 	}
 }

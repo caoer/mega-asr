@@ -442,10 +442,11 @@ func stepFixing(copy string) func() *RefineStep {
 // marked is what both adds to the corrected text of 用海库跑一下 ….
 func marked(heard string) string { return "\n\n[Mega Voice · as heard]\n" + heard }
 
-// Toward an agent's target agent_copy chooses what is delivered — refined
-// the corrected text, both the corrected text and the marked changes, raw
-// the text as heard — and every other target gets the corrected text. The
-// deliver line keeps the take's text, never the second part, with what was
+// agent_copy chooses what is delivered: refined the corrected text; both,
+// to every target — an agent's pane, a Telegram chat, a plain pane, an app,
+// a target with no record — the corrected text and the marked changes; raw,
+// toward an agent's target, the text as heard, and every other target the
+// corrected text. The deliver line keeps the take's text, never the second part, with what was
 // sent in its place beside it; the refine line says what went out and keeps
 // the edits; under raw the overlay says they were only recorded.
 func TestRefineAgentCopies(t *testing.T) {
@@ -461,9 +462,11 @@ func TestRefineAgentCopies(t *testing.T) {
 		{"raw", "agent pane", &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}, heard, "", "", "raw"},
 		{"both", "chat", &store.Target{Kind: "telegram"}, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
 		{"raw", "chat", &store.Target{Kind: "telegram"}, heard, "", "", "raw"},
-		{"both", "shell pane", &store.Target{Kind: "herdr", Pane: "w1:p1"}, fixed, fixed, "", ""},
+		{"both", "shell pane", &store.Target{Kind: "herdr", Pane: "w1:p1"}, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
 		{"raw", "shell pane", &store.Target{Kind: "herdr", Pane: "w1:p1"}, fixed, fixed, "", ""},
-		{"both", "app", &store.Target{Kind: "app", App: "Notes"}, fixed, fixed, "", ""},
+		{"both", "app", &store.Target{Kind: "app", App: "Notes"}, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
+		{"both", "unrecorded", nil, fixed + marked(heard), fixed, fixed + marked(heard), "both"},
+		{"refined", "app", &store.Target{Kind: "app", App: "Notes"}, fixed, fixed, "", ""},
 		{"raw", "unrecorded", nil, fixed, fixed, "", ""},
 	} {
 		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
@@ -516,9 +519,8 @@ func TestBothKeepsTheMarkerOffTheTake(t *testing.T) {
 	}
 }
 
-// On a keypad take the copy follows where the take ends: its Enter sends the
-// both copy to the chat; a plain stop pastes the corrected text alone at the
-// cursor.
+// On a keypad take both goes wherever the take ends: its Enter sends the
+// both copy to the chat; a plain stop pastes it at the cursor.
 func TestRefineBothOnAKeypadTake(t *testing.T) {
 	for _, send := range []bool{true, false} {
 		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
@@ -531,7 +533,7 @@ func TestRefineBothOnAKeypadTake(t *testing.T) {
 			r.c.Toggle()
 		}
 		r.wait(t)
-		want := "telegram|用Haiku跑一下 Python"
+		want := "telegram|用Haiku跑一下 Python" + marked("用海库跑一下 Python")
 		if send {
 			want = "chat|用Haiku跑一下 Python" + marked("用海库跑一下 Python")
 		}
@@ -700,7 +702,8 @@ func TestHeldTakeSentAsRecognised(t *testing.T) {
 
 // A model text sent toward an agent's target follows refine.agent_copy as a
 // live take does: both sends the model's text and the recognised one under
-// its mark, and the deliver line keeps the model's text as the take's.
+// its mark, leaving the model's text alone on the clipboard, and the deliver
+// line keeps the model's text as the take's.
 func TestSentModelTextFollowsAgentCopy(t *testing.T) {
 	const heard, fixed = "用海库跑一下 Python", "用Haiku跑一下 Python"
 	agent := &store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}
@@ -717,9 +720,14 @@ func TestSentModelTextFollowsAgentCopy(t *testing.T) {
 		if _, err := r.c.Rerefine(context.Background(), "20200417-104200", fixedStep("fix-words", fixed, &calls), "page"); err != nil {
 			t.Fatal(err)
 		}
+		var clips []string
+		r.c.Deliver = clipDeliverer{recordDeliverer{r.del, *agent}, &clips}
 		de, err := r.c.Resend(Resend{ID: "20200417-104200", To: r.del.Capture(), Text: "model", Once: true, Copy: tc.copy, For: agent})
 		if err != nil || r.del.got() != "telegram|"+tc.got || de.Sent != tc.sent || de.Chars != len([]rune(tc.got)) {
 			t.Errorf("%s: %v, delivered %q, line %+v", tc.copy, err, r.del.got(), de)
+		}
+		if wantClips := map[string][]string{"both": {fixed}}[tc.copy]; !slices.Equal(clips, wantClips) {
+			t.Errorf("%s: clipboard copies %q, want %q", tc.copy, clips, wantClips)
 		}
 	}
 }

@@ -27,9 +27,13 @@ type Request struct {
 	// no thinking on a model that allows it, else its lowest effort.
 	Effort string
 	// System is the instruction in cache order, the most stable block first:
-	// the mode's prompt, then the speaker's glossary. The last block is the
-	// cache breakpoint.
+	// the mode's prompt, then the speaker's glossary.
 	System []string
+	// PerTake is how many of the last System blocks change from take to
+	// take: the glossary entries a call carries for its dictation
+	// (Glossary.PerTake). The cache breakpoint is on the block before them,
+	// the last one every take sends the same; 0 puts it on the last block.
+	PerTake int
 	// Context is what was in front of the speaker, sent inside <context>;
 	// "" sends none.
 	Context string
@@ -142,6 +146,7 @@ type Step struct {
 	Model    string
 	Effort   string
 	System   []string // Request.System
+	PerTake  int      // Request.PerTake
 	Context  string   // Request.Context
 	Names    string   // Request.Names
 	Image    *Image   // Request.Image
@@ -163,7 +168,7 @@ type Result struct {
 func (s Step) Run(ctx context.Context, text string) Result {
 	t0 := time.Now()
 	output := OutputOf(s.Mode)
-	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System,
+	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System, PerTake: s.PerTake,
 		Context: s.Context, Names: s.Names, Image: s.Image, Dictation: text, Output: output})
 	r := Result{Text: text, Usage: reply.Usage, Wall: time.Since(t0)}
 	if err != nil {

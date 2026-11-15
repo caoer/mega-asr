@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
+	"unicode/utf16"
 
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -72,9 +73,42 @@ var telegramChat = regexp.MustCompile(`^(-?[0-9]+|@[A-Za-z0-9_]{1,64})$`)
 // messageID is the send command's report of the message it sent.
 var messageID = regexp.MustCompile(`message (\d+)`)
 
-// TelegramLimit is how many code points Telegram takes in one message; a
-// longer text is refused (MESSAGE_TOO_LONG).
+// TelegramLimit is how long a message Telegram takes; a longer text is
+// refused (MESSAGE_TOO_LONG). It is counted in UTF-16 code units, as
+// Telegram measures text: a part that fits in units fits in code points too,
+// so an emoji or a rare CJK character never takes a part past it.
 const TelegramLimit = 4096
+
+// units is the length of s as Telegram counts it, in UTF-16 code units.
+func units(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
+}
+
+// markCut is where a both copy's second text starts.
+const markCut = "\n\n" + refine.MarkOriginal
+
+// partSent is a send cut after k of n messages went out: the take may have
+// reached the chat in part (session.ErrMaybeSent). err is why message k+1
+// did not go out.
+type partSent struct {
+	k, n int
+	err  error
+}
+
+func (e *partSent) Error() string {
+	return fmt.Sprintf("telegram: %d of %d messages sent, then %s", e.k, e.n, strings.TrimPrefix(e.err.Error(), "telegram: "))
+}
+
+func (e *partSent) Is(target error) bool { return target == session.ErrMaybeSent }
+func (e *partSent) Unwrap() error        { return e.err }
+
+// refused reports whether the message that did not go out was refused, so
+// none of it reached the chat, rather than timed out.
+func (e *partSent) refused() bool { return !errors.Is(e.err, session.ErrMaybeSent) }
 
 // Deliver copies the text, then sends it to t. An error says why the text
 // did not reach the chat; it is on the clipboard either way.
@@ -85,7 +119,7 @@ func (g Telegram) Deliver(t *TelegramTarget, text string) error {
 // DeliverClip copies clip, then sends text to t: in one message, or, past
 // TelegramLimit, in as many as it takes, in order (telegramParts). An error
 // says why the text did not reach the chat; one after a part went out says
-// how many did and wraps session.ErrMaybeSent.
+// how many did and is session.ErrMaybeSent (partSent).
 func (g Telegram) DeliverClip(t *TelegramTarget, text, clip string) error {
 	if g.Copy != nil {
 		if err := g.Copy(clip); err != nil {
@@ -104,11 +138,7 @@ func (g Telegram) DeliverClip(t *TelegramTarget, text, clip string) error {
 			if k == 0 {
 				return err
 			}
-			why := strings.TrimPrefix(err.Error(), "telegram: ")
-			if errors.Is(err, session.ErrMaybeSent) {
-				return fmt.Errorf("telegram: %d of %d messages sent, then %s: %w", k, len(parts), why, session.ErrMaybeSent)
-			}
-			return fmt.Errorf("telegram: %d of %d messages sent, then %s; %w", k, len(parts), why, session.ErrMaybeSent)
+			return &partSent{k: k, n: len(parts), err: err}
 		}
 	}
 	if g.OnSent != nil && t.MessageID > 0 {
@@ -119,8 +149,10 @@ func (g Telegram) DeliverClip(t *TelegramTarget, text, clip string) error {
 
 // send sends one message of at most TelegramLimit code points, through the
 // stream when it takes the send, else by the send command, each under its
-// own deadline; it sets t.MessageID when the send gave one.
+// own deadline; it sets t.MessageID when the send gave one, else leaves it 0,
+// never an earlier message's.
 func (g Telegram) send(t *TelegramTarget, text string) error {
+	t.MessageID = 0
 	wait := g.Wait
 	if wait <= 0 {
 		wait = TelegramWait
@@ -162,31 +194,34 @@ func (g Telegram) send(t *TelegramTarget, text string) error {
 	return nil
 }
 
-// telegramParts is text as messages of at most TelegramLimit code points:
-// text itself when it fits, else cut at the last paragraph break within the
+// telegramParts is text as messages of at most TelegramLimit units: text
+// itself when it fits; a both copy whose first text fits, cut where its
+// second text starts; else cut at the last paragraph break within the
 // limit, else the last line break, else after the last 。, else the last
 // space, else at the limit. The whitespace at a cut is dropped; every other
-// character goes, in order. A both copy past the limit is cut where its
-// second part starts when the first fits.
+// character goes, in order.
 func telegramParts(text string) []string {
 	var parts []string
-	for utf8.RuneCountInString(text) > TelegramLimit {
+	for units(text) > TelegramLimit {
 		end, n := 0, 0
-		for i := range text {
-			if n == TelegramLimit {
+		for i, r := range text {
+			if n += utf16.RuneLen(r); n > TelegramLimit {
 				end = i
 				break
 			}
-			n++
 		}
 		head, cut := text[:end], end
-		for _, sep := range []string{"\n\n", "\n", "。", " "} {
-			if i := strings.LastIndex(head, sep); i > 0 {
-				cut = i
-				if sep == "。" {
-					cut += len(sep)
+		if i := strings.Index(text, markCut); i > 0 && i <= end {
+			cut = i
+		} else {
+			for _, sep := range []string{"\n\n", "\n", "。", " "} {
+				if i := strings.LastIndex(head, sep); i > 0 {
+					cut = i
+					if sep == "。" {
+						cut += len(sep)
+					}
+					break
 				}
-				break
 			}
 		}
 		if part := strings.TrimRightFunc(text[:cut], unicode.IsSpace); part != "" {

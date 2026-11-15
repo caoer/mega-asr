@@ -146,6 +146,12 @@ type CaptureConfig struct {
 	Device  string `toml:"device"`  // ssh: ALSA PCM on that host
 	Channel int    `toml:"channel"` // ssh: 1-based; on a six-channel USB array (e.g. XVF3800) 2 is the ASR beam
 	Remote  string `toml:"remote"`  // remote: a paired mic server's name
+
+	// KeepBackup keeps every take's backup track, backup/<name>.wav beside
+	// the take, with backup/<name>.input.json naming the input it came
+	// from, whether or not the main input went silent: the two inputs can
+	// then be compared. The take is decoded and delivered as without it.
+	KeepBackup bool `toml:"keep_backup"`
 }
 
 // MicServerConfig is `megavoice mic serve` on Linux: it records
@@ -269,7 +275,7 @@ type RefineConfig struct {
 	Provider  string `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
 	Model     string `toml:"model"`      // the provider's model id
 	Effort    string `toml:"effort"`     // off, low, medium or high: how much the model thinks
-	AgentCopy string `toml:"agent_copy"` // what an agent pane or chat gets: refined, both or raw
+	AgentCopy string `toml:"agent_copy"` // refined, both (every target) or raw (an agent pane or chat)
 	// Glossary is how much of the glossary a call carries: all, matching
 	// (the entries that sound like a span of the dictation) or none; ""
 	// is refine.DefaultReach of the mode (GlossaryReach).

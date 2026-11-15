@@ -263,6 +263,11 @@ type Controller struct {
 	// take is decoded with the backup's audio in that span's place; what the
 	// main track recorded elsewhere is decoded as it is.
 	NewBackup func(main audio.Source) audio.Source
+	// KeepBackup, when set and true as a take starts, keeps the take's
+	// backup track whatever the main track did, with the input it opened
+	// as backup/<name>.input.json: the two inputs can then be compared over
+	// every take. The take is decoded and delivered as without it.
+	KeepBackup func() bool
 	// OnChunks, when set, gets a finished take's chunks in order, before
 	// the take is delivered: a meeting keeps each chunk's time and text.
 	OnChunks func(take string, chunks []Chunk)
@@ -372,8 +377,11 @@ type take struct {
 	screen  func(context.Context) *refine.Screen // Controller.Screen's, nil when the source is off
 	// sources is Controller.Sources', nil when the text sources are off.
 	sources func(context.Context, Target) []refine.Part
-	auto    *time.Timer
-	backup  *backup // nil without NewBackup
+	// parts gets what sources read as the take stopped (readSources); nil
+	// when sources is or the take was cancelled while recording.
+	parts  chan []refine.Part
+	auto   *time.Timer
+	backup *backup // nil without NewBackup
 	// ctx is a re-transcription's: once it is done, the take's chunks fail
 	// with its error. nil for any other take.
 	ctx context.Context
@@ -1254,6 +1262,9 @@ func (c *Controller) stopLocked(kind, why string) {
 	r.stopLine.Store(&store.Event{Ev: "stop", Kind: kind, Why: why, Via: r.via})
 	r.stopAt = time.Now()
 	c.prevStop = r.stopAt
+	if r.sources != nil {
+		r.parts = c.readSources(r, kind == "enter")
+	}
 	if r.auto != nil {
 		r.auto.Stop()
 	}
@@ -1266,6 +1277,25 @@ func (c *Controller) stopLocked(kind, why string) {
 	}
 	log.Printf("session: stop %s (%s)%s", filepath.Base(r.base), mode, fromVia(r.via))
 	c.updateLocked()
+}
+
+// readSources reads r's text sources as it stops, on their own goroutine
+// so c.mu is not held across the reads, from the target its stop chose
+// (EndTarget; enter is a stop by Enter): what is typed, copied or made
+// secret after the stop, while the take is still transcribed, is not the
+// take's. The model step waits on what it gives.
+func (c *Controller) readSources(r *take, enter bool) chan []refine.Part {
+	got := make(chan []refine.Part, 1)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		t := r.target.get()
+		if et, ok := t.(EndTarget); ok {
+			t = et.ForEnd(enter)
+		}
+		got <- r.sources(c.ctx(), t)
+	}()
+	return got
 }
 
 // run is a take's life after its start: record until the stream ends, write
@@ -1591,9 +1621,9 @@ func (c *Controller) finish(r *take, total int) {
 		target := endTarget()
 		in := RefineInput{Text: text, Target: StoreTarget(target)}
 		if step.Aside != nil && step.Aside(in.Target) {
-			c.refineAside(r, step, in, target)
+			c.refineAside(r, step, in)
 		} else {
-			refined, ev := c.refine(r, step, in, target)
+			refined, ev := c.refine(r, step, in)
 			c.mu.Lock()
 			cancelled = r.cancelled
 			c.mu.Unlock()
@@ -1755,17 +1785,20 @@ const HoldRefineFailed = "refine_failed"
 
 // refine has r wait on the model step's call for in, however long it takes:
 // the view shows the wait and nothing is delivered before the answer. A
-// cancel of the waiting take (cancelWaitingLocked) drops the call. The
-// text sources are read from target first.
-func (c *Controller) refine(r *take, step *RefineStep, in RefineInput, target Target) (string, *store.Event) {
+// cancel of the waiting take (cancelWaitingLocked) drops the call. The call
+// gets what the text sources read at the stop.
+func (c *Controller) refine(r *take, step *RefineStep, in RefineInput) (string, *store.Event) {
 	ctx, cancel := context.WithCancel(c.ctx())
 	defer cancel()
 	c.mu.Lock()
 	r.refining, r.heard, r.unrefine = true, in.Text, cancel
 	c.updateLocked()
 	c.mu.Unlock()
-	if r.sources != nil {
-		in.Parts = r.sources(ctx, target)
+	if r.parts != nil {
+		select {
+		case in.Parts = <-r.parts:
+		case <-ctx.Done():
+		}
 	}
 	if r.screen != nil {
 		in.Screen = r.screen(ctx)
@@ -1787,11 +1820,11 @@ func (c *Controller) refine(r *take, step *RefineStep, in RefineInput, target Ta
 // and the overlay flashes what it would have changed. The call is not in
 // flight for Busy: nothing waits on it, so a restart or quit never waits for
 // it, and an exit before it returns leaves the take delivered with no refine
-// line. Wait still waits for it. The text sources are read from target
-// before r is delivered.
-func (c *Controller) refineAside(r *take, step *RefineStep, in RefineInput, target Target) {
-	if r.sources != nil {
-		in.Parts = r.sources(c.ctx(), target)
+// line. Wait still waits for it. What the text sources read at the stop is
+// in hand before r is delivered.
+func (c *Controller) refineAside(r *take, step *RefineStep, in RefineInput) {
+	if r.parts != nil {
+		in.Parts = <-r.parts
 	}
 	c.wg.Add(1)
 	go func() {
@@ -1835,21 +1868,25 @@ func (c *Controller) refineFailedMsg(ev *store.Event) string {
 
 // agentCopy settles what a take the model step ran on gives target, as
 // ev.Copy — refine.agent_copy as the stage hands it — asks, and rewrites
-// ev.Copy to what went out. Toward an agent's target (store.Target.IsAgent):
-// refined, the corrected text; both, the corrected text and, only when
-// something changed, the text as heard under its mark (refine.Both), sent
-// in its place; raw, the text as heard, the edits on the refine line only. Every
-// other target, and a step that failed, gets text. It returns the take's
-// text — the delivered text a resend or the takes list reads, never the
-// second part — and what is sent in its place ("" for text itself).
+// ev.Copy to what went out. refined, the corrected text; both, to every
+// target, the corrected text and, only when something changed, the text as
+// heard under its mark (refine.Both), sent in its place; raw, toward an
+// agent's target (store.Target.IsAgent), the text as heard, the edits on the
+// refine line only, and to every other target the corrected text. A step
+// that failed gives text. It returns the take's text — the delivered text a
+// resend or the takes list reads, never the second part — and what is sent
+// in its place ("" for text itself).
 func agentCopy(target *store.Target, heard, text string, ev *store.Event) (string, string) {
 	want := ev.Copy
 	ev.Copy = ""
-	if ev.Why != "" || !target.IsAgent() {
+	if ev.Why != "" {
 		return text, ""
 	}
 	switch want {
 	case "raw":
+		if !target.IsAgent() {
+			return text, ""
+		}
 		ev.Copy = "raw"
 		return heard, ""
 	case "both":

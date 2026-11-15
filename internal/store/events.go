@@ -111,9 +111,10 @@ type Event struct {
 	Edits    []RefineEdit `json:"edits,omitempty"`
 	Dropped  int          `json:"dropped,omitempty"`
 	Usage    *RefineUsage `json:"usage,omitempty"`
-	// Copy is what an agent's target got of the step's result
+	// Copy is what the target got of the step's result
 	// (refine.agent_copy): "both", the corrected text and the marked second
-	// part; "raw", the recognised text, the edits recorded only. Empty: the
+	// part; "raw", toward an agent's target, the recognised text, the edits
+	// recorded only. Empty: the
 	// text the step gave. The stage hands the controller the configured value
 	// here; the controller records what went out.
 	Copy string `json:"copy,omitempty"`

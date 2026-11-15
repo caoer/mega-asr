@@ -531,9 +531,12 @@ func read(dir, id string) (Take, []text) {
 		}
 	}
 	evs, _ := store.Read(base)
-	wav, track := wavOf(dir, id, evs)
-	if track == "backup" {
-		t.Files = append(t.Files, wav)
+	_, track := wavOf(dir, id, evs)
+	for _, ext := range []string{".wav", ".input.json"} { // the backup input's track, and its input when the take kept it
+		p := filepath.Join(dir, store.BackupDir, id+ext)
+		if _, err := os.Stat(p); err == nil {
+			t.Files = append(t.Files, p)
+		}
 	}
 	t.Track = track
 	t.Events = evs

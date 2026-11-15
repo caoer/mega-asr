@@ -269,6 +269,7 @@ func (s *server) ready() {
 		Build:       app.BuildID(),
 		NewSource:   newSource,
 		NewBackup:   newBackup,
+		KeepBackup:  keepBackup(s.opts, s.cfg),
 		ASR:         tr,
 		Stream:      s.cfg.Streamer(),
 		Tee:         s.cfg.Fanout(s.opts, tr).Tee,

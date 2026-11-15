@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,5 +237,32 @@ func TestRouterBothCopyClipboard(t *testing.T) {
 	}
 	if !slices.Equal(*outcomes, []Outcome{Sent}) {
 		t.Errorf("outcomes %v", *outcomes)
+	}
+}
+
+// A long text whose later message is refused reached the chat in part and,
+// for certain, not whole: the keypad shows failed. One whose later message
+// timed out may have reached it whole: the keypad shows timeout. Either way
+// the error says "may have been sent" once.
+func TestRouterPartlySent(t *testing.T) {
+	text := strings.Repeat("word ", 1000) // two messages
+	refused := fakeTelegram(t.TempDir(), 2)
+	dir := t.TempDir()
+	late := fakeSend(`n=$(ls ` + dir + ` | wc -l | tr -d ' '); touch ` + dir + `/$n; [ "$n" = 1 ] && sleep 5; echo "Sent → message 1"`)
+	late.Wait = 300 * time.Millisecond
+	for _, tc := range []struct {
+		name string
+		send Telegram
+		want Outcome
+	}{{"refused", refused, Failed}, {"timed out", late, Timeout}} {
+		r, outcomes, _ := newRouter(&fakeMac{}, tc.send)
+		err := r.Deliver(&TelegramTarget{Chat: "-100"}, text)
+		if !errors.Is(err, session.ErrMaybeSent) || !strings.Contains(err.Error(), "1 of 2 messages sent") ||
+			strings.Count(err.Error(), session.ErrMaybeSent.Error()) > 1 {
+			t.Errorf("%s: err %v", tc.name, err)
+		}
+		if !slices.Equal(*outcomes, []Outcome{tc.want}) {
+			t.Errorf("%s: outcomes %v, want [%v]", tc.name, *outcomes, tc.want)
+		}
 	}
 }

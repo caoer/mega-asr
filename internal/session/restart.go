@@ -322,12 +322,12 @@ func (c *Controller) repairTracks(base string) {
 }
 
 // removeTracks removes a take too short to be speech: its WAV, its input
-// record and its backup track; its record stays.
+// record and its backup track with its input's record; its record stays.
 func (c *Controller) removeTracks(base string) {
 	if err := c.Store.Remove(base); err != nil {
 		log.Printf("session: recover: %v", err)
 	}
-	if err := os.Remove(c.backupPath(base)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeBackup(c.backupPath(base)); err != nil {
 		log.Printf("session: recover: %v", err)
 	}
 }
@@ -373,15 +373,21 @@ func (c *Controller) recoverText(base string) {
 // recoverBackup decides a recovered take's track as the stop path does: the
 // backup track, when there is one, stands in wherever the main track s was
 // dead and the backup holds a voice. Without a dead span the backup track
-// is removed.
+// is removed, unless the take kept it (its input's record beside it, as
+// Controller.KeepBackup writes) and it holds audio.
 func (c *Controller) recoverBackup(base string, s []int16) ([]int16, bool) {
 	out, used, dead, err := c.withBackup(base, s)
 	if err != nil {
 		return nil, false
 	}
 	if dead == 0 {
-		if err := os.Remove(c.backupPath(base)); err != nil {
-			log.Printf("session: recover: %v", err)
+		p := c.backupPath(base)
+		st, err := os.Stat(p)
+		kept := exists(strings.TrimSuffix(p, ".wav")+".input.json") && err == nil && st.Size() > 44
+		if !kept {
+			if err := removeBackup(p); err != nil {
+				log.Printf("session: recover: %v", err)
+			}
 		}
 		return nil, false
 	}

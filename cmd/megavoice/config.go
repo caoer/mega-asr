@@ -106,6 +106,18 @@ func backupSource(o app.LoadOpts, c app.Config) func(main audio.Source) audio.So
 	}
 }
 
+// keepBackup is capture.keep_backup (session.Controller.KeepBackup), read
+// from the config file as the take starts, like capture.backup.
+func keepBackup(o app.LoadOpts, c app.Config) func() bool {
+	o.Check = nil
+	return func() bool {
+		if l, err := app.Load(o); err == nil {
+			return l.Capture.KeepBackup
+		}
+		return c.Capture.KeepBackup
+	}
+}
+
 // captureSource is the input capture.source names: this Mac's input, the
 // array over ssh, or a paired remote mic.
 func captureSource(c app.CaptureConfig) audio.Source {

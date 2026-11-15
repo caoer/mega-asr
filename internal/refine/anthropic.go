@@ -107,7 +107,9 @@ func thinking(model, effort string) (kind, apiEffort string) {
 }
 
 // body is req as the Messages API takes it. The same Request gives the same
-// bytes, so the system blocks are read from the cache on the next take.
+// bytes, and the cache breakpoint is on the last system block every take
+// sends the same, so the blocks up to it are read from the cache on the
+// next take.
 func (a Anthropic) body(req Request) ([]byte, error) {
 	var content any = req.UserContent()
 	if im := req.Image; im != nil {
@@ -121,8 +123,8 @@ func (a Anthropic) body(req Request) ([]byte, error) {
 	for _, s := range req.System {
 		m.System = append(m.System, block{Type: "text", Text: s})
 	}
-	if n := len(m.System); n > 0 {
-		m.System[n-1].Cache = &cache{Type: "ephemeral"}
+	if i := len(m.System) - 1 - req.PerTake; i >= 0 {
+		m.System[i].Cache = &cache{Type: "ephemeral"}
 	}
 	m.Thinking.Type, m.Output.Effort = thinking(req.Model, req.Effort)
 	m.Output.Format.Type, m.Output.Format.Schema = "json_schema", json.RawMessage(editsSchema)

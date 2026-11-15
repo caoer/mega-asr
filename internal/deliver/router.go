@@ -99,9 +99,12 @@ func (r *Router) Deliver(t session.Target, text string) error {
 func (r *Router) DeliverClip(t session.Target, text, clip string) error {
 	if tt, ok := t.(*TelegramTarget); ok {
 		err := r.Telegram.DeliverClip(tt, text, clip)
+		var cut *partSent
 		switch {
 		case err == nil:
 			r.tell(Sent)
+		case errors.As(err, &cut) && cut.refused():
+			r.tell(Failed) // the rest was refused: the chat has part of it, for certain not all
 		case errors.Is(err, session.ErrMaybeSent):
 			r.tell(Timeout)
 		default:

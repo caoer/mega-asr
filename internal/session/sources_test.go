@@ -62,3 +62,52 @@ func TestTakeReadsItsTextSourcesFromItsTarget(t *testing.T) {
 		}
 	}
 }
+
+// The sources are read as the take stops, while it is still transcribed,
+// not once its text is ready: a copy made or a field typed into after the
+// stop is not the take's. A keypad take stopped by Enter reads them from
+// the Telegram chat it is sent to, a plain stop from the cursor.
+func TestTheSourcesAreReadAsTheTakeStops(t *testing.T) {
+	for _, enter := range []bool{false, true} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下")
+		r.c.Deliver = keypadDeliverer{r.del}
+		r.asr.block = make(chan struct{})
+		read := make(chan string, 1) // the kind of target read from
+		r.c.Sources = func() func(context.Context, Target) []refine.Part {
+			return func(_ context.Context, t Target) []refine.Part {
+				kind := "cursor"
+				if rec := StoreTarget(t); rec != nil {
+					kind = rec.Kind
+				}
+				read <- kind
+				return []refine.Part{{Source: refine.SourceClipboard, Text: "copied before the stop"}}
+			}
+		}
+		var got []refine.Part
+		r.c.Refine = func() *RefineStep {
+			return &RefineStep{Run: func(_ context.Context, in RefineInput) (string, *store.Event) {
+				got = in.Parts
+				return in.Text, &store.Event{Ev: "refine", Model: "m"}
+			}}
+		}
+		r.c.Toggle()
+		if enter {
+			r.c.Enter()
+		} else {
+			r.c.Toggle()
+		}
+		select {
+		case kind := <-read:
+			if (kind == "telegram") != enter {
+				t.Errorf("enter %v: read from a %s target", enter, kind)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("enter %v: the sources were not read while the take transcribed", enter)
+		}
+		close(r.asr.block)
+		r.wait(t)
+		if len(got) != 1 || got[0].Text != "copied before the stop" {
+			t.Errorf("enter %v: the step got %+v", enter, got)
+		}
+	}
+}

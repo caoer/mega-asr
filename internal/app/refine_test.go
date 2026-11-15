@@ -388,7 +388,8 @@ func TestStageGivesTheTakeText(t *testing.T) {
 }
 
 // A capture notes the pane's agent only while the step is on with
-// agent_copy both or raw; off, or refined, it asks herdr nothing more.
+// agent_copy raw; off, refined, or both, which goes to every target alike,
+// it asks herdr nothing more.
 func TestRefineNotesAgent(t *testing.T) {
 	for _, tc := range []struct {
 		on   bool
@@ -398,7 +399,7 @@ func TestRefineNotesAgent(t *testing.T) {
 		{false, "", false},
 		{false, "both", false},
 		{true, "refined", false},
-		{true, "both", true},
+		{true, "both", false},
 		{true, "raw", true},
 	} {
 		dir := isolate(t)

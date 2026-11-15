@@ -167,6 +167,9 @@ func (s *RefineStage) current() RefineConfig {
 	} else {
 		s.last = l.RefineTake()
 	}
+	if s.Clip != nil && s.last.On && s.last.Context.Clipboard {
+		s.Clip.Wake() // switched on since its watcher parked
+	}
 	return s.last
 }
 
@@ -241,7 +244,8 @@ var screenWait = 2 * time.Second
 // Sources is session.Controller.Sources: as a take starts it notes the
 // clipboard and gives the call that reads the text sources from the take's
 // target at its stop. nil while refine.on is off or every text source is:
-// nothing is read.
+// nothing is read. The read keeps to the sources still switched on, and
+// the exclusions as they stand, at the stop.
 func (s *RefineStage) Sources() func(context.Context, session.Target) []refine.Part {
 	r := s.current()
 	src := r.Context.TextSources(s.Clip)
@@ -250,8 +254,12 @@ func (s *RefineStage) Sources() func(context.Context, session.Target) []refine.P
 	}
 	ts := src.Start()
 	return func(ctx context.Context, t session.Target) []refine.Part {
+		var now refine.TextSources
+		if r := s.current(); r.On {
+			now = r.Context.TextSources(s.Clip)
+		}
 		spot, _ := t.(refine.Spot)
-		return ts.Read(ctx, session.StoreTarget(t), spot)
+		return ts.Within(now).Read(ctx, session.StoreTarget(t), spot)
 	}
 }
 
@@ -263,12 +271,12 @@ func (s *RefineStage) ClipboardOn() bool {
 }
 
 // NotesAgent reports whether a take's capture should note the agent in its
-// herdr pane: only while the step is on with agent_copy both or raw, the
-// values that deliver differently to an agent, or with the app or pane
-// source, which name it.
+// herdr pane: only while the step is on with agent_copy raw, the value that
+// delivers differently to an agent, or with the app or pane source, which
+// name it. both goes to every target alike.
 func (s *RefineStage) NotesAgent() bool {
 	r := s.current()
-	return r.On && (r.AgentCopy != "refined" || r.Context.App || r.Context.Pane)
+	return r.On && (r.AgentCopy == "raw" || r.Context.App || r.Context.Pane)
 }
 
 // warmLimit bounds the handshake Warm opens the connection with. A take's
@@ -325,8 +333,10 @@ func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (stri
 	if err != nil {
 		return fail(refine.WhyError, err)
 	}
+	reach := r.GlossaryReach()
+	g := GlossaryIn(reach, text)
 	step := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
-		System: append([]string{prompt}, GlossaryIn(r.GlossaryReach(), text).Blocks()...), Names: r.namesIn(text)}
+		System: append([]string{prompt}, g.Blocks()...), PerTake: g.PerTake(reach), Names: r.namesIn(text)}
 	sc := in.Screen
 	if sc != nil {
 		sc = r.screenNow(sc)

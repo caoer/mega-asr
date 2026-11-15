@@ -331,10 +331,13 @@ func newRig(t *testing.T, src *fakeSource, texts ...string) *rig {
 	return r
 }
 
-// wait blocks until every take in flight is finished.
+// wait blocks until every take in flight is finished. Its bound tells a
+// hang from a slow run, never a fast run from a slow one: a take writes and
+// fsyncs its WAV and record lines, and on a busy CI host one fsync can
+// stall for seconds.
 func (r *rig) wait(t *testing.T) {
 	t.Helper()
-	r.waitUpTo(t, 2*time.Second)
+	r.waitUpTo(t, 30*time.Second)
 }
 
 func (r *rig) waitUpTo(t *testing.T, d time.Duration) {

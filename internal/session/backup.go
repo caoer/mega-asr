@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ type backup struct {
 	stopped bool         // told to stop with the take
 
 	// written before done is closed
+	keep    bool // Controller.KeepBackup said so as the take started
 	samples int
 	first   time.Time // when its first block arrived
 	err     error     // final source/WAV result, read after done closes
@@ -81,6 +83,7 @@ func (c *Controller) startBackup(r *take, src audio.Source) *backup {
 	}
 	go func() {
 		defer close(b.done)
+		b.keep = c.KeepBackup != nil && c.KeepBackup()
 		bs := c.NewBackup(src)
 		if bs == nil {
 			return
@@ -107,7 +110,13 @@ func (c *Controller) startBackup(r *take, src audio.Source) *backup {
 		}
 		from := ""
 		if d, ok := bs.(audio.Described); ok {
-			from = " from " + d.Input().DeviceName()
+			in := d.Input()
+			from = " from " + in.DeviceName()
+			if b.keep {
+				if err := (store.Store{Dir: dir}).SaveInput(file.Base(), in); err != nil {
+					log.Printf("session: %s: backup input record: %v", name, err)
+				}
+			}
 		}
 		var werr error
 		for s := range ch {
@@ -183,7 +192,8 @@ func (b *backup) closeFile() {
 // takeBackup runs once the main track has ended, total samples long, with
 // dead the spans in which it delivered nothing. It waits for the backup
 // track, which is stopping, and removes it when the main track had no such
-// span. Where the backup holds a voice over a span, it queues the main track
+// span, unless the take keeps its backup (Controller.KeepBackup) and both
+// tracks hold audio and the take is long enough to keep. Where the backup holds a voice over a span, it queues the main track
 // with the backup's audio in that span's place and reports true, however
 // little the main track delivered; the main track's chunks already queued
 // are left to the ASR and not read. A cancelled take is judged the same
@@ -196,12 +206,14 @@ func (c *Controller) takeBackup(r *take, total int, dead []span) bool {
 	<-b.done
 	name := filepath.Base(r.base)
 	remove := func() {
-		if err := os.Remove(b.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := removeBackup(b.path); err != nil {
 			log.Printf("session: %s: %v", name, err)
 		}
 	}
 	if len(dead) == 0 || b.samples == 0 {
-		remove()
+		if !b.keep || b.samples == 0 || audio.TooShort(total) {
+			remove()
+		}
 		return false
 	}
 	bk, err := audio.ReadWAV(b.path)
@@ -247,6 +259,18 @@ func (c *Controller) takeBackup(r *take, total int, dead []span) bool {
 	r.chunker = c.newChunker() // cut the spliced track from its own first sample
 	c.cut(r, s, false)
 	return true
+}
+
+// removeBackup removes the backup track at path, backup/<name>.wav, and
+// the record of its input beside it, when they exist.
+func removeBackup(path string) error {
+	var errs []error
+	for _, p := range []string{path, strings.TrimSuffix(path, ".wav") + ".input.json"} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // splice is the main track with each dead span in which the backup holds a

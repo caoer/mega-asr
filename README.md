@@ -330,7 +330,9 @@ drives AppKit/CoreGraphics).
   `name` and `host`; `channel`), `<ts>.compare.json` in compare mode, the
   take's record `<ts>.events.jsonl` (contract I1 below), and
   `backup/<ts>.wav`, the backup input's track (`capture.backup`), kept only
-  when the main input was dead somewhere in the take. A take under 0.3 s is
+  when the main input was dead somewhere in the take, or on every take with
+  `capture.keep_backup`, which also names its input in
+  `backup/<ts>.input.json` (the same fields). A take under 0.3 s is
   a mistaken tap: its audio is removed, its record stays, and its name is
   never used again. Chunk WAVs live under
   `~/.local/state/megavoice/chunks/` until their take's text is saved.
@@ -399,6 +401,7 @@ megavoice --set asr.funasr.mode=exec transcribe take.wav   # one-run override
 | `capture.mic_name` | `""` | local: the pinned input's name, shown while it is not connected ("Podium Condenser not connected — using …"); the menu writes it with `capture.mic`; `""` shows the UID |
 | `capture.mic_channel` | `0` | local: `0` mixes every channel, `n` records channel `n` |
 | `capture.backup` | `"auto"` | local on a Mac: a second input recorded beside the main one; a stretch of 2 s or more in which the main input is all zero samples while this one carries a voice is decoded from this one. `auto`: a wired input other than the main one, a display's or camera's microphone before the built-in (not with the lid closed); an input's UID pins one; `""` or `off` records none. Never a Bluetooth or wireless input; the record's `backup_off` says why none was recorded |
+| `capture.keep_backup` | `false` | local on a Mac: keep every take's backup track, `backup/<ts>.wav`, with `backup/<ts>.input.json` naming its input, whether or not the main input went silent, to compare the two inputs; the take is decoded and delivered as without it |
 | `capture.host` | `""` | ssh: destination with the device, e.g. `micbox` |
 | `capture.device` | `""` | ssh: ALSA PCM on that host, e.g. `hw:Array,0`, or a dsnoop PCM that shares the device |
 | `capture.channel` | `2` | ssh: 1–6; 2 is the XVF3800's ASR beam |

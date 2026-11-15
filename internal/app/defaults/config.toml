@@ -32,6 +32,9 @@
 #                            # "auto": a wired input other than the main one, a display's or camera's microphone
 #                            # before the built-in (not with the lid closed); an input's UID (`megavoice mics`)
 #                            # pins one; "" or "off" records none. Never a Bluetooth or wireless input
+# keep_backup = false        # local on a Mac: keep every take's backup track, backup/<name>.wav, with
+#                            # backup/<name>.input.json naming its input, whether or not the main input went
+#                            # silent, to compare the two inputs. The take is decoded and delivered as without it
 # host = ""                  # ssh: destination with the device, e.g. "micbox"
 # device = ""                # ssh: ALSA PCM on that host, e.g. "hw:1,0" or "default"
 # channel = 2                # ssh: 1-6; on a six-channel USB array (e.g. XVF3800) 2 is the ASR beam
@@ -108,11 +111,13 @@
 # model = "claude-haiku-5-5"   # the provider's model id
 # effort = "low"             # off, low, medium, high: how much the model thinks first; off is no thinking
 #                            # where the model allows it
-# agent_copy = "refined"     # what a herdr pane with an agent in it, or the keypad's Telegram chat, gets:
-#                            # refined: the corrected text. both: when the two differ, the corrected text, a
-#                            # blank line, then the text as recognised under the mark [Mega Voice · as heard].
-#                            # raw: the text as recognised, delivered at once; what the model would have changed
-#                            # is only recorded, when its answer comes. Every other target gets the corrected text
+# agent_copy = "refined"     # what a take the model step ran on delivers:
+#                            # refined: the corrected text. both, to every target: when the two differ, the
+#                            # corrected text, a blank line, then the text as recognised under the mark
+#                            # [Mega Voice · as heard]. raw, to a herdr pane with an agent in it or the keypad's
+#                            # Telegram chat: the text as recognised, delivered at once; what the model would
+#                            # have changed is only recorded, when its answer comes; every other target gets
+#                            # the corrected text
 # providers = {}             # one table per provider, in place of this line:
 #                            #   [refine.providers.anthropic]
 #                            #   kind = "anthropic"                        # anthropic: the Messages API; openai: chat completions

@@ -2,6 +2,7 @@ package deliver
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,8 +10,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
+	"unicode"
+	"unicode/utf16"
 
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 )
 
@@ -199,11 +202,40 @@ func TestTelegramCommandDashText(t *testing.T) {
 // here are ASCII but for the mark, so bytes bound code points) with
 // MESSAGE_TOO_LONG, and keeps each message it takes as dir/1, dir/2, ….
 // failAt, when not 0, refuses that message instead.
+// fakeTelegram is a send command that takes each message as Telegram does,
+// refusing one past 4096 UTF-16 units (MESSAGE_TOO_LONG), and keeps it in
+// dir as 1, 2, …; message failAt is refused (FLOOD_WAIT_30). It is this test
+// binary run again (TestFakeTelegramProcess).
 func fakeTelegram(dir string, failAt int) Telegram {
-	return fakeSend(`n=$(ls ` + dir + ` | wc -l | tr -d ' '); n=$((n+1)); cat > ` + dir + `/new
-if [ "$(wc -c < ` + dir + `/new)" -gt 4096 ]; then rm ` + dir + `/new; echo "MESSAGE_TOO_LONG" >&2; exit 1; fi
-if [ "$n" = "` + strconv.Itoa(failAt) + `" ]; then rm ` + dir + `/new; echo "FLOOD_WAIT_30" >&2; exit 1; fi
-mv ` + dir + `/new ` + dir + `/$n; echo "Sent → message $n"`)
+	return Telegram{Argv: []string{os.Args[0], "-test.run=^TestFakeTelegramProcess$", "--", dir, strconv.Itoa(failAt), "{text}"}}
+}
+
+// TestFakeTelegramProcess is fakeTelegram's send command; run by go test it
+// does nothing.
+func TestFakeTelegramProcess(t *testing.T) {
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) != 4 {
+		return
+	}
+	dir, failAt, text := args[1], args[2], args[3]
+	entries, _ := os.ReadDir(dir)
+	n := strconv.Itoa(len(entries) + 1)
+	switch {
+	case len(utf16.Encode([]rune(text))) > 4096:
+		fmt.Fprintln(os.Stderr, "MESSAGE_TOO_LONG")
+		os.Exit(1)
+	case n == failAt:
+		fmt.Fprintln(os.Stderr, "FLOOD_WAIT_30")
+		os.Exit(1)
+	}
+	if err := os.WriteFile(filepath.Join(dir, n), []byte(text), 0o600); err != nil {
+		os.Exit(2)
+	}
+	fmt.Println("Sent → message " + n)
+	os.Exit(0)
 }
 
 // messages are the texts fakeTelegram took, in order.
@@ -271,14 +303,17 @@ func TestTelegramParts(t *testing.T) {
 		"zh sentences":    zh,
 		"no break at all": strings.Repeat("长", 2*TelegramLimit+5),
 		"lines":           strings.Repeat("一行字 and words\n", 700),
+		"emoji":           strings.Repeat("🎤", 3000),            // 3000 code points, 6000 units
+		"ext-b":           strings.Repeat("𠀀𠀁 字", 1200),         // 4800 code points, 7200 units
+		"units at limit":  strings.Repeat("🎤", TelegramLimit/2), // 2048 code points, 4096 units
 	} {
 		parts := telegramParts(text)
 		for _, p := range parts {
-			if n := utf8.RuneCountInString(p); n > TelegramLimit || n == 0 {
-				t.Errorf("%s: a part of %d code points", name, n)
+			if n := len(utf16.Encode([]rune(p))); n > TelegramLimit || n == 0 {
+				t.Errorf("%s: a part of %d units", name, n)
 			}
 		}
-		if utf8.RuneCountInString(text) <= TelegramLimit {
+		if len(utf16.Encode([]rune(text))) <= TelegramLimit {
 			if len(parts) != 1 || parts[0] != text {
 				t.Errorf("%s: %q, want the text as it is", name, parts)
 			}
@@ -295,3 +330,52 @@ func TestTelegramParts(t *testing.T) {
 
 // nonSpace is s without its whitespace.
 func nonSpace(s string) string { return strings.Join(strings.Fields(s), "") }
+
+// A both copy whose corrected text is a few units short of the limit, or at
+// it, is cut where the text as heard starts, whatever paragraph breaks and
+// spaces the corrected text holds: the first message is the corrected text,
+// exactly.
+func TestTelegramPartsCutAtTheMark(t *testing.T) {
+	heard := strings.TrimSpace(strings.Repeat("heard words ", 100))
+	for _, n := range []int{4094, 4095, 4096} {
+		for name, unit := range map[string]string{"spaces": "ab cd ", "paragraphs": "abcd\n\n", "emoji": "a🎤 b"} {
+			fixed := ofUnits(unit, n)
+			text := fixed + "\n\n" + refine.MarkOriginal + "\n" + heard
+			parts := telegramParts(text)
+			if len(parts) != 2 || parts[0] != fixed || parts[1] != refine.MarkOriginal+"\n"+heard {
+				t.Errorf("%d units of %s: %d parts, the first %d units ending %q", n, name, len(parts),
+					len(utf16.Encode([]rune(parts[0]))), parts[0][max(0, len(parts[0])-12):])
+			}
+		}
+	}
+}
+
+// Each message's id is its own: a last part whose send printed no id leaves
+// none, never an earlier part's, and reports no sent message.
+func TestTelegramMessageIDPerPart(t *testing.T) {
+	dir := t.TempDir()
+	g := fakeSend(`n=$(ls ` + dir + ` | wc -l | tr -d ' '); touch ` + dir + `/$n; [ "$n" = 0 ] && echo "Sent → message 7"; exit 0`)
+	var reported []int64
+	g.OnSent = func(t *TelegramTarget) { reported = append(reported, t.MessageID) }
+	tt := &TelegramTarget{Chat: "-100"}
+	if err := g.Deliver(tt, strings.Repeat("word ", 1000)); err != nil {
+		t.Fatal(err)
+	}
+	if tt.MessageID != 0 || len(reported) != 0 {
+		t.Fatalf("message id %d, reported %v; want none: the last part printed no id", tt.MessageID, reported)
+	}
+}
+
+// ofUnits is unit repeated to exactly n UTF-16 units, ending in no space: an
+// x where the next rune would pass n or where the text would end in a space.
+func ofUnits(unit string, n int) string {
+	var b []rune
+	for k := 0; units(string(b)) < n; k++ {
+		r := []rune(unit)[k%len([]rune(unit))]
+		if units(string(b))+utf16.RuneLen(r) > n || units(string(b))+1 == n && unicode.IsSpace(r) {
+			r = 'x'
+		}
+		b = append(b, r)
+	}
+	return string(b)
+}

@@ -675,3 +675,59 @@ func TestSpliceCoverageRequiresEveryDeadSpan(t *testing.T) {
 		})
 	}
 }
+
+// With KeepBackup a take keeps its backup track whatever the main track
+// did, and backup/<name>.input.json names the backup's input; the take is
+// decoded and delivered as without it. Without KeepBackup the files are as
+// before: a live main track leaves no backup track, and no backup input
+// record is written. A take too short to keep, whose backup holds no voice,
+// keeps neither.
+func TestKeepBackup(t *testing.T) {
+	zeros := make([]int16, audio.Rate*3)
+	podium := audio.TakeInput{Source: "local", Name: "Podium Condenser", UID: "AppleUSBAudioEngine:Podium:Condenser:1", Transport: "usb"}
+	for _, c := range []struct {
+		name         string
+		keep         bool
+		main, backup []int16
+		text, audio  string
+		files        string // backup/, sorted
+	}{
+		{"on, live main", true, tone(audio.Rate*3, 1000), speech(audio.Rate*3, 2000), "main", "main", "N.input.json,N.wav"},
+		{"on, silent main", true, zeros, speech(audio.Rate*3, 2000), "backup", "backup", "N.input.json,N.wav"},
+		{"on, too short, no voice on the backup", true, tone(audio.Rate/10, 1000), noise(audio.Rate / 10), "", "", ""},
+		{"off, live main", false, tone(audio.Rate*3, 1000), speech(audio.Rate*3, 2000), "main", "main", ""},
+		{"off, silent main", false, zeros, speech(audio.Rate*3, 2000), "backup", "backup", "N.wav"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, base := backupRig(t, &fakeSource{blocks: [][]int16{c.main}}, func() audio.Source {
+				return described{&fakeSource{blocks: [][]int16{c.backup}}, podium}
+			})
+			r.c.KeepBackup = func() bool { return c.keep }
+			r.c.Toggle()
+			r.backupRecording(t)
+			r.c.Toggle()
+			r.wait(t)
+			want := ""
+			if c.text != "" {
+				want = "telegram|" + c.text
+			}
+			if r.del.got() != want || line(base, "text").Audio != c.audio {
+				t.Fatalf("delivered %q, text audio %q; want %q, %q", r.del.got(), line(base, "text").Audio, want, c.audio)
+			}
+			name := filepath.Base(base)
+			if got, want := files(t, filepath.Join(r.dir, store.BackupDir)), strings.ReplaceAll(c.files, "N", name); got != want {
+				t.Fatalf("backup/ holds %q, want %q", got, want)
+			}
+			if !strings.Contains(c.files, "input.json") {
+				return
+			}
+			in, err := store.LoadInput(filepath.Join(r.dir, store.BackupDir, name))
+			if err != nil || in != podium {
+				t.Fatalf("backup input %+v, %v; want %+v", in, err, podium)
+			}
+			if bk, err := audio.ReadWAV(filepath.Join(r.dir, store.BackupDir, name+".wav")); err != nil || len(bk) != len(c.backup) {
+				t.Fatalf("backup track %d samples, %v; want %d", len(bk), err, len(c.backup))
+			}
+		})
+	}
+}

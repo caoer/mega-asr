@@ -618,3 +618,38 @@ type heldStop struct {
 }
 
 func (s *heldStop) Stop() { <-s.gate; s.live.Stop() }
+
+// A recovered take whose backup track was kept (KeepBackup: its input's
+// record beside it) keeps it with a live main input, as the stop path does;
+// a take too short to keep, whose backup holds no voice, loses both.
+func TestRecoverKeptBackup(t *testing.T) {
+	for _, c := range []struct {
+		name         string
+		main, backup []int16
+		kept         bool
+	}{
+		{"live main", tone(audio.Rate*3, 1000), speech(audio.Rate*2, 2000), true},
+		{"too short, no voice on the backup", tone(audio.Rate/10, 1000), noise(audio.Rate * 2), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t, &fakeSource{}, "main words")
+			tk, _ := r.c.Store.Begin(time.Date(2020, 4, 17, 9, 0, 0, 0, time.Local))
+			tk.Write(c.main)
+			bs := store.Store{Dir: filepath.Join(r.dir, store.BackupDir)}
+			bk, _ := bs.Create(filepath.Base(tk.Base()))
+			bk.Write(c.backup)
+			bs.SaveInput(bk.Base(), audio.TakeInput{Source: "local", Name: "Podium Condenser", UID: "podium-uid"})
+			store.Append(tk.Base(), store.Event{Ev: "start"})
+			r.c.Recover()
+			r.wait(t)
+			_, werr := os.Stat(r.c.backupPath(tk.Base()))
+			_, ierr := os.Stat(bk.Base() + ".input.json")
+			if (werr == nil) != c.kept || (ierr == nil) != c.kept {
+				t.Fatalf("backup track %v, input record %v; want kept %v", werr, ierr, c.kept)
+			}
+			if c.kept && line(tk.Base(), "text").Audio != "main" {
+				t.Fatalf("text line %+v", line(tk.Base(), "text"))
+			}
+		})
+	}
+}
