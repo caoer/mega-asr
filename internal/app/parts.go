@@ -111,12 +111,21 @@ func (c Config) NamesStage() func(ctx context.Context, text string) (string, *st
 
 // RefineStage is the model step of [refine] (RefineConfig) for a
 // controller: Take is session.Controller.Refine and Warm its Warm. Each
-// reads the config file (o) as it is called, so the menu's switch and
-// `config set refine.on` apply at the next take.
+// looks at the config file (o) as it is called and reads it when it has
+// changed, so the menu's switch and `config set refine.on` apply at the
+// next take; while the file stays as it is, a take reads nothing.
 type RefineStage struct {
 	o    LoadOpts
 	mu   sync.Mutex
 	last RefineConfig
+	seen fileStamp // the file as last read; the zero value before the first look
+}
+
+// fileStamp is what tells a file from its next version without reading it.
+type fileStamp struct {
+	looked bool // false only before the first look
+	mod    time.Time
+	size   int64 // -1 when there is no file
 }
 
 func (c Config) RefineStage(o LoadOpts) *RefineStage {
@@ -125,10 +134,19 @@ func (c Config) RefineStage(o LoadOpts) *RefineStage {
 }
 
 // current is [refine] as the file reads now; as it last loaded when the
-// file no longer does.
+// file no longer does, which is logged once for each version of the file.
 func (s *RefineStage) current() RefineConfig {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	path, _ := Path(s.o.Path)
+	now := fileStamp{looked: true, size: -1}
+	if fi, err := os.Stat(path); err == nil {
+		now.mod, now.size = fi.ModTime(), fi.Size()
+	}
+	if now == s.seen {
+		return s.last
+	}
+	s.seen = now
 	if l, err := Load(s.o); err != nil {
 		log.Printf("refine: %v; keeping refine.on = %v", err, s.last.On)
 	} else {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -110,5 +111,28 @@ func TestRefineOffAndFailed(t *testing.T) {
 	if got := r.del.got(); got != "telegram|用海库跑一下 Python" || refine == nil || refine.Why != "timeout" || refine.Err == "" ||
 		deliver == nil || deliver.Text != "" || !strings.Contains(r.ui.String(), "flash:"+refineNote(failed)) || refineNote(failed) == "" {
 		t.Fatalf("failed: delivered %q, refine %+v, deliver %+v, ui %s", got, refine, deliver, r.ui)
+	}
+}
+
+// A phone take whose stream broke is held as cut off without the model
+// being asked: no call to wait on, no refine line.
+func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{}, "partial text")
+	asked := 0
+	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
+		asked++
+		return func(_ context.Context, in RefineInput) (string, *store.Event) {
+			return in.Text, &store.Event{Ev: "refine", Model: "m"}
+		}
+	}
+	sink := &fakeDeliverer{front: "iPhone 键盘"}
+	src := &fakeSource{n: audio.Rate, cut: true, cutErr: errors.New("phone stream sequence gap")}
+	if _, err := r.c.StartStream(src, sink, "keyboard"); err != nil {
+		t.Fatal(err)
+	}
+	r.wait(t)
+	refine, _ := refineLines(t, base)
+	if got := state(base); asked != 0 || refine != nil || got != "undelivered/phone stream sequence gap" || sink.got() != "" {
+		t.Fatalf("asked %d, refine %+v, final %q, phone %q", asked, refine, got, sink.got())
 	}
 }

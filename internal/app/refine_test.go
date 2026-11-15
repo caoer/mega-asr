@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -93,8 +95,8 @@ func TestRefineOffMakesNoCall(t *testing.T) {
 	}
 }
 
-// The step applies the model's edits and records them; the config file is
-// read at each take, so switching it off applies to the next one.
+// The step applies the model's edits and records them; a change to the
+// config file is read at the next take, so switching it off applies to it.
 func TestRefineStageReadsTheFileAtEachTake(t *testing.T) {
 	p := newProvider(t)
 	p.answer = edits(`[{"from":"海库","why":"模型名","to":"Haiku"},{"from":"康胖","why":"","to":"compound"}]`)
@@ -122,6 +124,47 @@ func TestRefineStageReadsTheFileAtEachTake(t *testing.T) {
 	}
 	if run := stage.Take(); run != nil {
 		t.Fatal("the step still runs after refine.on = false")
+	}
+}
+
+// While the config file stays as it is a take does not read it: with the
+// step off, takes after the first read nothing, a file that no longer
+// loads is reported once and not at each take's start and end, and the
+// file's next version is read at the next take.
+func TestRefineStageReadsTheFileOnlyWhenItChanged(t *testing.T) {
+	p := newProvider(t)
+	dir := isolate(t)
+	t.Setenv("MEGAVOICE_MEGA_ASR", "/legacy") // each read of the config logs that it is ignored
+	path := writeConfig(t, dir, "[refine]\non = false\n")
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := l.RefineStage(LoadOpts{})
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+	takes := func() {
+		for range 3 {
+			stage.Warm()
+			if stage.Take() != nil {
+				t.Fatal("the step runs")
+			}
+		}
+	}
+	takes()
+	if n := strings.Count(logged.String(), "MEGAVOICE_MEGA_ASR is set and ignored"); n != 1 {
+		t.Fatalf("3 takes with the step off read the config %d times, want the first take's once:\n%s", n, logged.String())
+	}
+	logged.Reset()
+	writeConfig(t, dir, "[refine]\nmode = \"tidy\"\n")
+	takes()
+	if n := strings.Count(logged.String(), "keeping refine.on = false"); n != 1 {
+		t.Fatalf("a file that does not load is reported %d times in 3 takes, want once:\n%s", n, logged.String())
+	}
+	refineConfig(t, dir, p.URL, "")
+	if stage.Take() == nil {
+		t.Fatalf("the step is off after %s switched it on", path)
 	}
 }
 

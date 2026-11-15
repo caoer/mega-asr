@@ -1463,7 +1463,10 @@ func (c *Controller) finish(r *take, total int) {
 		}
 		return target
 	}
-	if c.Refine != nil && c.OnChunks == nil && text != "" && !cancelled {
+	// A phone take whose stream broke is held below whatever its text: the
+	// model is not asked about it.
+	broken := r.sink != nil && r.src.Err() != nil
+	if c.Refine != nil && c.OnChunks == nil && text != "" && !cancelled && !broken {
 		if run := c.Refine(); run != nil {
 			c.refining(r, text)
 			var ev *store.Event
