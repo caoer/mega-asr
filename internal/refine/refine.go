@@ -1,8 +1,9 @@
 // Package refine is dictation's model step: after recognition and the post
 // chain, one model call returns the changes to make to a take's text, and
-// the step applies them under its mode's guards. When the call is slow,
-// fails or is refused, when the answer does not parse, or when a change
-// fails a guard, the text stands as it was.
+// the step applies them under its mode's guards. The call has no time limit:
+// it ends with an answer, a failure, or the caller's cancel. When it fails or
+// is refused, when the answer does not parse, or when a change fails a guard,
+// the result says why and carries the text as it was.
 package refine
 
 import (
@@ -32,12 +33,22 @@ type Request struct {
 	// Context is what was in front of the speaker, sent inside <context>;
 	// "" sends none.
 	Context string
+	// Image is a picture of what was in front of the speaker, sent ahead of
+	// the text; nil sends none.
+	Image *Image
 	// Dictation is the take's text, sent inside <dictation>: material for
 	// the model, never a message to it.
 	Dictation string
 	// Output is what the answer is: EditList ("" too), the changes to make,
 	// or FullText, the whole text to deliver.
 	Output string
+}
+
+// Image is a picture as a call sends it.
+type Image struct {
+	MediaType string // image/jpeg
+	Data      []byte
+	W, H      int // pixels
 }
 
 // UserContent is the user message of r: the context, when there is one, and
@@ -86,7 +97,7 @@ type Reply struct {
 
 // Provider makes the call. Its error is ErrRefusal when the model declined,
 // ErrUnparseable when the answer is not an edit list, an *HTTPError for a
-// status other than 200, and the context's when the call outlasted it.
+// status other than 200, and the context's when the caller cancelled it.
 type Provider interface {
 	Refine(ctx context.Context, req Request) (Reply, error)
 }
@@ -104,14 +115,14 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("status %d: %s", e.Status, e.Body) }
 
-// Why a step left the text as it stood (Result.Why).
+// Why a step gave no answer to apply (Result.Why).
 const (
-	WhyTimeout = "timeout" // the call outlasted Step.Timeout
-	WhyHTTP    = "http"    // a status other than 200
-	WhyRefusal = "refusal" // the model declined
-	WhyParse   = "parse"   // the answer is not the edit list or the text asked for
-	WhyGuard   = "guard"   // a change failed the mode's guard
-	WhyError   = "error"   // anything else: no route, a cancelled take
+	WhyCancelled = "cancelled" // the caller cancelled the call
+	WhyHTTP      = "http"      // a status other than 200
+	WhyRefusal   = "refusal"   // the model declined
+	WhyParse     = "parse"     // the answer is not the edit list or the text asked for
+	WhyGuard     = "guard"     // a change failed the mode's guard
+	WhyError     = "error"     // anything else: no route
 )
 
 // Step is the model step as one take runs it.
@@ -120,8 +131,9 @@ type Step struct {
 	Mode     string // what the model is asked to do (Modes); "" is fix-words
 	Model    string
 	Effort   string
-	System   []string      // Request.System
-	Timeout  time.Duration // past it the text stands as it was
+	System   []string // Request.System
+	Context  string   // Request.Context
+	Image    *Image   // Request.Image
 }
 
 // Result is what a step did to a text.
@@ -129,26 +141,26 @@ type Result struct {
 	Text    string // the text to deliver: the input unless edits were applied
 	Edits   []Edit // the edits applied
 	Dropped int    // edits left out: From is not in the text on its own, or the edit is no repair
-	Why     string // why the text stands as it was; "" when the answer was applied, edits or none
+	Why     string // why there is no answer to apply; "" when the answer was applied, edits or none
 	Err     error
 	Usage   Usage
 	Wall    time.Duration
 }
 
-// Run makes the call for text and applies its answer.
+// Run makes the call for text and applies its answer. It waits for the
+// provider as long as ctx lets it.
 func (s Step) Run(ctx context.Context, text string) Result {
-	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
-	defer cancel()
 	t0 := time.Now()
 	output := OutputOf(s.Mode)
-	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System, Dictation: text, Output: output})
+	reply, err := s.Provider.Refine(ctx, Request{Model: s.Model, Effort: s.Effort, System: s.System,
+		Context: s.Context, Image: s.Image, Dictation: text, Output: output})
 	r := Result{Text: text, Usage: reply.Usage, Wall: time.Since(t0)}
 	if err != nil {
 		r.Err = err
 		var he *HTTPError
 		switch {
-		case errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded):
-			r.Why, r.Err = WhyTimeout, fmt.Errorf("no answer within %s", s.Timeout)
+		case ctx.Err() != nil:
+			r.Why, r.Err = WhyCancelled, fmt.Errorf("cancelled after %s", r.Wall.Round(time.Millisecond))
 		case errors.Is(err, ErrRefusal):
 			r.Why = WhyRefusal
 		case errors.Is(err, ErrUnparseable):

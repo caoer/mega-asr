@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/caoer/mega-asr/internal/asr"
 	"github.com/caoer/mega-asr/internal/audio"
@@ -78,15 +81,19 @@ func (c Config) Post() post.Chain {
 	return post.Chain{post.CorrectionsFiles(CorrectionsFiles), post.Filler(c.Postprocess.JoinWords)}
 }
 
+// namesURL is where the names gate asks Jev.
+var namesURL = names.URL
+
 // NamesGate is the dictation names gate of [names] (NamesConfig).
 func (c Config) NamesGate() names.Gate {
 	n := c.Names
-	return names.Gate{People: n.People, Key: n.Key, Jev: names.Jev{URL: names.URL, Model: names.Model},
+	return names.Gate{People: n.People, Key: n.Key, Jev: names.Jev{URL: namesURL, Model: names.Model},
 		Threshold: n.Threshold, Timeout: time.Duration(n.Timeout)}
 }
 
 // NamesStage is session.Controller.Names for this config: nil while
-// names.on is off. A take the gate fires on gets a names line.
+// names.on is off. A take the gate fires on gets a names line. The
+// controller leaves out a take the model step runs on.
 func (c Config) NamesStage() func(ctx context.Context, text string) (string, *store.Event) {
 	if !c.Names.On {
 		return nil
@@ -115,6 +122,10 @@ func (c Config) NamesStage() func(ctx context.Context, text string) (string, *st
 // changed, so the menu's switch and `config set refine.on` apply at the
 // next take; while the file stays as it is, a take reads nothing.
 type RefineStage struct {
+	// Display is this machine's screen, for the step's screen source; nil
+	// where there is none to capture, and the source stays off.
+	Display refine.Display
+
 	o    LoadOpts
 	mu   sync.Mutex
 	last RefineConfig
@@ -157,17 +168,43 @@ func (s *RefineStage) current() RefineConfig {
 
 // Take gives a take's model step; nil while refine.on is off: no call is
 // made and no line written.
-func (s *RefineStage) Take() func(context.Context, session.RefineInput) (string, *store.Event) {
+func (s *RefineStage) Take() *session.RefineStep {
 	r := s.current()
 	if !r.On {
 		return nil
 	}
-	return func(ctx context.Context, in session.RefineInput) (string, *store.Event) {
-		text, ev := r.Run(ctx, in.Text, in.Target)
-		if ev.Why == "" {
-			ev.Copy = r.AgentCopy // the controller delivers by it (session agentCopy)
+	return &session.RefineStep{
+		Run: func(ctx context.Context, in session.RefineInput) (string, *store.Event) {
+			text, ev := r.RunTake(ctx, in)
+			if ev.Why == "" {
+				ev.Copy = r.AgentCopy // the controller delivers by it (session agentCopy)
+			}
+			return text, ev
+		},
+		Aside: r.Aside,
+	}
+}
+
+// Screen is session.Controller.Screen: as a take starts it sets the screen
+// source to work on the window in front and gives the call that waits for
+// what it got. nil while refine.on or refine.context.screen is off: nothing
+// is captured.
+func (s *RefineStage) Screen() func(context.Context) *refine.Screen {
+	r := s.current()
+	mode := r.Context.Screen
+	if !r.On || s.Display == nil || mode != refine.ScreenOCR && mode != refine.ScreenImage {
+		return nil
+	}
+	src := refine.ScreenSource{Mode: mode, Exclude: r.Context.Exclude, Display: s.Display}
+	got := make(chan *refine.Screen, 1)
+	go func() { got <- src.Take() }()
+	return func(ctx context.Context) *refine.Screen {
+		select {
+		case sc := <-got:
+			return sc
+		case <-ctx.Done():
+			return &refine.Screen{Mode: mode, Withheld: refine.WithheldLate}
 		}
-		return text, ev
 	}
 }
 
@@ -179,6 +216,10 @@ func (s *RefineStage) NotesAgent() bool {
 	return r.On && r.AgentCopy != "refined"
 }
 
+// warmLimit bounds the handshake Warm opens the connection with. A take's
+// wait for the model's answer has no bound.
+const warmLimit = 10 * time.Second
+
 // Warm opens the provider's connection as a take starts, so the call at
 // its end does not wait for the handshake; nothing while refine.on is off.
 func (s *RefineStage) Warm() {
@@ -186,36 +227,38 @@ func (s *RefineStage) Warm() {
 	if !r.On {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), r.Limit(nil))
+	ctx, cancel := context.WithTimeout(context.Background(), warmLimit)
 	defer cancel()
 	if err := (refine.Anthropic{BaseURL: r.Providers[r.Provider].BaseURL}).Warm(ctx); err != nil {
 		log.Printf("refine: opening the connection: %v", err)
 	}
 }
 
-// Limit is how long a take for target waits for the model: timeout when
-// it is set; else 20 s for a take nobody waits on, one for an agent pane
-// or a Telegram chat while wait is off, and 10 s for a take held for the
-// answer.
-func (r RefineConfig) Limit(target *store.Target) time.Duration {
-	switch {
-	case r.Timeout > 0:
-		return time.Duration(r.Timeout)
-	case !r.Wait && target != nil && (target.Kind == "herdr" || target.Kind == "telegram"):
-		return 20 * time.Second
-	}
-	return 10 * time.Second
+// Aside reports whether a take bound for target is delivered as recognised
+// whatever the model answers: agent_copy raw toward an agent's target. Such
+// a take does not wait for the call.
+func (r RefineConfig) Aside(target *store.Target) bool {
+	return r.AgentCopy == "raw" && target.IsAgent()
 }
 
 // Run is the model step on one text bound for target: the text to deliver
-// and the take's refine line. Whatever keeps the step from an answer it
-// can apply — no key, a slow or failed call, a refusal, an answer past the
-// guards — the text comes back as it was, and the line says why.
+// and the take's refine line. It waits for the model as long as ctx lets
+// it. Whatever keeps the step from an answer it can apply — no key, a
+// failed call, a refusal, an answer past the guards, a cancel — the text
+// comes back as it was, and the line says why.
 func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target) (string, *store.Event) {
+	return r.RunTake(ctx, session.RefineInput{Text: text, Target: target})
+}
+
+// RunTake is Run on a take as the session hands it over: its text, its
+// target and what its screen source got, which the call carries and the
+// refine line records as sent.
+func (r RefineConfig) RunTake(ctx context.Context, in session.RefineInput) (string, *store.Event) {
+	text := in.Text
 	ev := &store.Event{V: 1, Ev: "refine", Mode: r.Mode, Provider: r.Provider, Model: r.Model, Effort: r.Effort}
 	fail := func(why string, err error) (string, *store.Event) {
 		ev.At, ev.Why, ev.Err = time.Now(), why, err.Error()
-		log.Printf("refine: %s: %v; delivering the text as it stood", why, err)
+		log.Printf("refine: %s: %v", why, err)
 		return text, ev
 	}
 	p := r.Providers[r.Provider]
@@ -227,8 +270,13 @@ func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target
 	if err != nil {
 		return fail(refine.WhyError, err)
 	}
-	res := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
-		System: append([]string{prompt}, Glossary().Blocks()...), Timeout: r.Limit(target)}.Run(ctx, text)
+	step := refine.Step{Provider: refine.Anthropic{BaseURL: p.BaseURL, Key: key}, Mode: r.Mode, Model: r.Model, Effort: r.Effort,
+		System: append([]string{prompt}, Glossary().Blocks()...)}
+	if sc := in.Screen; sc != nil {
+		step.Context, step.Image = sc.Context(), sc.Image
+		ev.Context, ev.Screen = step.Context, ScreenRecord(sc)
+	}
+	res := step.Run(ctx, text)
 	ev.LatencyMS, ev.Dropped = res.Wall.Milliseconds(), res.Dropped
 	if u := res.Usage; u != (refine.Usage{}) {
 		ev.Usage = &store.RefineUsage{Input: u.Input, CacheWrite: u.CacheWrite, CacheRead: u.CacheRead, Output: u.Output}
@@ -241,6 +289,21 @@ func (r RefineConfig) Run(ctx context.Context, text string, target *store.Target
 	}
 	ev.At = time.Now()
 	return res.Text, ev
+}
+
+// ScreenRecord is sc as a refine line records it.
+func ScreenRecord(sc *refine.Screen) *store.Screen {
+	rec := &store.Screen{Mode: sc.Mode, App: sc.App, W: sc.W, H: sc.H, Chars: utf8.RuneCountInString(sc.Text),
+		CaptureMS: sc.Capture.Milliseconds(), RecognizeMS: sc.Recognize.Milliseconds(), EncodeMS: sc.Encode.Milliseconds(),
+		Withheld: sc.Withheld}
+	if sc.Err != nil {
+		rec.Err = sc.Err.Error()
+	}
+	if im := sc.Image; im != nil {
+		sum := sha256.Sum256(im.Data)
+		rec.Bytes, rec.SHA256, rec.ImageW, rec.ImageH = len(im.Data), hex.EncodeToString(sum[:]), im.W, im.H
+	}
+	return rec
 }
 
 // Doubao is the Doubao ASR 2.0 client; its key is read from key_file at

@@ -17,5 +17,12 @@ func TestPhaseOf(t *testing.T) {
 		if got := phaseOf(st); got != want {
 			t.Errorf("phaseOf(%s) = %v, want %v", st, got, want)
 		}
+		if got := tapPhase(st, false); got != want {
+			t.Errorf("tapPhase(%s, false) = %v, want %v", st, got, want)
+		}
+	}
+	// a take waits on the model step: the tap takes Esc for it
+	if got := tapPhase(session.Transcribing, true); got != mac.PhaseWaiting {
+		t.Errorf("tapPhase(transcribing, true) = %v, want %v", got, mac.PhaseWaiting)
 	}
 }

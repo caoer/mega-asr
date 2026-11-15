@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Tidy and translate ask for the whole text and deliver it when it passes
@@ -32,7 +31,7 @@ func TestFullTextModesUnderTheirGuards(t *testing.T) {
 	} {
 		var got Request
 		p := fake(func(_ context.Context, req Request) (Reply, error) { got = req; return Reply{Text: tc.answer}, nil })
-		r := Step{Provider: p, Mode: tc.mode, Model: "m", Effort: "low", System: []string{"p"}, Timeout: time.Second}.Run(context.Background(), tc.in)
+		r := Step{Provider: p, Mode: tc.mode, Model: "m", Effort: "low", System: []string{"p"}}.Run(context.Background(), tc.in)
 		if got.Output != FullText {
 			t.Errorf("%s %q: asked for %q, want the full text", tc.mode, tc.answer, got.Output)
 		}
@@ -47,7 +46,7 @@ func TestFullTextModesUnderTheirGuards(t *testing.T) {
 	for _, mode := range []string{"", "fix-words"} {
 		var got Request
 		p := fake(func(_ context.Context, req Request) (Reply, error) { got = req; return Reply{Text: "ignored"}, nil })
-		r := Step{Provider: p, Mode: mode, Timeout: time.Second}.Run(context.Background(), "用海库")
+		r := Step{Provider: p, Mode: mode}.Run(context.Background(), "用海库")
 		if got.Output != EditList || r.Text != "用海库" || r.Why != "" {
 			t.Errorf("mode %q: asked for %q, delivered %q, why %q", mode, got.Output, r.Text, r.Why)
 		}

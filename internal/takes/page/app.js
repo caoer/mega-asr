@@ -185,8 +185,8 @@
     { sent: "Sent", pasted: "Pasted", cancelled: "Cancelled", empty: "No speech", undelivered: "Not delivered", dismissed: "Dismissed", recording: "Recording", transcribing: "Transcribing", unknown: "Early take" },
   );
   var WHY = tr(
-    { deliver_failed: "送达失败", asr_failed: "识别失败", interrupted: "被打断", delivery_cut: "粘贴时被打断", incomplete: "不完整" },
-    { deliver_failed: "Delivery failed", asr_failed: "Transcription failed", interrupted: "Interrupted", delivery_cut: "Cut off while pasting", incomplete: "Incomplete" },
+    { deliver_failed: "送达失败", asr_failed: "识别失败", refine_failed: "转译未成", interrupted: "被打断", delivery_cut: "粘贴时被打断", incomplete: "不完整" },
+    { deliver_failed: "Delivery failed", asr_failed: "Transcription failed", refine_failed: "Model step failed", interrupted: "Interrupted", delivery_cut: "Cut off while pasting", incomplete: "Incomplete" },
   );
   var MARK = { unknown: "legacy" }; // the state whose mark has another name
   var GLYPH = {
@@ -2353,8 +2353,8 @@
     { tap: "Stopped with right Option", enter: "Stopped with Enter, to send", cancel: "Cancelled with Esc", auto: "Stopped automatically", stream_end: "Input ended", write_error: "Stopped: a file write failed", shutdown: "Cut off by a restart" },
   );
   var HOLD = tr(
-    { cancelled: "已取消，文字已存下", empty: "没有听到话", deliver_failed: "未送达 · 送达失败", asr_failed: "未送达 · 识别失败", interrupted: "未送达 · 被打断", delivery_cut: "可能已粘贴 · 被打断" },
-    { cancelled: "Cancelled, text kept", empty: "No speech heard", deliver_failed: "Not delivered · delivery failed", asr_failed: "Not delivered · transcription failed", interrupted: "Not delivered · interrupted", delivery_cut: "May have pasted · interrupted" },
+    { cancelled: "已取消，文字已存下", empty: "没有听到话", deliver_failed: "未送达 · 送达失败", asr_failed: "未送达 · 识别失败", refine_failed: "未送达 · 转译未成", interrupted: "未送达 · 被打断", delivery_cut: "可能已粘贴 · 被打断" },
+    { cancelled: "Cancelled, text kept", empty: "No speech heard", deliver_failed: "Not delivered · delivery failed", asr_failed: "Not delivered · transcription failed", refine_failed: "Not delivered · model step failed", interrupted: "Not delivered · interrupted", delivery_cut: "May have pasted · interrupted" },
   );
   var VIA = tr({ hotkey: "快捷键重贴 · ", page: "从历史页重发 · ", cli: "命令重发 · " }, { hotkey: "Re-pasted by hotkey · ", page: "Resent from Recordings · ", cli: "Resent by command · " });
   function evWords(e) {

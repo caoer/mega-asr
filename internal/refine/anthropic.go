@@ -40,9 +40,27 @@ type cache struct {
 	Type string `json:"type"`
 }
 
+// message is one turn. Content is the text alone, or with a picture the
+// blocks: the image, then the text.
 type message struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"`
+}
+
+type imageBlock struct {
+	Type   string      `json:"type"`
+	Source imageSource `json:"source"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"` // base64 on the wire
+}
+
+type textBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type messagesRequest struct {
@@ -91,8 +109,15 @@ func thinking(model, effort string) (kind, apiEffort string) {
 // body is req as the Messages API takes it. The same Request gives the same
 // bytes, so the system blocks are read from the cache on the next take.
 func (a Anthropic) body(req Request) ([]byte, error) {
+	var content any = req.UserContent()
+	if im := req.Image; im != nil {
+		content = []any{
+			imageBlock{Type: "image", Source: imageSource{Type: "base64", MediaType: im.MediaType, Data: im.Data}},
+			textBlock{Type: "text", Text: req.UserContent()},
+		}
+	}
 	m := messagesRequest{Model: req.Model, MaxTokens: maxTokens,
-		Messages: []message{{Role: "user", Content: req.UserContent()}}}
+		Messages: []message{{Role: "user", Content: content}}}
 	for _, s := range req.System {
 		m.System = append(m.System, block{Type: "text", Text: s})
 	}

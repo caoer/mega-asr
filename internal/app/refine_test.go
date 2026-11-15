@@ -12,10 +12,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
@@ -86,7 +89,7 @@ func TestRefineOffMakesNoCall(t *testing.T) {
 		}
 		stage := l.RefineStage(LoadOpts{})
 		stage.Warm()
-		if run := stage.Take(); run != nil {
+		if step := stage.Take(); step != nil {
 			t.Errorf("%q: the step runs", body)
 		}
 	}
@@ -108,11 +111,11 @@ func TestRefineStageReadsTheFileAtEachTake(t *testing.T) {
 	}
 	stage := l.RefineStage(LoadOpts{})
 	stage.Warm()
-	run := stage.Take()
-	if run == nil {
+	step := stage.Take()
+	if step == nil {
 		t.Fatal("no step while refine.on is true")
 	}
-	text, ev := run(context.Background(), session.RefineInput{Text: "用海库跑一下"})
+	text, ev := step.Run(context.Background(), session.RefineInput{Text: "用海库跑一下"})
 	if text != "用Haiku跑一下" || ev == nil || ev.Ev != "refine" || ev.Why != "" || ev.Err != "" || ev.Dropped != 1 ||
 		len(ev.Edits) != 1 || ev.Edits[0].To != "Haiku" || ev.Edits[0].Why != "模型名" ||
 		ev.Mode != "fix-words" || ev.Provider != "gateway" || ev.Model != "claude-haiku-5-5" || ev.Effort != "low" ||
@@ -122,7 +125,7 @@ func TestRefineStageReadsTheFileAtEachTake(t *testing.T) {
 	if err := Set(path, "refine.on", "false", nil); err != nil {
 		t.Fatal(err)
 	}
-	if run := stage.Take(); run != nil {
+	if step := stage.Take(); step != nil {
 		t.Fatal("the step still runs after refine.on = false")
 	}
 }
@@ -168,30 +171,29 @@ func TestRefineStageReadsTheFileOnlyWhenItChanged(t *testing.T) {
 	}
 }
 
-// A slow call, a failed one, a refusal, an answer that is not an edit
-// list, an edit past the guards and an unreadable key each deliver the
-// text as it was, and the refine line says why.
-func TestRefineKeepsTheTextAndSaysWhy(t *testing.T) {
+// A failed call, a refusal, an answer that is not an edit list, an edit
+// past the guards and an unreadable key each give the text back as it was
+// with a refine line that says why: the controller holds such a take.
+func TestRefineSaysWhyThereIsNoAnswer(t *testing.T) {
 	const text = "用海库跑一下"
 	status := func(code int, body string) func(http.ResponseWriter, map[string]any) {
 		return func(w http.ResponseWriter, _ map[string]any) { w.WriteHeader(code); io.WriteString(w, body) }
 	}
 	for _, tc := range []struct {
-		why, more string
-		answer    func(http.ResponseWriter, map[string]any)
-		err       string
+		why    string
+		answer func(http.ResponseWriter, map[string]any)
+		err    string
 	}{
-		{"timeout", "timeout = \"50ms\"\n", func(http.ResponseWriter, map[string]any) { time.Sleep(300 * time.Millisecond) }, "no answer within 50ms"},
-		{"http", "", status(529, `{"type":"error","error":{"type":"overloaded_error"}}`), "status 529"},
-		{"refusal", "", status(200, `{"content":[],"stop_reason":"refusal","usage":{"input_tokens":9}}`), "declined"},
-		{"parse", "", status(200, `{"content":[{"type":"text","text":"好的，我来跑。"}],"stop_reason":"end_turn"}`), "not an edit list"},
-		{"guard", "", edits(`[{"from":"海库","why":"","to":"Haiku 是 Anthropic 的小模型，适合做这种校对工作"}]`), "in place of"},
-		{"key", "", edits(`[]`), "model.key"},
+		{"http", status(529, `{"type":"error","error":{"type":"overloaded_error"}}`), "status 529"},
+		{"refusal", status(200, `{"content":[],"stop_reason":"refusal","usage":{"input_tokens":9}}`), "declined"},
+		{"parse", status(200, `{"content":[{"type":"text","text":"好的，我来跑。"}],"stop_reason":"end_turn"}`), "not an edit list"},
+		{"guard", edits(`[{"from":"海库","why":"","to":"Haiku 是 Anthropic 的小模型，适合做这种校对工作"}]`), "in place of"},
+		{"key", edits(`[]`), "model.key"},
 	} {
 		p := newProvider(t)
 		p.answer = tc.answer
 		dir := isolate(t)
-		refineConfig(t, dir, p.URL, tc.more)
+		refineConfig(t, dir, p.URL, "")
 		if tc.why == "key" {
 			os.Remove(filepath.Join(dir, "model.key"))
 		}
@@ -199,13 +201,44 @@ func TestRefineKeepsTheTextAndSaysWhy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, ev := l.RefineStage(LoadOpts{}).Take()(context.Background(), session.RefineInput{Text: text})
+		got, ev := l.RefineStage(LoadOpts{}).Take().Run(context.Background(), session.RefineInput{Text: text})
 		if got != text || ev == nil || ev.Ev != "refine" || ev.Why != tc.why || !strings.Contains(ev.Err, tc.err) || ev.Edits != nil {
 			t.Errorf("%s: text %q, refine line %+v", tc.why, got, ev)
 		}
 		if tc.why == "key" && p.requests.Load() != 0 {
 			t.Errorf("a call went out without a key")
 		}
+	}
+}
+
+// The step waits for a provider that does not answer: past the time any
+// limit would have set, the call is still under way, and it ends when the
+// take's context is cancelled, with a refine line that says so.
+func TestRefineWaitsForTheProvider(t *testing.T) {
+	p := newProvider(t)
+	release := make(chan struct{})
+	p.answer = func(http.ResponseWriter, map[string]any) { <-release }
+	defer close(release)
+	dir := isolate(t)
+	refineConfig(t, dir, p.URL, "")
+	l, err := Load(LoadOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *store.Event, 1)
+	go func() {
+		_, ev := l.RefineStage(LoadOpts{}).Take().Run(ctx, session.RefineInput{Text: "用海库跑一下"})
+		done <- ev
+	}()
+	select {
+	case ev := <-done:
+		t.Fatalf("the call ended on its own: %+v", ev)
+	case <-time.After(500 * time.Millisecond):
+	}
+	cancel()
+	if ev := <-done; ev == nil || ev.Why != refine.WhyCancelled || ev.LatencyMS < 500 || p.requests.Load() != 1 {
+		t.Fatalf("cancelled: refine line %+v, %d requests", ev, p.requests.Load())
 	}
 }
 
@@ -221,8 +254,6 @@ mode = "fix-words"
 provider = "gateway"
 model = "claude-sonnet-5-5"
 effort = "off"
-timeout = "6s"
-wait = true
 agent_copy = "both"
 
 [refine.context]
@@ -246,19 +277,14 @@ key_file = "/keys/other.key"
 		t.Fatal(err)
 	}
 	home, _ := os.UserHomeDir()
-	want := RefineConfig{On: true, Mode: "fix-words", Provider: "gateway", Model: "claude-sonnet-5-5", Effort: "off",
-		Timeout: Duration(6 * time.Second), Wait: true, AgentCopy: "both",
-		Context: RefineContextConfig{App: true, Field: true, Clipboard: true, Screen: "ocr"},
+	want := RefineConfig{On: true, Mode: "fix-words", Provider: "gateway", Model: "claude-sonnet-5-5", Effort: "off", AgentCopy: "both",
+		Context: RefineContextConfig{App: true, Field: true, Clipboard: true, Screen: "ocr", Exclude: ScreenExclude},
 		Providers: map[string]RefineProviderConfig{
 			"gateway": {Kind: "anthropic", BaseURL: "https://gateway.example/anthropic", KeyFile: filepath.Join(home, "keys/model.key")},
 			"other":   {Kind: "openai", BaseURL: "https://api.example/v1", KeyFile: "/keys/other.key"},
 		}}
 	if !reflect.DeepEqual(l.Refine, want) {
 		t.Fatalf("got  %+v\nwant %+v", l.Refine, want)
-	}
-	// a set timeout is the limit for every take
-	if got := l.Refine.Limit(&store.Target{Kind: "herdr"}); got != 6*time.Second {
-		t.Fatalf("limit %s with timeout = 6s", got)
 	}
 	// the effective config prints each provider as its own table and loads back
 	var out strings.Builder
@@ -279,7 +305,9 @@ key_file = "/keys/other.key"
 		{"[refine]\non = true\nprovider = \"o\"\n[refine.providers.o]\nkind = \"openai\"\nbase_url = \"https://o.example/v1\"\nkey_file = \"/k\"\n", "refine.provider: o is kind openai"},
 		{"[refine]\nmode = \"rewrite\"\n", "refine.mode: \"rewrite\" is not one of fix-words"},
 		{"[refine]\neffort = \"max\"\n", "refine.effort"},
-		{"[refine]\ntimeout = \"-1s\"\n", "refine.timeout"},
+		// the step has no time limit to set: a file that names one is refused
+		{"[refine]\ntimeout = \"6s\"\n", "unknown key refine.timeout"},
+		{"[refine]\nwait = true\n", "unknown key refine.wait"},
 		{"[refine]\nagent_copy = \"none\"\n", "refine.agent_copy"},
 		{"[refine.context]\nscreen = \"on\"\n", "refine.context.screen"},
 		{"[refine.providers.g]\nkind = \"gemini\"\nbase_url = \"https://g.example\"\nkey_file = \"/k\"\n", "refine.providers.g.kind"},
@@ -290,30 +318,6 @@ key_file = "/keys/other.key"
 		writeConfig(t, dir, tc.body)
 		if _, err := Load(LoadOpts{}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%q: got %v, want an error with %q", tc.body, err, tc.want)
-		}
-	}
-}
-
-// With timeout unset the limit follows who waits: 20 s for a take toward
-// an agent pane or a Telegram chat, 10 s for a take held for the answer —
-// any other destination, and every take while wait is on.
-func TestRefineLimitFollowsWait(t *testing.T) {
-	r := Default().Refine
-	for _, tc := range []struct {
-		target *store.Target
-		wait   bool
-		want   time.Duration
-	}{
-		{&store.Target{Kind: "herdr"}, false, 20 * time.Second},
-		{&store.Target{Kind: "telegram"}, false, 20 * time.Second},
-		{&store.Target{Kind: "app"}, false, 10 * time.Second},
-		{&store.Target{Kind: "clipboard"}, false, 10 * time.Second},
-		{nil, false, 10 * time.Second},
-		{&store.Target{Kind: "herdr"}, true, 10 * time.Second},
-	} {
-		r.Wait = tc.wait
-		if got := r.Limit(tc.target); got != tc.want {
-			t.Errorf("target %+v, wait %v: %s, want %s", tc.target, tc.wait, got, tc.want)
 		}
 	}
 }
@@ -362,11 +366,15 @@ func TestStageGivesTheTakeText(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		run := l.RefineStage(LoadOpts{}).Take()
+		step := l.RefineStage(LoadOpts{}).Take()
 		for _, target := range targets {
-			got, ev := run(context.Background(), session.RefineInput{Text: heard, Target: target})
+			got, ev := step.Run(context.Background(), session.RefineInput{Text: heard, Target: target})
 			if got != fixed || ev == nil || ev.Why != "" || ev.Copy != copy || len(ev.Edits) != 1 || ev.Edits[0].To != "Haiku" {
 				t.Errorf("%s toward %+v: text %q, want %q; refine line %+v", copy, target, got, fixed, ev)
+			}
+			// only a take that gets the text as recognised goes out before the answer
+			if aside := step.Aside(target); aside != (copy == "raw" && target.IsAgent()) {
+				t.Errorf("%s toward %+v: aside %v", copy, target, aside)
 			}
 		}
 	}
@@ -401,6 +409,124 @@ func TestRefineNotesAgent(t *testing.T) {
 		}
 		if got := l.RefineStage(LoadOpts{}).NotesAgent(); got != tc.want {
 			t.Errorf("on %v, agent_copy %q: notes the agent %v, want %v", tc.on, tc.copy, got, tc.want)
+		}
+	}
+}
+
+// A take through a controller built from the config, with the names gate
+// and the model step both configured, on a text the gate fires on.
+
+// heardSource is a second of sound, then the stream's end at Stop.
+type heardSource struct {
+	ch   chan []int16
+	once sync.Once
+}
+
+func (s *heardSource) Start(context.Context) (<-chan []int16, error) {
+	b := make([]int16, 16000)
+	for i := range b {
+		b[i] = int16((i%64 - 32) * 100)
+	}
+	s.ch = make(chan []int16, 1)
+	s.ch <- b
+	return s.ch, nil
+}
+func (s *heardSource) Stop()      { s.once.Do(func() { close(s.ch) }) }
+func (s *heardSource) Err() error { return nil }
+
+// said is an ASR that hears the same sentence in every take.
+type said string
+
+func (s said) Transcribe(context.Context, string, bool) (string, error) { return string(s), nil }
+
+// pasted keeps what a controller delivers.
+type pasted struct {
+	mu   sync.Mutex
+	text []string
+}
+
+type cursor struct{}
+
+func (cursor) String() string { return "the cursor" }
+
+func (p *pasted) Capture() session.Target { return cursor{} }
+func (p *pasted) Deliver(_ session.Target, text string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.text = append(p.text, text)
+	return nil
+}
+func (p *pasted) Submit(session.Target) error { return nil }
+
+type noUI struct{}
+
+func (noUI) Show(session.View) {}
+func (noUI) Flash(string)      {}
+func (noUI) Alert(string)      {}
+
+// One model call per dictation: with both stages configured the take makes
+// one request, the provider's, and none to Jev; with the step off the gate
+// asks Jev as before.
+func TestOneModelCallPerTake(t *testing.T) {
+	var jev atomic.Int32
+	typesafe := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jev.Add(1)
+		io.WriteString(w, `{"answers":{"q0":{"type":"choice","choice":"林晓雨: 林晓雨","probabilities":{"林晓雨: 林晓雨":0.93}}}}`)
+	}))
+	defer typesafe.Close()
+	defer func(u string) { namesURL = u }(namesURL)
+	namesURL = typesafe.URL
+	p := newProvider(t)
+	p.answer = edits(`[{"from":"海库","why":"模型名","to":"Haiku"}]`)
+	for _, tc := range []struct {
+		on        bool
+		jev, step int32
+		delivered string
+	}{
+		{true, 0, 1, "让林小雨用Haiku跑一下"},
+		{false, 1, 0, "让林晓雨用海库跑一下"},
+	} {
+		jev.Store(0)
+		p.requests.Store(0)
+		dir := isolate(t)
+		for name, body := range map[string]string{
+			"people.json":  `{"people":[{"slug":"linxiaoyu","name":"林晓雨"}]}`,
+			"typesafe.key": "ts-test\n",
+			"model.key":    "vk-test\n",
+		} {
+			os.MkdirAll(dir, 0o755)
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		on := "false"
+		if tc.on {
+			on = "true"
+		}
+		writeConfig(t, dir, "[names]\non = true\npeople = \""+filepath.Join(dir, "people.json")+"\"\nkey_file = \""+filepath.Join(dir, "typesafe.key")+"\"\n"+
+			"[refine]\non = "+on+"\nprovider = \"gateway\"\n[refine.providers.gateway]\nkind = \"anthropic\"\nbase_url = \""+p.URL+
+			"\"\nkey_file = \""+filepath.Join(dir, "model.key")+"\"\n")
+		l, err := Load(LoadOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := &pasted{}
+		c := &session.Controller{
+			NewSource: func() audio.Source { return &heardSource{} },
+			ASR:       said("让林小雨用海库跑一下"),
+			Names:     l.NamesStage(),
+			Refine:    l.RefineStage(LoadOpts{}).Take,
+			Deliver:   out,
+			UI:        noUI{},
+			Store:     store.Store{Dir: t.TempDir()},
+			ChunkDir:  t.TempDir(),
+		}
+		c.Toggle()
+		c.Toggle()
+		c.Wait()
+		if got := strings.Join(out.text, ";"); jev.Load() != tc.jev || p.requests.Load() != tc.step || got != tc.delivered {
+			t.Errorf("refine.on = %v: %d Jev requests, %d provider requests, delivered %q; want %d, %d, %q",
+				tc.on, jev.Load(), p.requests.Load(), got, tc.jev, tc.step, tc.delivered)
 		}
 	}
 }

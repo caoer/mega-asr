@@ -176,6 +176,12 @@ func TestChord(t *testing.T) {
 		PhaseWindow: {
 			{0, press, Result{Why: windowWhy}}, {125, plainEsc, Result{Why: windowWhy}}, {35, escUp, Result{Why: windowWhy}},
 		},
+		// a take waits on the model step: a lone Esc cancels it; with the tap
+		// key held it is still the chord
+		PhaseWaiting: {
+			{0, plainEsc, Result{Cancel: true, Swallow: true}}, {45, escUp, taken},
+			{620, press, none}, {145, plainEsc, chord}, {35, escUp, taken}, {90, release, afterChord},
+		},
 	}
 	for phase, evs := range streams {
 		d := Detector{Key: ro, Window: 400 * time.Millisecond, Quiet: 500 * time.Millisecond}

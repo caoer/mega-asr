@@ -39,34 +39,44 @@ func TestOverlayShowsPendingTelegramDelivery(t *testing.T) {
 	}
 }
 
-// While a take waits on the model step the label says so, in place of the
-// transcribing label.
+// While a take waits on the model step the overlay says so, in place of the
+// transcribing label, and that Esc cancels; it shows the text as recognised
+// and counts the time from the take's stop.
 func TestOverlaySaysRefining(t *testing.T) {
 	u, ov, _ := newTestUI()
 	u.Show(session.View{Started: time.Now()})
 	if strings.Contains(ov.label, "转译中…") {
 		t.Fatal(ov.label)
 	}
-	u.Show(session.View{Started: time.Now(), Refining: true, Live: func() string { return "用海库" }})
-	if !strings.HasPrefix(ov.label, "转译中…") || strings.Contains(ov.label, "识别中") {
+	stopped := time.Now().Add(-7 * time.Second)
+	u.Show(session.View{Started: stopped, Refining: true, Live: func() string { return "用海库" }})
+	if !strings.HasPrefix(ov.label, "转译中…") || strings.Contains(ov.label, "识别中") || !strings.Contains(ov.label, "Esc 取消") {
 		t.Fatal(ov.label)
+	}
+	if ov.live == nil || ov.live() != "用海库" || !ov.started.Equal(stopped) {
+		t.Fatalf("live text %v, stopwatch from %v, want the recognised text and %v", ov.live != nil, ov.started, stopped)
 	}
 	u.Show(session.View{Started: time.Now(), Refining: true, Send: true})
-	if !strings.HasPrefix(ov.label, "转译中… → ") {
+	if !strings.HasPrefix(ov.label, "转译中… → ") || !strings.Contains(ov.label, "Esc 取消") {
 		t.Fatal(ov.label)
 	}
 }
 
-// fakeOverlay keeps what the overlay shows: the label, "" once hidden, and
-// whether a waveform is drawn under it.
+// fakeOverlay keeps what the overlay shows: the label, "" once hidden,
+// whether a waveform is drawn under it, the live text and where the
+// stopwatch counts from.
 type fakeOverlay struct {
-	label string
-	wave  bool
+	label   string
+	wave    bool
+	live    func() string
+	started time.Time
 }
 
-func (o *fakeOverlay) Show(label string, w mac.Wave)             { o.label, o.wave = label, w.Quality != nil }
-func (o *fakeOverlay) Stopwatch(time.Time, func() time.Duration) {}
-func (o *fakeOverlay) Hide()                                     { o.label, o.wave = "", false }
+func (o *fakeOverlay) Show(label string, w mac.Wave) {
+	o.label, o.wave, o.live = label, w.Quality != nil, w.Live
+}
+func (o *fakeOverlay) Stopwatch(started time.Time, _ func() time.Duration) { o.started = started }
+func (o *fakeOverlay) Hide()                                               { o.label, o.wave = "", false }
 
 // fakeClock hands overlayUI timers that fire only when the test says.
 type fakeClock struct {

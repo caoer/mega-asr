@@ -18,3 +18,13 @@ func phaseOf(keys session.State) mac.Phase {
 	}
 	return mac.PhaseIdle
 }
+
+// tapPhase is phaseOf for the Mac's own key tap: while a take waits on the
+// model step (session.Controller's Waiting) Esc is taken too, and cancels
+// it.
+func tapPhase(keys session.State, waiting bool) mac.Phase {
+	if waiting {
+		return mac.PhaseWaiting
+	}
+	return phaseOf(keys)
+}

@@ -1,6 +1,7 @@
 // Package store keeps every utterance: <dir>/<YYYYmmdd-HHMMSS>.wav, the
 // delivered transcript beside it as .txt, the raw ASR output as .raw.txt and
-// the input device that captured it as .input.json, and the take's event
+// the input device that captured it as .input.json, the picture the model
+// step was sent as .screen.jpg (SaveScreen), and the take's event
 // record as .events.jsonl (Append, Read, State).
 // A take is written as it is recorded (Begin); the only deletion is the audio
 // of a take too short to be speech (Remove), whose record stays.
@@ -47,6 +48,13 @@ func (s Store) SaveText(base, raw, text string) error {
 		return err
 	}
 	return saveTextFile(base+".txt", []byte(text+"\n"))
+}
+
+// SaveScreen writes the picture a take's model step was sent as
+// <base>.screen.jpg and gives the file's name.
+func SaveScreen(base string, jpeg []byte) (string, error) {
+	path := base + ".screen.jpg"
+	return filepath.Base(path), saveTextFile(path, jpeg)
 }
 
 // SaveInput writes the device that captured the take as <base>.input.json.

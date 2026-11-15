@@ -74,11 +74,11 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 		}
 	}
 	take := func() (string, *store.Event) {
-		run := stage.Take()
-		if run == nil {
+		step := stage.Take()
+		if step == nil {
 			return "", nil
 		}
-		return run(context.Background(), session.RefineInput{Text: "嗯我们明天开会"})
+		return step.Run(context.Background(), session.RefineInput{Text: "嗯我们明天开会"})
 	}
 
 	if _, ev := take(); ev != nil {
@@ -101,7 +101,7 @@ func TestRefineMenuAppliesAtTheNextTake(t *testing.T) {
 		click(title)
 	}
 	l, _ = load(o)
-	if c := l.Refine.Context; c != (app.RefineContextConfig{App: true, Field: true, Clipboard: true, Screen: "ocr"}) {
+	if c := l.Refine.Context; !c.App || !c.Field || !c.Clipboard || c.Screen != "ocr" {
 		t.Errorf("context: %+v", c)
 	}
 	if got := titles(menu()); !strings.Contains(got, "Model Step: Tidy") || !strings.Contains(got, "✓claude-sonnet-5-5") {

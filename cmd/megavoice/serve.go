@@ -215,6 +215,7 @@ func (s *server) ready() {
 		model = s.cfg.ASR.Doubao.ResourceID
 	}
 	stage := s.cfg.RefineStage(s.opts)
+	stage.Display = mac.Screen{}
 	s.dlv = deliver.Deliverer{
 		Pane:      s.flag.pane,
 		Agents:    stage.NotesAgent,
@@ -270,6 +271,7 @@ func (s *server) ready() {
 		Names:       s.cfg.NamesStage(),
 		Refine:      stage.Take,
 		Warm:        stage.Warm,
+		Screen:      stage.Screen,
 		Deliver:     dlv,
 		UI:          ui,
 		Store:       store.Store{Dir: s.cfg.Store.Data},
@@ -280,11 +282,11 @@ func (s *server) ready() {
 		Sound:       mac.Beep,
 		HotkeyKey:   chordKey(s.key.Name),
 		OnState: func(st session.State) {
-			keys := s.ctrl.KeyPhase() // stored before OnState runs
+			keys, waiting := s.ctrl.KeyPhase(), s.ctrl.Waiting() // stored before OnState runs
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if s.tap != nil {
-				s.tap.SetPhase(phaseOf(keys))
+				s.tap.SetPhase(tapPhase(keys, waiting))
 			}
 			if r := s.phones.Load(); r != nil {
 				r.Changed()
@@ -587,7 +589,7 @@ func (s *server) installTap() {
 		t, err := mac.StartTap(mac.Detector{Key: s.key, Window: time.Duration(s.cfg.Tap.Window), Quiet: time.Duration(s.cfg.Tap.Quiet)}, s.onTap)
 		if err == nil {
 			s.mu.Lock()
-			t.SetPhase(phaseOf(s.ctrl.KeyPhase()))
+			t.SetPhase(tapPhase(s.ctrl.KeyPhase(), s.ctrl.Waiting()))
 			s.tap = t
 			s.mu.Unlock()
 			log.Printf("serve: tap installed on %s", s.key.Name)

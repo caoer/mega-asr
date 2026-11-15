@@ -69,7 +69,15 @@ const usage = `usage: megavoice [--config FILE] [--set KEY=VALUE]... <command> [
   refine                    the model step ([refine]) over stdin, one JSON line
                             {"id","text"} or one text a line, one call at a time:
                             per line the text it delivers and the take's refine
-                            line; refine.on must be true (--set refine.on=true)
+                            line; refine.on must be true (--set refine.on=true).
+                            With refine.context.screen on, each call carries the
+                            window in front at that moment
+  screen [--mode ocr|image] [--edge N] [--after D] [--out FILE]
+                            the model step's screen source once, on the window in
+                            front (after D): what it took, how long each part
+                            took and the <context> it would send, as one JSON
+                            line; --out writes the text or the JPEG. Asks for the
+                            Screen Recording permission when it is off
   spike                     taps the agent has seen
   record [--seconds N] OUT.wav
                             capture from capture.source into a WAV
@@ -166,6 +174,8 @@ func main() {
 		err = namesCmd(o, args, os.Stdin, os.Stdout)
 	case "refine":
 		err = refineCmd(o, args, os.Stdin, os.Stdout)
+	case "screen":
+		err = screenCmd(o, args, os.Stdout)
 	case "resend":
 		err = resendCmd(args)
 	case "retranscribe":

@@ -197,7 +197,6 @@ func TestStepKeepsTheTextAndSaysWhy(t *testing.T) {
 		why string
 		p   fake
 	}{
-		{WhyTimeout, func(ctx context.Context, _ Request) (Reply, error) { <-ctx.Done(); return Reply{}, ctx.Err() }},
 		{WhyHTTP, func(context.Context, Request) (Reply, error) {
 			return Reply{}, &HTTPError{Status: 529, Body: "overloaded"}
 		}},
@@ -208,7 +207,7 @@ func TestStepKeepsTheTextAndSaysWhy(t *testing.T) {
 		}},
 		{WhyError, func(context.Context, Request) (Reply, error) { return Reply{}, errors.New("no route to host") }},
 	} {
-		r := Step{Provider: tc.p, Model: "m", Effort: "low", System: []string{"p"}, Timeout: 30 * time.Millisecond}.Run(context.Background(), text)
+		r := Step{Provider: tc.p, Model: "m", Effort: "low", System: []string{"p"}}.Run(context.Background(), text)
 		if r.Text != text || r.Why != tc.why || r.Err == nil || r.Edits != nil {
 			t.Errorf("%s: text %q, why %q, err %v, edits %+v", tc.why, r.Text, r.Why, r.Err, r.Edits)
 		}
@@ -218,9 +217,33 @@ func TestStepKeepsTheTextAndSaysWhy(t *testing.T) {
 			t.Errorf("request %+v", req)
 		}
 		return Reply{Edits: []Edit{{From: "海库", To: "Haiku", Why: "模型名"}}, Usage: Usage{Input: 900, Output: 40}}, nil
-	}), Model: "m", Effort: "low", System: []string{"p"}, Timeout: time.Second}.Run(context.Background(), text)
+	}), Model: "m", Effort: "low", System: []string{"p"}}.Run(context.Background(), text)
 	if r.Text != "用Haiku跑一下" || r.Why != "" || r.Err != nil || len(r.Edits) != 1 || r.Usage.Input != 900 {
 		t.Fatalf("applied: %+v", r)
+	}
+}
+
+// The step sets no limit of its own: a call the provider does not answer
+// is still under way after a wait, and ends when the caller cancels it,
+// with the text as it was and why.
+func TestStepWaitsUntilCancelled(t *testing.T) {
+	const text = "用海库跑一下"
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan Result, 1)
+	go func() {
+		done <- Step{Provider: fake(func(ctx context.Context, _ Request) (Reply, error) {
+			<-ctx.Done()
+			return Reply{}, ctx.Err()
+		}), Model: "m"}.Run(ctx, text)
+	}()
+	select {
+	case r := <-done:
+		t.Fatalf("the step ended on its own: %+v", r)
+	case <-time.After(300 * time.Millisecond):
+	}
+	cancel()
+	if r := <-done; r.Text != text || r.Why != WhyCancelled || r.Err == nil || r.Wall < 300*time.Millisecond {
+		t.Fatalf("cancelled: %+v", r)
 	}
 }
 

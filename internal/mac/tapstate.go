@@ -52,6 +52,9 @@ const (
 	// PhaseWindow: a window of megavoice's own has the keys; the tap takes
 	// nothing, and a tap of the key starts or stops nothing.
 	PhaseWindow
+	// PhaseWaiting: PhaseProcessing with a take waiting on the model step,
+	// which has no time limit; Esc cancels that take.
+	PhaseWaiting
 )
 
 // windowWhy is a key event's reason while a megavoice window has the keys.
@@ -80,7 +83,7 @@ type Input struct {
 // Result says what an event means and whether the tap drops it.
 type Result struct {
 	Tap     bool // the tap key went down and up alone within the window
-	Cancel  bool // Esc while recording
+	Cancel  bool // Esc while recording, or while a take waits on the model step
 	Enter   bool // a bare Return while recording or processing
 	Chord   bool // Esc went down with the tap key held: the resend hotkey
 	Swallow bool
@@ -99,8 +102,9 @@ type Result struct {
 // a key-down it never saw never turns the chord into a cancel. Between Escs
 // the key's own events keep its state, and a modifier event whose flags lack
 // its device bit says it is up. A lone Esc is taken only while a recording
-// runs; a bare Return (no modifier) while a recording runs or its text is
-// still on the way. A taken key's repeats and key-up are taken with it.
+// runs or a take waits on the model step; a bare Return (no modifier) while
+// a recording runs or its text is still on the way. A taken key's repeats
+// and key-up are taken with it.
 type Detector struct {
 	Key    TapKey
 	Window time.Duration
@@ -174,7 +178,7 @@ func (d *Detector) Handle(in Input, phase Phase) Result {
 		d.disarm("Esc went down while it was held")
 		d.escOut = true
 		return Result{Chord: true, Swallow: true}
-	case in.Kind == KindKeyDown && in.Code == keyEscape && recording:
+	case in.Kind == KindKeyDown && in.Code == keyEscape && (recording || phase == PhaseWaiting):
 		d.disarm("Esc went down while it was held")
 		d.escOut = true
 		return Result{Cancel: true, Swallow: true}

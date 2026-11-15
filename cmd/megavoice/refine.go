@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/caoer/mega-asr/internal/app"
+	"github.com/caoer/mega-asr/internal/session"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -36,6 +37,8 @@ func refineCmd(o app.LoadOpts, args []string, in io.Reader, out io.Writer) error
 	if !c.Refine.On {
 		return errors.New("refine: refine.on is false; --set refine.on=true runs the step")
 	}
+	stage := c.RefineStage(o)
+	stage.Display = display()
 	enc := json.NewEncoder(out)
 	enc.SetEscapeHTML(false)
 	sc := bufio.NewScanner(in)
@@ -54,7 +57,11 @@ func refineCmd(o app.LoadOpts, args []string, in io.Reader, out io.Writer) error
 			it.Text = line
 		}
 		l := refineLine{ID: it.ID}
-		l.Text, l.Refine = c.Refine.Run(context.Background(), it.Text, nil)
+		take := session.RefineInput{Text: it.Text}
+		if wait := stage.Screen(); wait != nil { // refine.context.screen: the window in front now
+			take.Screen = wait(context.Background())
+		}
+		l.Text, l.Refine = c.Refine.RunTake(context.Background(), take)
 		if err := enc.Encode(l); err != nil {
 			return err
 		}

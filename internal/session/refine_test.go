@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/caoer/mega-asr/internal/audio"
+	"github.com/caoer/mega-asr/internal/refine"
 	"github.com/caoer/mega-asr/internal/store"
 )
 
@@ -38,6 +41,54 @@ func refineLines(t *testing.T, base string) (refine, deliver *store.Event) {
 	return refine, deliver
 }
 
+// lineNames are the ev names of the take's record, in order.
+func lineNames(t *testing.T, base string) string {
+	t.Helper()
+	evs, err := store.Read(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range evs {
+		names = append(names, e.Ev)
+	}
+	return strings.Join(names, ",")
+}
+
+// step is a model step whose call is run.
+func step(run func(context.Context, RefineInput) (string, *store.Event)) func() *RefineStep {
+	return func() *RefineStep { return &RefineStep{Run: run} }
+}
+
+// unanswered is a model step whose call ends only when it is cancelled; it
+// counts its calls and closes asked as the first one starts.
+type unanswered struct {
+	calls atomic.Int32
+	asked chan struct{}
+}
+
+func newUnanswered() *unanswered { return &unanswered{asked: make(chan struct{})} }
+
+func (u *unanswered) run(ctx context.Context, in RefineInput) (string, *store.Event) {
+	if u.calls.Add(1) == 1 {
+		close(u.asked)
+	}
+	t0 := time.Now()
+	<-ctx.Done()
+	return in.Text, &store.Event{Ev: "refine", Model: "m", LatencyMS: time.Since(t0).Milliseconds(), Why: "cancelled", Err: "cancelled"}
+}
+
+// countNames counts the names gate's calls on r and rewrites 林小雨.
+func countNames(r *rig) *atomic.Int32 {
+	var n atomic.Int32
+	r.c.Names = func(_ context.Context, text string) (string, *store.Event) {
+		n.Add(1)
+		return strings.ReplaceAll(text, "林小雨", "林晓雨"), &store.Event{Ev: "names", N: 1,
+			Names: []store.NameEdit{{From: "林小雨", To: "林晓雨", Person: "林晓雨", P: 0.9}}}
+	}
+	return &n
+}
+
 // The model step runs after Post on a dictated take, with the take's text
 // and where it goes: the delivered text is its, the .txt keeps the text
 // before it, and its refine line and the deliver line's text are in the
@@ -47,13 +98,11 @@ func TestRefineCorrectsTheDeliveredText(t *testing.T) {
 	r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
 	r.c.Deliver = paneDeliverer{r.del}
 	var got RefineInput
-	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
-		return func(_ context.Context, in RefineInput) (string, *store.Event) {
-			got = in
-			return strings.ReplaceAll(in.Text, "海库", "Haiku"), &store.Event{Ev: "refine", Model: "m", LatencyMS: 4200,
-				Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}}
-		}
-	}
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+		got = in
+		return strings.ReplaceAll(in.Text, "海库", "Haiku"), &store.Event{Ev: "refine", Model: "m", LatencyMS: 4200,
+			Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}}
+	})
 	r.c.Toggle()
 	r.c.Toggle()
 	r.wait(t)
@@ -82,35 +131,241 @@ func TestRefineCorrectsTheDeliveredText(t *testing.T) {
 	}
 }
 
-// A step that is off leaves the take's path as it is: the same views, the
-// same text, no refine line. A step that fails delivers the text as it
-// stood, its refine line says why, and the overlay says so.
-func TestRefineOffAndFailed(t *testing.T) {
-	r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
-	asked := 0
-	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) { asked++; return nil }
+// A take meets a model once. With the names gate and the model step both
+// set, a take the step runs on is not put to the names gate: the step's is
+// its one call. A take the step is off for goes through the gate as it does
+// without the step.
+func TestRefineIsTheTakesOneModelCall(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "问一下林小雨")
+	names := countNames(r)
+	var calls atomic.Int32
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+		calls.Add(1)
+		return in.Text, &store.Event{Ev: "refine", Model: "m"}
+	})
 	r.c.Toggle()
 	r.c.Toggle()
 	r.wait(t)
 	base := r.dir + "/20200417-104200"
-	refine, deliver := refineLines(t, base)
-	if got := r.del.got(); got != "telegram|用海库跑一下 Python" || asked != 1 || refine != nil || deliver == nil || deliver.Text != "" ||
-		r.ui.String() != "recording,transcribing,hide" {
-		t.Fatalf("off: delivered %q, asked %d, refine %+v, deliver %+v, ui %s", got, asked, refine, deliver, r.ui)
+	if got := lineNames(t, base); names.Load() != 0 || calls.Load() != 1 || strings.Contains(got, "names") || !strings.Contains(got, "refine") {
+		t.Fatalf("step on: %d names calls, %d step calls, record %s", names.Load(), calls.Load(), got)
 	}
+}
 
-	r = newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
-	failed := &store.Event{Ev: "refine", Model: "m", LatencyMS: 10000, Why: "timeout", Err: "no answer within 10s"}
-	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
-		return func(_ context.Context, in RefineInput) (string, *store.Event) { return in.Text, failed }
+// A step that is off leaves the take's path as it is: the names gate is
+// asked, the same text goes out with the same lines and the same views, and
+// no key is taken for a wait.
+func TestRefineOffIsThePathWithoutIt(t *testing.T) {
+	run := func(refine func() *RefineStep) (delivered, lines, ui string, names int32, waited bool) {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "问一下林小雨 派森")
+		n := countNames(r)
+		r.c.Refine = refine
+		r.c.OnState = func(State) { waited = waited || r.c.Waiting() }
+		r.c.Toggle()
+		r.c.Toggle()
+		r.wait(t)
+		return r.del.got(), lineNames(t, r.dir+"/20200417-104200"), r.ui.String(), n.Load(), waited
+	}
+	asked := 0
+	d0, l0, u0, n0, w0 := run(nil)
+	d1, l1, u1, n1, w1 := run(func() *RefineStep { asked++; return nil })
+	if d0 != "telegram|问一下林晓雨 Python" || n0 != 1 || !strings.Contains(l0, "names") || strings.Contains(l0, "refine") || u0 != "recording,transcribing,hide" || w0 {
+		t.Fatalf("no step: delivered %q, %d names calls, record %s, ui %s, waited %v", d0, n0, l0, u0, w0)
+	}
+	if asked != 1 || d1 != d0 || l1 != l0 || u1 != u0 || n1 != n0 || w1 {
+		t.Fatalf("step off: asked %d times; delivered %q, %d names calls, record %s, ui %s, waited %v; want as without the step", asked, d1, n1, l1, u1, w1)
+	}
+}
+
+// A call that gives no answer to use holds the take: nothing is delivered,
+// the record keeps the refine line with why and the hold, the take's audio
+// and its text as recognised stay in the store, and the overlay alerts with
+// what went wrong. The take after it is delivered as usual.
+func TestRefineHoldsATakeWithNoUsableAnswer(t *testing.T) {
+	for _, why := range []string{"http", "refusal", "parse", "guard", "key", "error"} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+		r.asr.byTake = map[string]string{"20200417-104200": "用海库跑一下 派森", "20200417-104200-2": "第二句"}
+		failed := &store.Event{Ev: "refine", Model: "m", LatencyMS: 900, Why: why, Err: "what went wrong"}
+		r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+			if in.Text == "第二句" {
+				return in.Text, &store.Event{Ev: "refine", Model: "m"}
+			}
+			return in.Text, failed
+		})
+		r.c.Toggle()
+		r.c.Toggle()
+		r.c.Toggle()
+		r.c.Toggle()
+		r.wait(t)
+		base := r.dir + "/20200417-104200"
+		refine, deliver := refineLines(t, base)
+		txt, _ := os.ReadFile(base + ".txt")
+		_, wavErr := os.Stat(base + ".wav")
+		if got := r.del.got(); got != "telegram|第二句" || deliver != nil || refine == nil || refine.Why != why || refine.Err == "" ||
+			state(base) != "undelivered/refine_failed" || string(txt) != "用海库跑一下 Python\n" || wavErr != nil ||
+			!strings.HasSuffix(lineNames(t, base), "refine,hold") {
+			t.Fatalf("%s: delivered %q, refine %+v, deliver %+v, state %s, txt %q, wav %v, record %s",
+				why, got, refine, deliver, state(base), txt, wavErr, lineNames(t, base))
+		}
+		if alert := "alert:" + r.c.refineFailedMsg(failed); !strings.Contains(r.ui.String(), alert) {
+			t.Fatalf("%s: ui %s, want %s", why, r.ui, alert)
+		}
+	}
+	// each reason has its own words, and the key's name the key
+	c := &Controller{}
+	seen := map[string]bool{}
+	for _, why := range []string{"http", "refusal", "parse", "guard", "key", "error"} {
+		seen[c.refineFailedMsg(&store.Event{Why: why})] = true
+	}
+	if len(seen) != 6 || !strings.Contains(c.refineFailedMsg(&store.Event{Why: "key"}), "密钥") {
+		t.Fatalf("alerts %v", seen)
+	}
+}
+
+// A call the model never answers keeps the take waiting, with no limit:
+// nothing is delivered, the view shows the wait with the text as recognised
+// and the time since the take stopped, and Esc is the take's. Esc then
+// cancels the call: the take ends cancelled and is kept whole — audio, text
+// as recognised, the refine line that says it was cancelled.
+func TestRefineWaitsUntilEsc(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	u := newUnanswered()
+	r.c.Refine = step(u.run)
+	if r.c.CancelFrom("", "") {
+		t.Fatal("a cancel with no take cancelled something")
 	}
 	r.c.Toggle()
 	r.c.Toggle()
+	<-u.asked
+	time.Sleep(400 * time.Millisecond)
+	r.waitView(t, "the wait", func(v View) bool {
+		return v.Refining && v.Live != nil && v.Live() == "用海库跑一下 Python" && !v.Started.IsZero() && v.Quality == nil
+	})
+	if got := r.del.got(); got != "" || !r.c.Waiting() || !r.c.Busy() || state(base) != "transcribing/" {
+		t.Fatalf("while waiting: delivered %q, waiting %v, busy %v, state %s", got, r.c.Waiting(), r.c.Busy(), state(base))
+	}
+	if !r.c.CancelFrom("", "") {
+		t.Fatal("Esc cancelled nothing")
+	}
 	r.wait(t)
-	refine, deliver = refineLines(t, r.dir+"/20200417-104200")
-	if got := r.del.got(); got != "telegram|用海库跑一下 Python" || refine == nil || refine.Why != "timeout" || refine.Err == "" ||
-		deliver == nil || deliver.Text != "" || !strings.Contains(r.ui.String(), "flash:"+refineNote(failed)) || refineNote(failed) == "" {
-		t.Fatalf("failed: delivered %q, refine %+v, deliver %+v, ui %s", got, refine, deliver, r.ui)
+	refine, deliver := refineLines(t, base)
+	txt, _ := os.ReadFile(base + ".txt")
+	_, wavErr := os.Stat(base + ".wav")
+	if r.del.got() != "" || deliver != nil || refine == nil || refine.Why != "cancelled" || refine.LatencyMS < 400 ||
+		state(base) != "cancelled/" || string(txt) != "用海库跑一下 Python\n" || wavErr != nil || u.calls.Load() != 1 || r.c.Waiting() {
+		t.Fatalf("after Esc: delivered %q, refine %+v, deliver %+v, state %s, txt %q, wav %v, calls %d",
+			r.del.got(), refine, deliver, state(base), txt, wavErr, u.calls.Load())
+	}
+	if !strings.Contains(r.ui.String(), "flash:"+MsgCancelled()) || r.c.Enter() {
+		t.Fatalf("ui %s; a Return after the cancel must pass on", r.ui)
+	}
+}
+
+// Takes behind a waiting one wait their turn, however soon their own answer
+// comes. Cancelling the waiting take frees them; its answer frees them too,
+// and then both go out in take order. No take is lost or delivered twice.
+func TestTakesBehindAWaitingOneWaitTheirTurn(t *testing.T) {
+	for _, end := range []string{"cancel", "answer"} {
+		r := newRig(t, &fakeSource{n: audio.Rate}, "first", "second")
+		r.asr.byTake = map[string]string{"20200417-104200": "first", "20200417-104200-2": "second"}
+		asked, answer := make(chan struct{}), make(chan struct{})
+		var second atomic.Bool
+		r.c.Refine = step(func(ctx context.Context, in RefineInput) (string, *store.Event) {
+			if in.Text == "second" {
+				second.Store(true)
+				return "SECOND", &store.Event{Ev: "refine", Model: "m"}
+			}
+			close(asked)
+			select {
+			case <-answer:
+				return "FIRST", &store.Event{Ev: "refine", Model: "m"}
+			case <-ctx.Done():
+				return in.Text, &store.Event{Ev: "refine", Model: "m", Why: "cancelled", Err: "cancelled"}
+			}
+		})
+		r.del.setFront("A")
+		r.c.Toggle()
+		r.c.Toggle()
+		<-asked
+		r.del.setFront("B")
+		r.c.Toggle()
+		r.c.Toggle()
+		for !second.Load() {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond)
+		if got := r.del.got(); got != "" {
+			t.Fatalf("%s: delivered %q while the first take waits", end, got)
+		}
+		// the take shown is the one still waiting on the model, which Esc cancels
+		r.ui.mu.Lock()
+		v := r.ui.views[len(r.ui.views)-1]
+		r.ui.mu.Unlock()
+		if !v.Refining || v.Live == nil || v.Live() != "first" {
+			t.Fatalf("%s: the view while the first take waits: refining %v", end, v.Refining)
+		}
+		first, next := r.dir+"/20200417-104200", r.dir+"/20200417-104200-2"
+		want := "B|SECOND"
+		if end == "cancel" {
+			if !r.c.CancelFrom("", "") {
+				t.Fatal("Esc cancelled nothing")
+			}
+		} else {
+			close(answer)
+			want = "A|FIRST;B|SECOND"
+		}
+		r.wait(t)
+		if got := r.del.got(); got != want || state(next) != "pasted/" || (end == "cancel") != (state(first) == "cancelled/") {
+			t.Fatalf("%s: delivered %q, want %q; states %s and %s", end, got, want, state(first), state(next))
+		}
+		for _, base := range []string{first, next} {
+			if txt, err := os.ReadFile(base + ".txt"); err != nil || len(txt) == 0 {
+				t.Fatalf("%s: %s.txt %q, %v", end, base, txt, err)
+			}
+		}
+	}
+}
+
+// A take whose delivered text never depends on the answer does not wait:
+// it is delivered as recognised at once, and the call finishes beside it —
+// its refine line follows the deliver line, and the overlay then says what
+// was only recorded.
+func TestRefineAsideDeliversAtOnce(t *testing.T) {
+	r, base := rig2020(t, &fakeSource{n: audio.Rate}, "用海库跑一下 派森")
+	r.c.Deliver = recordDeliverer{r.del, store.Target{Kind: "herdr", Pane: "w1:p2", Agent: "claude"}}
+	answer := make(chan struct{})
+	ev := &store.Event{Ev: "refine", Model: "m", LatencyMS: 900, Copy: "raw",
+		Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}}
+	r.c.Refine = func() *RefineStep {
+		return &RefineStep{
+			Aside: func(target *store.Target) bool { return target.IsAgent() },
+			Run: func(_ context.Context, in RefineInput) (string, *store.Event) {
+				<-answer
+				return strings.ReplaceAll(in.Text, "海库", "Haiku"), ev
+			},
+		}
+	}
+	r.c.Toggle()
+	r.c.Toggle()
+	deadline := time.Now().Add(2 * time.Second)
+	for r.del.got() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if d := r.del.got(); !strings.HasSuffix(d, "|用海库跑一下 Python") || r.c.Waiting() || !r.c.Busy() {
+		t.Fatalf("before the answer: delivered %q, waiting %v, busy %v", d, r.c.Waiting(), r.c.Busy())
+	}
+	if refine, _ := refineLines(t, base); refine != nil {
+		t.Fatalf("a refine line before the answer: %+v", refine)
+	}
+	close(answer)
+	r.wait(t)
+	refine, deliver := refineLines(t, base)
+	if d := r.del.got(); strings.Count(d, "Python") != 1 || refine == nil || refine.Copy != "raw" || len(refine.Edits) != 1 ||
+		deliver == nil || deliver.Text != "" || !strings.HasSuffix(lineNames(t, base), "deliver,refine") || state(base) != "pasted/" {
+		t.Fatalf("after the answer: delivered %q, refine %+v, deliver %+v, record %s", d, refine, deliver, lineNames(t, base))
+	}
+	if note := refineNote(ev); !strings.HasPrefix(note, "仅记录") || !strings.Contains(r.ui.String(), "flash:"+note) {
+		t.Fatalf("note %q, ui %s", note, r.ui)
 	}
 }
 
@@ -120,11 +375,11 @@ func TestRefineSkipsABrokenPhoneStream(t *testing.T) {
 	r, base := rig2020(t, &fakeSource{}, "partial text")
 	asked, named := 0, 0
 	r.c.Names = func(_ context.Context, text string) (string, *store.Event) { named++; return text, nil }
-	r.c.Refine = func() func(context.Context, RefineInput) (string, *store.Event) {
+	r.c.Refine = func() *RefineStep {
 		asked++
-		return func(_ context.Context, in RefineInput) (string, *store.Event) {
+		return &RefineStep{Run: func(_ context.Context, in RefineInput) (string, *store.Event) {
 			return in.Text, &store.Event{Ev: "refine", Model: "m"}
-		}
+		}}
 	}
 	sink := &fakeDeliverer{front: "iPhone 键盘"}
 	src := &fakeSource{n: audio.Rate, cut: true, cutErr: errors.New("phone stream sequence gap")}
@@ -169,12 +424,16 @@ func (t keypadEnd) ForEnd(send bool) Target {
 func (d keypadDeliverer) Capture() Target { return keypadEnd{d.fakeDeliverer.Capture()} }
 
 // stepFixing is a model step that corrects 海库 to Haiku and hands the
-// controller agent_copy as the stage does.
-func stepFixing(copy string) func() func(context.Context, RefineInput) (string, *store.Event) {
-	return func() func(context.Context, RefineInput) (string, *store.Event) {
-		return func(_ context.Context, in RefineInput) (string, *store.Event) {
-			return strings.ReplaceAll(in.Text, "海库", "Haiku"), &store.Event{Ev: "refine", Model: "m", LatencyMS: 900,
-				Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}, Copy: copy}
+// controller agent_copy as the stage does: on the refine line, and, under
+// raw toward an agent's target, as a take that does not wait for the call.
+func stepFixing(copy string) func() *RefineStep {
+	return func() *RefineStep {
+		return &RefineStep{
+			Aside: func(target *store.Target) bool { return copy == "raw" && target.IsAgent() },
+			Run: func(_ context.Context, in RefineInput) (string, *store.Event) {
+				return strings.ReplaceAll(in.Text, "海库", "Haiku"), &store.Event{Ev: "refine", Model: "m", LatencyMS: 900,
+					Edits: []store.RefineEdit{{From: "用海库跑", To: "用Haiku跑", Why: "模型名"}}, Copy: copy}
+			},
 		}
 	}
 }
@@ -278,5 +537,53 @@ func TestRefineBothOnAKeypadTake(t *testing.T) {
 		if d := r.del.got(); !strings.HasPrefix(d, want) {
 			t.Errorf("send %v: delivered %q, want %q", send, d, want)
 		}
+	}
+}
+
+// A take's screen is asked for as it starts, handed to its model step, and
+// the picture the step sent is kept beside the record under the name the
+// refine line gives; a take without the grant says so on the overlay.
+func TestTakeCarriesItsScreen(t *testing.T) {
+	r := newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下")
+	shot := &refine.Screen{Mode: refine.ScreenImage, Image: &refine.Image{MediaType: "image/jpeg", Data: []byte("jpeg bytes")}}
+	started := 0
+	r.c.Screen = func() func(context.Context) *refine.Screen {
+		started++
+		return func(context.Context) *refine.Screen { return shot }
+	}
+	var got *refine.Screen
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) {
+		got = in.Screen
+		return in.Text, &store.Event{Ev: "refine", Model: "m", Screen: &store.Screen{Mode: "image", SHA256: "abc", Bytes: 10}}
+	})
+	r.c.Toggle()
+	if started != 1 {
+		t.Fatalf("the screen was asked for %d times as the take started", started)
+	}
+	r.c.Toggle()
+	r.wait(t)
+	base := r.dir + "/20200417-104200"
+	line, _ := refineLines(t, base)
+	kept, err := os.ReadFile(base + ".screen.jpg")
+	if got != shot || line == nil || line.Screen == nil || line.Screen.Image != "20200417-104200.screen.jpg" || err != nil || string(kept) != "jpeg bytes" {
+		t.Fatalf("step got %+v, refine line %+v, kept %q (%v)", got, line, kept, err)
+	}
+
+	r = newRig(t, &fakeSource{n: audio.Rate}, "用海库跑一下")
+	denied := &store.Event{Ev: "refine", Model: "m", Screen: &store.Screen{Mode: "ocr", Withheld: refine.WithheldPermission}}
+	r.c.Screen = func() func(context.Context) *refine.Screen {
+		return func(context.Context) *refine.Screen {
+			return &refine.Screen{Mode: refine.ScreenOCR, Withheld: refine.WithheldPermission}
+		}
+	}
+	r.c.Refine = step(func(_ context.Context, in RefineInput) (string, *store.Event) { return in.Text, denied })
+	r.c.Toggle()
+	r.c.Toggle()
+	r.wait(t)
+	if note := refineNote(denied); !strings.Contains(note, "屏幕") && !strings.Contains(note, "Screen") || !strings.Contains(r.ui.String(), "flash:"+note) {
+		t.Fatalf("no grant: note %q, ui %s", note, r.ui)
+	}
+	if _, err := os.Stat(r.dir + "/20200417-104200.screen.jpg"); err == nil {
+		t.Error("a picture was kept for a take that sent none")
 	}
 }

@@ -132,9 +132,9 @@ func (u *overlayUI) renderLocked() {
 	case v.Delivering && v.Send && v.Target != "":
 		label = l10n.T("发送中…", "Sending…")
 	case v.Refining && v.Send:
-		label = l10n.T("转译中… → 粘贴 + Enter", "Refining… → paste + Enter")
+		label = l10n.T("转译中… → 粘贴 + Enter · Esc 取消", "Refining… → paste + Enter · Esc cancels")
 	case v.Refining:
-		label = l10n.T("转译中…（Enter 发送）", "Refining… (Enter sends)")
+		label = l10n.T("转译中…（Enter 发送 · Esc 取消）", "Refining… (Enter sends · Esc cancels)")
 	case v.Send:
 		label = l10n.T("识别中… → 粘贴 + Enter", "Transcribing… → paste + Enter")
 	default:

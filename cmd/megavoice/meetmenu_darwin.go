@@ -455,6 +455,13 @@ func (m *meetMenu) do(a act) {
 		}
 		m.readLocal()
 		m.note(err)
+		if err == nil && a.key == "refine.context.screen" && a.arg != `"off"` {
+			go func() {
+				if why := askScreen(); why != nil {
+					m.note(why)
+				}
+			}()
+		}
 	case actExec:
 		go func() {
 			out, err := m.command(a.argv).CombinedOutput()

@@ -130,7 +130,7 @@ func taker(t *testing.T, p *provider) func(text string) string {
 		if take == nil {
 			t.Fatal("the stage gives no step")
 		}
-		if _, ev := take(context.Background(), session.RefineInput{Text: text}); ev.Why != "" {
+		if _, ev := take.Run(context.Background(), session.RefineInput{Text: text}); ev.Why != "" {
 			t.Fatalf("refine line %+v", ev)
 		}
 		return strings.TrimSpace(system.String())

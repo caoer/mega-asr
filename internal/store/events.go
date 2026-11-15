@@ -33,15 +33,18 @@ const atLayout = "2006-01-02T15:04:05.000Z07:00"
 //	send_on       Enter during transcription
 //	text          engine, raw_chars, chars, failed_chunks, latency_ms, stream_err,
 //	              sha256, audio main/backup
-//	hold          why cancelled/deliver_failed/asr_failed/interrupted/delivery_cut/empty
+//	hold          why cancelled/deliver_failed/asr_failed/refine_failed/interrupted/
+//	              delivery_cut/empty
 //	names         n (spans judged), names (from, to, person, p: each span
 //	              written as a listed name), latency_ms, err: the dictation
 //	              names gate fired; .txt keeps the text before it
 //	refine        mode, provider, model, effort, latency_ms, edits (from, to, why:
 //	              each change made), dropped (edits left out), usage (the
-//	              call's tokens); why timeout/http/refusal/parse/guard/key/error
-//	              and err when the text stands as it was: the model step
-//	              ran; .txt keeps the text before it
+//	              call's tokens); why http/refusal/parse/guard/key/error/cancelled
+//	              and err when the call gave no answer to use (hold
+//	              refine_failed follows, or hold cancelled): the model step
+//	              ran; .txt keeps the text before it. context: the call's
+//	              <context> as sent. screen: the screen source (Screen)
 //	deliver       n, via auto/hotkey/page/cli, caller, target, ok, err, chars,
 //	              submit none/ok/err, source delivered/raw/<engine>/retranscription <n>;
 //	              text only when it differs from .txt; at is when the text
@@ -114,6 +117,36 @@ type Event struct {
 	// Sent, on a deliver line, is what was delivered in place of the take's
 	// text: an agent's both copy. Text stays the take's text.
 	Sent string `json:"sent,omitempty"`
+	// Context is the text the model step's call carried inside <context>,
+	// as sent; absent when it carried none.
+	Context string `json:"context,omitempty"`
+	// Screen is the step's screen source on this take; absent while the
+	// source is off.
+	Screen *Screen `json:"screen,omitempty"`
+}
+
+// Screen is the model step's screen source on a refine line: what the
+// window in front gave the call, or why it gave nothing. The window's text
+// is in the line's context; its picture is the file Image.
+type Screen struct {
+	Mode   string `json:"mode"`             // ocr or image
+	App    string `json:"app,omitempty"`    // the application in front, by bundle id
+	W      int    `json:"w,omitempty"`      // the capture, in pixels
+	H      int    `json:"h,omitempty"`      //
+	Chars  int    `json:"chars,omitempty"`  // ocr: characters of the window's text sent
+	Image  string `json:"image,omitempty"`  // image: the picture sent, a file beside the record: <name>.screen.jpg
+	Bytes  int    `json:"bytes,omitempty"`  // the picture's size
+	SHA256 string `json:"sha256,omitempty"` // of the picture's bytes
+	ImageW int    `json:"image_w,omitempty"`
+	ImageH int    `json:"image_h,omitempty"`
+	// What each part took: the capture, reading its text, making the JPEG.
+	CaptureMS   int64 `json:"capture_ms,omitempty"`
+	RecognizeMS int64 `json:"recognize_ms,omitempty"`
+	EncodeMS    int64 `json:"encode_ms,omitempty"`
+	// Withheld is why nothing of the screen was sent: permission, secure,
+	// excluded, empty, late or error.
+	Withheld string `json:"withheld,omitempty"`
+	Err      string `json:"err,omitempty"`
 }
 
 // RefineEdit is a change the model step made: every From in the text became
@@ -288,10 +321,11 @@ func Read(base string) ([]Event, error) {
 //	"pasted"       delivered without Enter
 //	"cancelled"    the user cancelled it
 //	"empty"        no speech
-//	"undelivered"  with Why: deliver_failed, asr_failed, interrupted,
-//	               delivery_cut (an exit cut it while its paste went out, so
-//	               the text most likely landed), or incomplete (its own
-//	               delivery went out with failed chunks)
+//	"undelivered"  with Why: deliver_failed, asr_failed, refine_failed (the
+//	               model step gave no answer to use; nothing went out),
+//	               interrupted, delivery_cut (an exit cut it while its paste
+//	               went out, so the text most likely landed), or incomplete
+//	               (its own delivery went out with failed chunks)
 //
 // Seen is true when a seen line follows the line that set the final state.
 // Dismissed is true when the take is undelivered and the later of its

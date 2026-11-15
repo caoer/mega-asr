@@ -86,7 +86,11 @@
 
 [refine]                     # the model step: after recognition, one call to a model puts mis-heard words right
 #                            # before the text is delivered. It needs a provider table and your own key
-# on = false                 # off: no call is made. On, a call that is slow, fails or is refused leaves the text as it was
+# on = false                 # off: no call is made. On, a take waits for the model's answer, with no time limit: the
+#                            # overlay shows the text as recognised and the time so far, and Esc cancels it. A call
+#                            # that fails or is refused, or an answer that cannot be used, holds the take: nothing
+#                            # is delivered, and the take stays in Recordings with its text as recognised. The step
+#                            # is a take's one model call: the names gate asks nothing about a take it runs on
 # mode = "fix-words"         # fix-words: swap the words the recogniser got wrong, touch nothing else; tidy: drop
 #                            # fillers and repeats, fix punctuation; translate: render it by meaning (into English;
 #                            # the language is in its prompt). Tidy and translate return the whole text, kept only
@@ -100,19 +104,13 @@
 # model = "claude-haiku-5-5"   # the provider's model id
 # effort = "low"             # off, low, medium, high: how much the model thinks first; off is no thinking
 #                            # where the model allows it
-# timeout = "0s"             # how long a take waits for the model before it is delivered as it stood. "0s": 20s for
-#                            # a take toward an agent pane or a Telegram chat, which nobody waits on, and 10s for
-#                            # one held for the answer: any other take, and every take while wait = true
-# wait = false               # true: every take is held for the model's answer. false: a take toward an agent pane
-#                            # or a Telegram chat is delivered when the answer is ready; a take for an
-#                            # application window is held as well
-#                            # [refine.context] is accepted and changes nothing in this build: the dictation
-#                            # travels alone
+#                            # of [refine.context], screen is read; app, field and clipboard are accepted
+#                            # and change nothing in this build
 # agent_copy = "refined"     # what a herdr pane with an agent in it, or the keypad's Telegram chat, gets:
 #                            # refined: the corrected text. both: when the two differ, the corrected text, a
 #                            # blank line, then the text as recognised under the mark [Mega Voice · as heard].
-#                            # raw: the text as recognised; what the model would have changed is only recorded.
-#                            # Every other target gets the corrected text
+#                            # raw: the text as recognised, delivered at once; what the model would have changed
+#                            # is only recorded, when its answer comes. Every other target gets the corrected text
 # providers = {}             # one table per provider, in place of this line:
 #                            #   [refine.providers.anthropic]
 #                            #   kind = "anthropic"                        # anthropic: the Messages API; openai: chat completions
@@ -123,7 +121,13 @@
 # app = false                # the application and its window's title
 # field = false              # the text of the field or pane you dictate into
 # clipboard = false          # what you copied just before the take
-# screen = "off"             # the front window: off, ocr (its text, read on this Mac) or image
+# screen = "off"             # the front window, captured as a take starts: off, ocr (its text, read on this
+#                            # Mac, sent as text) or image (its picture, sent to the model and kept beside
+#                            # the take as <take>.screen.jpg). Needs the Screen Recording permission, which
+#                            # the app asks for when this is switched on; without it the step runs without
+#                            # the screen. Nothing is captured while the keyboard is in a password field
+# exclude = ["com.1password.1password", "com.agilebits.onepassword7", "com.apple.Passwords", "com.apple.keychainaccess", "com.bitwarden.desktop", "com.lastpass.LastPass", "org.keepassxc.keepassxc"]
+#                            # applications, by bundle id, whose windows are never captured
 
 [deliver]
 # herdr_apps = ["com.github.wez.wezterm"]   # bundle ids of the terminals herdr runs in

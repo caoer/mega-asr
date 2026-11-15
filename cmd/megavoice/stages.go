@@ -103,17 +103,20 @@ func transcribe(o app.LoadOpts, args []string) error {
 	defer d.close()
 	var refined *store.Event
 	if !*plain {
-		take := c.RefineStage(o).Take
-		d.r.ctrl.Refine = func() func(context.Context, session.RefineInput) (string, *store.Event) {
-			run := take()
-			if run == nil {
+		stage := c.RefineStage(o)
+		stage.Display = display()
+		take := stage.Take
+		d.r.ctrl.Screen = stage.Screen
+		d.r.ctrl.Refine = func() *session.RefineStep {
+			step := take()
+			if step == nil {
 				return nil
 			}
-			return func(ctx context.Context, in session.RefineInput) (text string, ev *store.Event) {
-				text, ev = run(ctx, in)
+			return &session.RefineStep{Aside: step.Aside, Run: func(ctx context.Context, in session.RefineInput) (text string, ev *store.Event) {
+				text, ev = step.Run(ctx, in)
 				refined = ev
 				return text, ev
-			}
+			}}
 		}
 	}
 	text, err := d.text(fs.Arg(0))

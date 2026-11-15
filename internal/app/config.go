@@ -255,18 +255,19 @@ type NamesConfig struct {
 }
 
 // RefineConfig is dictation's model step, read from the file at every take:
-// after the post chain and the names gate, one call to the model of a
-// provider returns the mis-heard words to put right, and the delivered text
-// carries them. A call that is slow, fails or is refused, or an answer past
-// the mode's guards, leaves the text as it was.
+// after the post chain, one call to the model of a provider returns the
+// mis-heard words to put right, and the delivered text carries them. It is
+// the take's one model call: the names gate asks nothing about a take the
+// step runs on. The take waits for the answer with no time limit, shown on
+// the overlay, until Esc cancels it. A call that fails or is refused, or an
+// answer past the mode's guards, holds the take: it is not delivered and
+// stays in Recordings.
 type RefineConfig struct {
 	On        bool                            `toml:"on"`
 	Mode      string                          `toml:"mode"`       // what the model is asked to do: fix-words, tidy or translate
 	Provider  string                          `toml:"provider"`   // the [refine.providers.<name>] table the call goes to
 	Model     string                          `toml:"model"`      // the provider's model id
 	Effort    string                          `toml:"effort"`     // off, low, medium or high: how much the model thinks
-	Timeout   Duration                        `toml:"timeout"`    // past this the take is delivered as it stood; 0s follows wait (Limit)
-	Wait      bool                            `toml:"wait"`       // hold every take until the model answers
 	AgentCopy string                          `toml:"agent_copy"` // what an agent pane or chat gets: refined, both or raw
 	Context   RefineContextConfig             `toml:"context"`
 	Providers map[string]RefineProviderConfig `toml:"providers"`
@@ -279,7 +280,14 @@ type RefineContextConfig struct {
 	Field     bool   `toml:"field"`     // the text of the field or pane dictated into
 	Clipboard bool   `toml:"clipboard"` // what was copied just before the take
 	Screen    string `toml:"screen"`    // the front window: off, ocr (its text) or image
+	// Exclude lists applications by bundle id whose windows are never
+	// captured.
+	Exclude []string `toml:"exclude"`
 }
+
+// ScreenExclude is refine.context.exclude's default: the password managers.
+var ScreenExclude = []string{"com.1password.1password", "com.agilebits.onepassword7", "com.apple.Passwords",
+	"com.apple.keychainaccess", "com.bitwarden.desktop", "com.lastpass.LastPass", "org.keepassxc.keepassxc"}
 
 // RefineProviderConfig is one provider: a kind of API, where it answers and
 // the file that holds its key. The key stays in its own file.
@@ -456,7 +464,7 @@ func Default() Config {
 		Names: NamesConfig{On: true, People: filepath.Join(ConfigDir(), "people.json"),
 			KeyFile: filepath.Join(ConfigDir(), "typesafe.key"), Threshold: 0.5, Timeout: MS(1500)},
 		Refine: RefineConfig{Mode: "fix-words", Model: "claude-haiku-5-5", Effort: "low",
-			AgentCopy: "refined", Context: RefineContextConfig{Screen: "off"}, Providers: map[string]RefineProviderConfig{}},
+			AgentCopy: "refined", Context: RefineContextConfig{Screen: "off", Exclude: slices.Clone(ScreenExclude)}, Providers: map[string]RefineProviderConfig{}},
 		Deliver: DeliverConfig{HerdrApps: []string{"com.github.wez.wezterm"}},
 		Keypad:  KeypadConfig{Sender: "user", State: filepath.Join(stateHome(), "megavoice", "keypad.json"), Send: []string{}},
 		Update:  UpdateConfig{Command: []string{}},
@@ -714,8 +722,8 @@ func (c Config) validate() []string {
 	oneOf("refine.effort", r.Effort, "off", "low", "medium", "high")
 	oneOf("refine.agent_copy", r.AgentCopy, "refined", "both", "raw")
 	oneOf("refine.context.screen", r.Context.Screen, "off", "ocr", "image")
-	if r.Timeout < 0 {
-		bad("refine.timeout", "must not be negative")
+	if slices.Contains(r.Context.Exclude, "") {
+		bad("refine.context.exclude", "holds an empty bundle id")
 	}
 	for name, p := range r.Providers {
 		key := "refine.providers." + name
