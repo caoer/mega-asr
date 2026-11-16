@@ -4,7 +4,9 @@
 package app
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1222,36 +1224,81 @@ func Template() []byte {
 }
 
 // Seed writes the default hotwords and corrections files when absent; an
-// existing file is the user's and is never touched.
+// existing file is the user's and is never touched. A mode's prompt file
+// that holds a built-in text is removed: nobody edited it, and the mode
+// then reads the prompt of the build that runs.
 func Seed() {
 	for _, name := range []string{"hotwords.txt", "corrections.tsv"} {
-		seed(filepath.Join(ConfigDir(), name), name)
+		if err := seed(filepath.Join(ConfigDir(), name), name); err != nil {
+			log.Printf("config: seed %s: %v", name, err)
+		}
 	}
-}
-
-// SeedPrompt writes the built-in prompt of a mode the app comes with as
-// path, when path is that mode's prompt file and nothing is there: the copy
-// the user opens to edit. A mode whose file was never opened reads the
-// built-in, so its prompt is the one the build carries.
-func SeedPrompt(path string) {
 	for _, m := range RefineModes {
-		if path == (RefineConfig{Mode: m}).PromptPath() {
-			seed(path, "modes/"+m+".md")
+		path := (RefineConfig{Mode: m}).PromptPath()
+		if b, err := os.ReadFile(path); err == nil && builtInPrompt(m, b) {
+			if err := os.Remove(path); err != nil {
+				log.Printf("config: %v", err)
+			}
 		}
 	}
 }
 
-// seed writes the default file from as path when nothing is there.
-func seed(path, from string) {
+// builtInPrompts are the texts each mode's prompt has had as built in, each
+// by the sha256 of the text without the space around it. A prompt file
+// holding one of them is a copy nobody edited: a build wrote it at a start,
+// or Edit Prompt… wrote it and it was left as it was. A prompt text that
+// changes adds its sum here (TestEveryBuiltInPromptIsListed).
+var builtInPrompts = map[string][]string{
+	"fix-words": {
+		"8e00a4087d4dedbb49ff0413b2282c77f918978a73ddbb8b9fcdc47e1935a4a0",
+		"298cdc321e9ef47f6b0aa7f2e01bd22896f6df9d6f935398692e1cd9a0dd06f1",
+	},
+	"tidy": {
+		"38ba49f6ad58a4c12d4efe10fb3069ceebee2a4a26b910593ca6f758a9eb43df",
+		"78586899f0b3328071e5e38835d6e9f5c6e2c683b6b793378c6ac2a21bb6ac10",
+		"dde24a2c19d426ffd27e6e1cdef6d73c94025d85a7a4228b32bff92686a609af",
+		"e4c1e36e6d49edb84f9d6b6566e91d3eba757ac7cb5df6aa9b23fa8acf54c39d",
+	},
+	"translate": {
+		"d82e4b2ab4f7eb6d1715772e64b5ca038eabb08081f61f877e5e013d8e55372d",
+		"edbf86cadf9e48f4a88c316c96a434a7b3c54ddbefb2622c19be5fd53fb9efe6",
+	},
+}
+
+// builtInPrompt reports whether text is a built-in text of mode's prompt,
+// this build's or an earlier one's.
+func builtInPrompt(mode string, text []byte) bool {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(string(text))))
+	return slices.Contains(builtInPrompts[mode], hex.EncodeToString(sum[:]))
+}
+
+// SeedPrompt writes the built-in prompt of a mode the app comes with as
+// path, when path is that mode's prompt file and nothing is there: the copy
+// the user opens to edit. A mode whose file was never edited reads the
+// built-in, so its prompt is the one the build carries. An error means the
+// file is not there to open.
+func SeedPrompt(path string) error {
+	for _, m := range RefineModes {
+		if path == (RefineConfig{Mode: m}).PromptPath() {
+			return seed(path, "modes/"+m+".md")
+		}
+	}
+	return nil
+}
+
+// seed writes the default file from as path when nothing is there. A write
+// that fails leaves no file behind.
+func seed(path, from string) error {
 	if _, err := os.Stat(path); err == nil {
-		return
+		return nil
 	}
 	b, _ := defaults.ReadFile("defaults/" + from)
-	err := os.MkdirAll(filepath.Dir(path), 0o755)
-	if err == nil {
-		err = os.WriteFile(path, b, 0o644)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
-	if err != nil {
-		log.Printf("config: seed %s: %v", path, err)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		os.Remove(path)
+		return err
 	}
+	return nil
 }

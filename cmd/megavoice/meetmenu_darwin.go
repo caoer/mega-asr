@@ -512,8 +512,10 @@ func (m *meetMenu) do(a act) {
 	case actExit:
 		m.exit(a.arg)
 	case actEdit:
-		app.SeedPrompt(a.arg) // a mode's prompt opened for the first time starts from the built-in
-		err := touch(a.arg)
+		err := app.SeedPrompt(a.arg) // a mode's prompt opened for the first time starts from the built-in
+		if err == nil {
+			err = touch(a.arg)
+		}
 		if err == nil {
 			err = m.command([]string{"open", "-t", a.arg}).Start()
 		}

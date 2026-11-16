@@ -147,7 +147,9 @@ func TestPromptIsTheBuildsUntilEdited(t *testing.T) {
 		t.Errorf("a start wrote %d prompt files", n)
 	}
 	tidy := (RefineConfig{Mode: "tidy"}).PromptPath()
-	SeedPrompt(tidy) // Edit Prompt…
+	if err := SeedPrompt(tidy); err != nil { // Edit Prompt…
+		t.Fatal(err)
+	}
 	want, _ := defaults.ReadFile("defaults/modes/tidy.md")
 	if b, err := os.ReadFile(tidy); err != nil || len(b) == 0 || !bytes.Equal(b, want) {
 		t.Errorf("opened to edit: %d bytes, %v, want the built-in", len(b), err)
@@ -165,6 +167,85 @@ func TestPromptIsTheBuildsUntilEdited(t *testing.T) {
 	SeedPrompt(filepath.Join(dir, "modes.d", "meeting-notes.md"))
 	if _, err := os.Stat(GlossaryPath()); err == nil || prompts() != 1 {
 		t.Errorf("opening other files wrote a prompt: %d prompt files, glossary %v", prompts(), err)
+	}
+}
+
+// A Mac that ran a build which wrote the prompts at start is upgraded: the
+// copies nobody edited give way to this build's prompts at its first start,
+// whichever build's text they hold, and a prompt the user wrote stays.
+func TestAnUneditedPromptCopyGivesWayAtTheNextStart(t *testing.T) {
+	dir := isolate(t)
+	earlier, err := os.ReadFile("testdata/tidy-of-an-earlier-build.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixWords, _ := defaults.ReadFile("defaults/modes/fix-words.md")
+	files := map[string][]byte{
+		"tidy.md":          earlier,                             // written at a start by an earlier build
+		"fix-words.md":     append([]byte("\n"), fixWords...),   // this build's text, saved again with a blank line
+		"translate.md":     []byte("my own translate prompt\n"), // the user's
+		"meeting-notes.md": []byte("写成会议纪要里的一句\n"),              // a mode the user added
+	}
+	os.MkdirAll(filepath.Join(dir, "modes.d"), 0o755)
+	for name, b := range files {
+		if err := os.WriteFile(filepath.Join(dir, "modes.d", name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now, _ := defaults.ReadFile("defaults/modes/tidy.md")
+	if bytes.Equal(bytes.TrimSpace(earlier), bytes.TrimSpace(now)) {
+		t.Fatal("the fixture is this build's tidy prompt: it no longer stands for an earlier build's")
+	}
+	if s, _ := (RefineConfig{Mode: "tidy"}).Prompt(); s != strings.TrimSpace(string(earlier)) {
+		t.Fatalf("before the start the copy is not what tidy reads: %q", s)
+	}
+	Seed() // the upgraded build starts
+	for _, m := range []string{"tidy", "fix-words"} {
+		want, _ := defaults.ReadFile("defaults/modes/" + m + ".md")
+		if s, err := (RefineConfig{Mode: m}).Prompt(); err != nil || s != strings.TrimSpace(string(want)) {
+			t.Errorf("%s reads %q (%v), want this build's prompt", m, s, err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "modes.d", m+".md")); err == nil {
+			t.Errorf("the unedited %s.md is still there", m)
+		}
+	}
+	if s, err := (RefineConfig{Mode: "translate"}).Prompt(); err != nil || s != "my own translate prompt" {
+		t.Errorf("the user's translate prompt reads %q, %v", s, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "modes.d", "meeting-notes.md")); !bytes.Equal(b, files["meeting-notes.md"]) {
+		t.Errorf("the user's own mode was touched: %q", b)
+	}
+}
+
+// Each built-in prompt's text is in builtInPrompts: a text that changes
+// without its sum added there leaves its unedited copies in place, and they
+// then hide every later prompt.
+func TestEveryBuiltInPromptIsListed(t *testing.T) {
+	for _, m := range RefineModes {
+		b, err := defaults.ReadFile("defaults/modes/" + m + ".md")
+		if err != nil || !builtInPrompt(m, b) {
+			t.Errorf("%s: this build's prompt is not in builtInPrompts (%v): add its sha256 and keep the earlier ones", m, err)
+		}
+	}
+	if builtInPrompt("tidy", []byte("my own tidy prompt\n")) || builtInPrompt("meeting-notes", nil) {
+		t.Error("a text the app never came with counts as built in")
+	}
+}
+
+// A prompt that cannot be written for editing is an error, and no empty
+// file stands in its place: an empty prompt would hold every take.
+func TestSeedPromptSaysWhenItCannotWrite(t *testing.T) {
+	dir := isolate(t)
+	os.MkdirAll(dir, 0o755)
+	if err := os.WriteFile(filepath.Join(dir, "modes.d"), []byte("in the way\n"), 0o644); err != nil { // not a directory
+		t.Fatal(err)
+	}
+	tidy := (RefineConfig{Mode: "tidy"}).PromptPath()
+	if err := SeedPrompt(tidy); err == nil {
+		t.Error("no error for a prompt that was not written")
+	}
+	if _, err := os.Stat(tidy); err == nil {
+		t.Error("a file stands where the prompt could not be written")
 	}
 }
 

@@ -99,8 +99,9 @@
 #                            # blank. tidy: what you said as you would write it; translate: by meaning (into English;
 #                            # the language is in its prompt). A mode's prompt is the built-in, which each update
 #                            # may improve, until you keep your own as modes.d/<mode>.md beside this file: Edit
-#                            # Prompt… in the menu writes the built-in there for you to edit. A file you add
-#                            # there, modes.d/<name>.md, is one more text mode, named <name>
+#                            # Prompt… in the menu writes the built-in there for you to edit, and a copy left
+#                            # unedited is removed at the next start. A file you add there, modes.d/<name>.md,
+#                            # is one more text mode, named <name>
 #                            # The model is told your terms: the hot words, what the corrections table corrects to,
 #                            # and glossary.txt and glossary.d/*.txt beside this file (one term per line, the ones
 #                            # you say most first; the first 350 terms count), with the table's rules as known
