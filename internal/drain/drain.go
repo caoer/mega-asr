@@ -158,6 +158,9 @@ type Result struct {
 	Outcome string  `json:"outcome"`       // aligned | ingested | parked | retry | failed | lost | skipped | removed
 	Error   string  `json:"error,omitempty"`
 	Secs    float64 `json:"secs,omitempty"`
+	// Due is when a skipped record owes work on the clock alone: its retry,
+	// or the expiry of another drain's claim. Zero when nothing is due.
+	Due time.Time `json:"due,omitzero"`
 }
 
 // Run is one tick.
@@ -168,6 +171,10 @@ type Run struct {
 	Queued  int       `json:"queued"`
 	Results []Result  `json:"results"`
 	Error   string    `json:"error,omitempty"`
+	// Due is the earliest time work falls due with no write to the page:
+	// the next sweep, a retry, a lapsing claim, a failed name's next try.
+	// A watch ticks then; any other tick comes from a change.
+	Due time.Time `json:"due,omitzero"`
 }
 
 // State is the drain's state file.
@@ -192,8 +199,9 @@ func (d *Drain) Tick(ctx context.Context) (Run, error) {
 			st.LastSweep = d.Now()
 		}
 	}
+	failed := false // a read or write the store did not answer: the work it was for is due again now
 	if d.Stages.Resolve != nil || d.Stages.Names != nil {
-		st.People = d.people(ctx, st.People)
+		st.People, failed = d.people(ctx, st.People)
 	}
 	// Newest first, the queue listed again after each record: a meeting
 	// uploaded while a long backfill runs is next, not last. A queue key made
@@ -205,6 +213,7 @@ func (d *Drain) Tick(ctx context.Context) (Run, error) {
 		var qs []pages.Object
 		if qs, err = d.Reg.List(ctx, "q."); err != nil {
 			run.Error = err.Error()
+			failed = true
 			break
 		}
 		if run.Queued == 0 {
@@ -231,9 +240,38 @@ func (d *Drain) Tick(ctx context.Context) (Run, error) {
 		run.Results = append(run.Results, r)
 	}
 	run.Ended = d.Now()
+	run.Due = d.due(st, run.Results, failed)
 	st.Last = &run
 	d.save(st)
 	return run, err
+}
+
+// due is the earliest timed work after a tick: the next sweep, the next try
+// of a name whose resolve failed, and each skipped record's own time; now
+// when a store call failed, so a watch tries again after its fallback rather
+// than at the next sweep.
+func (d *Drain) due(st State, results []Result, failed bool) time.Time {
+	at := st.LastSweep.Add(d.Sweep)
+	if st.LastSweep.IsZero() {
+		at = d.Now().Add(d.Sweep)
+	}
+	earlier := func(t time.Time) {
+		if !t.IsZero() && t.Before(at) {
+			at = t
+		}
+	}
+	for _, t := range st.People {
+		if t.Outcome == "failed" {
+			earlier(t.At.Add(d.PeopleRetry))
+		}
+	}
+	for _, r := range results {
+		earlier(r.Due)
+	}
+	if failed {
+		earlier(d.Now())
+	}
+	return at
 }
 
 func suffix(e string) string {
@@ -348,17 +386,23 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 		return res
 	}
 	if err != nil {
-		res.Outcome, res.Error = "skipped", err.Error()
+		res.Outcome, res.Error, res.Due = "skipped", err.Error(), d.Now()
 		return res
 	}
 	raw, v, err := decode(o)
 	if err != nil {
-		res.Outcome, res.Error = "skipped", err.Error()
+		res.Outcome, res.Error, res.Due = "skipped", err.Error(), d.Now()
 		return res
 	}
 	job, why := d.job(v)
 	if job == "" {
 		res.Outcome, res.Error = "skipped", why
+		switch now := d.Now(); {
+		case v.Claim != nil && v.Claim.Expires.After(now):
+			res.Due = v.Claim.Expires
+		case v.retrying() && now.Before(v.Retry.At):
+			res.Due = v.Retry.At
+		}
 		if v.State == "deleted" || v.Claim == nil && v.Action == "" && !v.retrying() && (v.State == "ingested" || v.State == "failed" || v.State == "aligned") {
 			d.unqueue(ctx, id) // nothing left to do: a stale queue key
 			res.Outcome = "removed"
@@ -389,7 +433,7 @@ func (d *Drain) one(ctx context.Context, id string) Result {
 			res.Outcome = "lost"
 			return res
 		}
-		res.Outcome, res.Error = "skipped", "claim: "+err.Error()
+		res.Outcome, res.Error, res.Due = "skipped", "claim: "+err.Error(), d.Now()
 		return res
 	}
 	d.logf("%s: claimed for %s (attempt %d)", key, job, v.Attempts+1)

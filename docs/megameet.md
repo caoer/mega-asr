@@ -36,7 +36,7 @@ It then runs `<meeting.ingest.command> run record.json --out <that folder> --com
 
 ## The drain
 
-`megameet drain` is the server's loop, run by a systemd timer every 60 s (one tick per start; `--every 60s` loops in the foreground). A tick:
+`megameet drain --watch` is the server's loop, a long-running systemd service. It holds the page's live socket selecting `q.` and `rec.`, and ticks once at start, when the socket reports a write under either prefix (2 s after it, so a page action's writes land in one tick), when the socket opens, and when timed work falls due: the hourly sweep, a `retry`'s `at`, another drain's claim expiring, a failed name's next try. An idle page costs the socket and no reads. While no socket is open it ticks every 2 minutes over HTTP. `megameet drain` alone runs one tick; `--every 60s` ticks on a clock in the foreground. A tick:
 
 1. Once an hour, marks each record still `uploading` 24 h after its last update `failed` with `error: abandoned`.
 2. Lists `q.<id>` and claims each claimable record with one compare-and-swap: `claim {by: <host>:<pid>, at, expires: now + 30 min}`, `action` cleared, `attempts` + 1. A lost swap (409 `version_conflict`) is logged and skipped; another drain has the record.
@@ -285,33 +285,26 @@ Run one tick by hand:
 
 With the setup test from step 5 still queued, it logs `claimed for full`, the ASR's chunks, `<id>: full aligned`, and ends `drain: tick HH:MM:SS: 1 queued, 1 handled in N s`; the record shows `aligned` on the page with its transcript. `megameet status` on this box prints the last tick, the queue, failures and each record's real-time factor, which depends on the CPU and on `asr.funasr.llm_threads` (the CLI's 4 threads when unset).
 
-Then run it every minute with a systemd user timer:
+Then keep it running as a systemd user service:
 
 ```sh
 mkdir -p ~/.config/systemd/user
 cat > ~/.config/systemd/user/megameet-drain.service <<'EOF'
 [Unit]
-Description=megameet drain: one tick over the meetings page
+Description=megameet drain: ticks on the meetings page's live socket
 [Service]
-Type=oneshot
-ExecStart=%h/.local/share/megameet/pkg/bin/megameet drain
-EOF
-cat > ~/.config/systemd/user/megameet-drain.timer <<'EOF'
-[Unit]
-Description=megameet drain every 60 s
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=60s
+ExecStart=%h/.local/share/megameet/pkg/bin/megameet drain --watch
+Restart=always
+RestartSec=10
 [Install]
-WantedBy=timers.target
+WantedBy=default.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now megameet-drain.timer
-loginctl enable-linger "$USER"      # keep the timer running while you are logged out
-systemctl --user list-timers megameet-drain.timer
+systemctl --user enable --now megameet-drain.service
+loginctl enable-linger "$USER"      # keep it running while you are logged out
 ```
 
-`list-timers` shows one line with the next run. `journalctl --user -u megameet-drain` has each tick's log. Without systemd, `megameet drain --every 60s` loops in the foreground (run it under tmux).
+`journalctl --user -u megameet-drain` has each tick's log. Without systemd, `megameet drain --watch` runs in the foreground (run it under tmux).
 
 The ingest into a wiki (`[meeting.ingest] auto`) is off by default and stays off here: it files meetings into a wiki and needs an ingest command for that wiki. With it off, a record rests at `aligned`, and its transcript (`transcript.md`, `segments.json`) is on the page.
 
@@ -323,6 +316,6 @@ megameet has **no `[meeting.privacy]` table**. Consent, naming and exclusion are
 
 - **Consent.** Nothing records until someone runs `megameet start`, and nothing tells the other side. Say that you are recording when you start.
 - **Naming.** A Mac recording's two tracks are labelled by role: `mic` is you, `remote` is everyone on the call. A phone or file upload is one speaker. megameet stores no names; `--speakers N` is only a count.
-- **Exclusion.** Delete a recording on the page (editor link → Delete). That removes its record and every file of it from R2, and there is no undo. The drain transcribes within a minute of the upload, so delete early, or stop the drain timer first. The Mac keeps its own copy under `~/.local/share/megameet/recordings/<id>/` for `retention_days`; delete that too.
+- **Exclusion.** Delete a recording on the page (editor link → Delete). That removes its record and every file of it from R2, and there is no undo. The drain transcribes seconds after the upload, so delete early, or stop the drain service first. The Mac keeps its own copy under `~/.local/share/megameet/recordings/<id>/` for `retention_days`; delete that too.
 - **Who can read what.** The page is private: without a link nothing on it can be read. The owner file (step 1) and an editor link read everything and can delete everything; `"$BIN/page-publish" --slug $SLUG --delete-page` does exactly that. A viewer link, if you mint one, reads every recording and transcript. A contributor link (a Mac's token file, a phone's link) reads only the records and files its own token created: its uploads and their records, which the drain keeps updating. It cannot read the transcripts and alignments the drain makes from them, or any other device's or person's recording: those answer as missing. So a contributor link on the page lists only its own uploads, and `megameet status` on a Mac counts only that Mac's records. Give each device and each person their own contributor link, and revoke a lost one with `page-token revoke <ID>` (it takes effect within an hour). A leaked contributor link can add recordings, but it cannot read or delete anyone else's.
 - **Where it lives.** Audio and transcripts stay in your Cloudflare account and on your own Mac and Linux box. Nothing leaves them while the ingest, the summary and the names step are off; the summary sends the transcript to Anthropic, and the names step sends it, window by window, with the people index's names, to the provider behind its launcher.

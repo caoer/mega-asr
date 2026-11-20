@@ -27,12 +27,14 @@ import (
 
 func drainState(m app.MeetingConfig) string { return filepath.Join(m.Data, "drain", "state.json") }
 
-// drainCmd runs the server's loop over the registry: one tick (the
-// systemd timer's), or a tick every --every.
+// drainCmd runs the server's loop over the registry: one tick, a tick every
+// --every, or --watch: held on the page's live socket, a tick when the queue
+// or a record is written and when timed work falls due (drain.Watch).
 func drainCmd(o app.LoadOpts, args []string) error {
 	fs := flag.NewFlagSet("drain", flag.ContinueOnError)
 	every := fs.Duration("every", 0, "tick this often until stopped; 0 runs one tick")
 	most := fs.Int("max", 0, "claim at most this many records a tick; 0 is no limit")
+	watch := fs.Bool("watch", false, "run until stopped, ticking on the page's live socket: on a write to the queue or a record, and when timed work falls due")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -82,12 +84,21 @@ func drainCmd(o app.LoadOpts, args []string) error {
 	d.FeishuSince, _ = m.Ingest.Since() // valid: app.Load checked it
 	d.MinDuration = time.Duration(m.Ingest.MinDuration)
 	d.Forget = forget(m.Data)
-	for {
-		run, err := d.Tick(ctx)
+	report := func(run drain.Run, err error) {
 		if err != nil {
 			log.Printf("drain: %v", err)
 		}
 		log.Printf("drain: tick %s: %d queued, %d handled in %.1f s", run.Started.Format(time.TimeOnly), run.Queued, handled(run), run.Ended.Sub(run.Started).Seconds())
+	}
+	if *watch {
+		if *every > 0 {
+			return errors.New("drain: --watch and --every are two cadences; pick one")
+		}
+		return d.Watch(ctx, drain.Watch{Socket: c, Report: report})
+	}
+	for {
+		run, err := d.Tick(ctx)
+		report(run, err)
 		if *every <= 0 {
 			return err
 		}

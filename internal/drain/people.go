@@ -67,12 +67,13 @@ func peopleKey(id, role string) string { return id + "/" + role }
 // person pages and writes each person onto its speaker entry; an ingested
 // record gets its reingest queued. tries carries the unsettled names from
 // tick to tick, so an ambiguous one is not resolved again every tick; the
-// returned map replaces it.
-func (d *Drain) people(ctx context.Context, tries map[string]PeopleTry) map[string]PeopleTry {
+// returned map replaces it. failed says the records could not be listed, so
+// the pass owes a try again.
+func (d *Drain) people(ctx context.Context, tries map[string]PeopleTry) (_ map[string]PeopleTry, failed bool) {
 	objs, err := d.Reg.List(ctx, "rec.")
 	if err != nil {
 		d.logf("people: %v", err)
-		return tries
+		return tries, true
 	}
 	now := d.Now()
 	keep := map[string]PeopleTry{}
@@ -84,7 +85,7 @@ func (d *Drain) people(ctx context.Context, tries map[string]PeopleTry) map[stri
 					keep[k] = t
 				}
 			}
-			return keep
+			return keep, false
 		}
 		raw, v, err := decode(o)
 		if err != nil || v.State == "deleted" {
@@ -149,7 +150,7 @@ func (d *Drain) people(ctx context.Context, tries map[string]PeopleTry) map[stri
 			d.logf("rec.%s: people: %v", v.ID, err)
 		}
 	}
-	return keep
+	return keep, false
 }
 
 var errBusy = fmt.Errorf("claimed meanwhile")
